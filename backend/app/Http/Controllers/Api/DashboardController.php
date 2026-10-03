@@ -267,7 +267,7 @@ class DashboardController extends Controller
             return [];
         }
         $ids = array_map(static fn (array $r): int => (int) $r['inquiry']->id, $rows);
-        $withHint = array_flip(InquiryOrderHint::query()->whereIn('client_inquiry_id', $ids)->distinct()
+        $withHint = array_flip(InquiryOrderHint::query()->ofCurrentClient()->whereIn('client_inquiry_id', $ids)->distinct()
             ->pluck('client_inquiry_id')->map(static fn ($id): int => (int) $id)->all());
 
         return array_map(static fn (array $r): array => [

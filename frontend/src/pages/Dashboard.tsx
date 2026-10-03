@@ -482,12 +482,14 @@ function TodoCard({ items, access }: { items: DashTodo[]; access: TodoAccess }) 
               case 'offer_validity_ending':
                 return (
                   <TodoRow key={`o${item.inquiry_id}`} kind={item.kind} tone="warn" action="Otwórz zapytanie" to={item.url}>
-                    <strong>Oferta ważna {untilPhrase(item.valid_until)}, klient jeszcze nie zamówił</strong>
+                    <strong>Oferta ważna {untilPhrase(item.valid_until)}, wynik niewpisany</strong>
                     {item.client && <> · {item.client}</>}
                     <br />
                     <span className="text-slate-500">
-                      {item.subject ? `${item.subject}. ` : ''}Warto zadzwonić.
-                      {item.has_hint && ' ERP XL podpowiada możliwe zamówienie z tej oferty — sprawdź i wpisz wynik.'}
+                      {item.subject ? `${item.subject}. ` : ''}
+                      {item.has_hint
+                        ? 'ERP XL podpowiada możliwe zamówienie — sprawdź i wpisz wynik.'
+                        : 'Jeśli klient jeszcze nie zamówił, warto zadzwonić; potem wpisz wynik.'}
                     </span>
                   </TodoRow>
                 )

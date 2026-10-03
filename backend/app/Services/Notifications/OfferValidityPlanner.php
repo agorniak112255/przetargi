@@ -5,17 +5,21 @@ declare(strict_types=1);
 namespace App\Services\Notifications;
 
 use App\Models\ClientInquiry;
+use App\Models\InquiryOrderHint;
 use App\Models\User;
 use App\Support\OfferValidity;
 use App\Support\PolishTime;
 use Carbon\CarbonImmutable;
 
 /**
- * „Kończy się ważność mojej oferty, a klient nie zamówił” (offer_validity_ending): do autora zapytania od ostatniego
+ * „Kończy się ważność mojej oferty, a wynik zapytania nie jest wpisany” (offer_validity_ending): do autora od ostatniego
  * dnia roboczego przed końcem ważności (OfferValidity::until z warunku „Ważność oferty” i dnia odpowiedzi) do końca
  * ważności włącznie, gdy wynik zapytania jest pusty; tylko odpowiedzi z ostatnich 120 dni. Przypomnienie wychodzi od
  * godziny daily_from (07:00 czasu polskiego), raz na ofertę: subjectKey inquiry:{id}, okres validity:{dzień końca}.
  * Ta sama lista zasila sprawę „Do zrobienia dziś” (DashboardController).
+ *
+ * Warunkiem jest tylko pusty wynik — nie wiemy, że klient nie zamówił, więc tekst mówi „wynik nie jest wpisany”.
+ * Przy podpowiedzi z ERP XL (wniosek) treść dopisuje „możliwe zamówienie — sprawdź i wpisz wynik”.
  */
 class OfferValidityPlanner implements ReminderPlanner
 {
@@ -97,14 +101,19 @@ class OfferValidityPlanner implements ReminderPlanner
     {
         $client = self::clientLabel($inquiry);
         $subject = $inquiry->source_subject ?? $inquiry->reply_subject;
+        // podpowiedź policzona dla obecnego klienta zapytania — wniosek, nie fakt
+        $hasHint = InquiryOrderHint::query()->ofCurrentClient()->where('client_inquiry_id', $inquiry->id)->exists();
 
         return new AppNotificationMessage(
             event: 'offer_validity_ending',
             subjectKey: 'inquiry:'.$inquiry->id,
-            title: 'Oferta ważna do: '.self::WEEKDAYS[(int) $validUntil->isoWeekday()].' '.$validUntil->format('j.n.Y').', klient jeszcze nie zamówił',
+            title: 'Oferta ważna do: '.self::WEEKDAYS[(int) $validUntil->isoWeekday()].' '.$validUntil->format('j.n.Y').', wynik zapytania nie jest wpisany',
             body: implode("\n", array_filter([
                 implode(' · ', array_filter([$client, $subject], static fn (?string $p): bool => $p !== null && trim($p) !== '')),
-                'Odpowiedź wysłana '.PolishTime::format($inquiry->replied_at, false).'. Wynik zapytania nie jest wpisany — warto zadzwonić do klienta.',
+                'Odpowiedź wysłana '.PolishTime::format($inquiry->replied_at, false).'.',
+                $hasHint
+                    ? 'ERP XL podpowiada możliwe zamówienie — sprawdź i wpisz wynik.'
+                    : 'Warto zadzwonić do klienta i wpisać wynik.',
             ], static fn (string $line): bool => $line !== '')),
             url: '/inquiries/'.$inquiry->id,
             data: [

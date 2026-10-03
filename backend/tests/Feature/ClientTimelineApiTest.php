@@ -111,7 +111,33 @@ final class ClientTimelineApiTest extends TestCase
         $this->assertSame(2, $inquiries[0]['items_count']);
 
         $invoice = array_values(array_filter($data, static fn (array $e): bool => $e['type'] === 'invoice'))[0];
-        $this->assertSame(['id' => $myCopy->id, 'date' => '2026-09-14T08:03:00+00:00'], $invoice['confirmed_inquiry']);
+        $this->assertSame(['id' => $myCopy->id, 'date' => '2026-09-14T08:03:00+00:00', 'can_open' => true], $invoice['confirmed_inquiry']);
+    }
+
+    public function test_invoice_confirmed_by_colleague_inquiry_opens_only_with_view_others(): void
+    {
+        $colleague = User::factory()->create(['name' => 'Kolega']);
+        $theirs = $this->inquiry($colleague, $this->client, '2026-09-14 10:00', ['outcome' => 'ordered']);
+        $theirs->forceFill(['outcome_document_number' => 'FS-1842/09/2026'])->save();
+        $this->document(1, '2026-09-22', 6240.00, 'FS-1842/09/2026');
+
+        // lista wszystkich zapytań, ale bez otwierania cudzych — wpis jest, link nie
+        Sanctum::actingAs($this->userWith(['clients.view', 'inquiries.use', 'inquiries.view_all']));
+        $invoice = $this->getJson("/api/clients/{$this->client->id}/timeline?type=invoices")->assertOk()->json('data.0');
+        $this->assertSame(['id' => $theirs->id, 'date' => '2026-09-14T08:00:00+00:00', 'can_open' => false], $invoice['confirmed_inquiry']);
+
+        Sanctum::actingAs($this->userWith(['clients.view', 'inquiries.use', 'inquiries.view_all', 'inquiries.view_others']));
+        $this->getJson("/api/clients/{$this->client->id}/timeline?type=invoices")->assertOk()
+            ->assertJsonPath('data.0.confirmed_inquiry.can_open', true);
+
+        // ten sam dokument potwierdzony też we własnym zapytaniu — pierwszeństwo ma to, które da się otworzyć
+        $me = $this->userWith(['clients.view', 'inquiries.use', 'inquiries.view_all']);
+        $mine = $this->inquiry($me, $this->client, '2026-09-15 10:00', ['outcome' => 'partial']);
+        $mine->forceFill(['outcome_document_number' => 'FS-1842/09/2026'])->save();
+        Sanctum::actingAs($me);
+        $this->getJson("/api/clients/{$this->client->id}/timeline?type=invoices")->assertOk()
+            ->assertJsonPath('data.0.confirmed_inquiry.id', $mine->id)
+            ->assertJsonPath('data.0.confirmed_inquiry.can_open', true);
     }
 
     public function test_inquiries_of_others_need_view_all_and_opening_needs_view_others(): void

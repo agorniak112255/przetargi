@@ -17,7 +17,7 @@ function customersLabel(n: number): string {
 }
 
 function employeeName(e: ErpEmployee): string {
-  return e.name ?? `pracownik nr ${e.gid}`
+  return e.name ?? `pracownik numer ${e.gid}`
 }
 
 /** Pracownik w polu po wyborze: „Jan Kowalski (12 klientów)”. */
@@ -141,7 +141,7 @@ function EmployeeCombobox({
     }
   }
 
-  const inputValue = query !== '' || open ? query : selected ? employeeLabel(selected) : value != null ? `pracownik nr ${value}` : ''
+  const inputValue = query !== '' || open ? query : selected ? employeeLabel(selected) : value != null ? `pracownik numer ${value}` : ''
 
   return (
     <div
@@ -225,7 +225,7 @@ function EmployeeCombobox({
                   <span className="font-medium">{employeeName(emp)}</span>
                   <span className="text-slate-500">
                     {' '}
-                    · nr {emp.gid} · {customersLabel(emp.clients)}
+                    · numer {emp.gid} · {customersLabel(emp.clients)}
                     {emp.email ? ` · ${emp.email}` : ''}
                   </span>
                   {taken && <span className="block text-[11px]">przypisany do konta: {emp.user?.name}</span>}
@@ -256,7 +256,7 @@ function operatorOptionLabel(o: ErpOperator, editedUserId: number): string {
 function EmployeeCell({ u, employees }: { u: AdminUser; employees: ErpEmployee[] }) {
   if (u.erp_employee_gid != null) {
     const e = employees.find((x) => x.gid === u.erp_employee_gid)
-    return <span>{e ? employeeLabel(e) : `pracownik nr ${u.erp_employee_gid}`}</span>
+    return <span>{e ? employeeLabel(e) : `pracownik numer ${u.erp_employee_gid}`}</span>
   }
   const proposal = employees.find((x) => x.suggested_user?.id === u.id)
   return (

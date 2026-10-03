@@ -18,6 +18,9 @@ return new class extends Migration
         Schema::create('inquiry_order_hints', function (Blueprint $table): void {
             $table->id();
             $table->foreignId('client_inquiry_id')->constrained('client_inquiries')->cascadeOnDelete();
+            // kontrahent XL, dla którego policzono podpowiedź — obowiązuje tylko, gdy zapytanie nadal jest powiązane
+            // z klientem o tym numerze (zmiana klienta zapytania kasuje podpowiedzi, a odczyt i potwierdzenie to sprawdzają)
+            $table->unsignedInteger('customer_xl_gid');
             $table->unsignedSmallInteger('document_type');
             $table->unsignedInteger('document_id');
             $table->string('document_number', 40);

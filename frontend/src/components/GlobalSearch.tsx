@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { globalSearch, type GlobalSearchHit, type GlobalSearchResponse } from '../lib/api'
 
 /** Opóźnienie po ostatnim znaku, zanim pójdzie żądanie. */
@@ -10,6 +10,12 @@ const MIN_LENGTH = 2
 const MAX_LENGTH = 100
 
 const LIST_ID = 'global-search-list'
+
+/**
+ * Znacznik w historii (location.state): strona otwarta z wyszukiwania — lista Produkty przepisuje wtedy frazę z adresu
+ * do pola także przy tej samej frazie co poprzednio (Products.tsx sprawdza klucz fromGlobalSearch).
+ */
+const GLOBAL_SEARCH_STATE = { fromGlobalSearch: true } as const
 
 type Option =
   | { kind: 'hit'; id: string; url: string; hit: GlobalSearchHit }
@@ -25,9 +31,11 @@ function stockLabel(stock: NonNullable<GlobalSearchHit['stock']>): string {
  * Jedno pole wyszukiwania dla całej aplikacji (Ctrl+K albo Cmd+K, przycisk „Szukaj” w pasku bocznym) — GET /search.
  * Żądanie 200 ms po ostatnim znaku, poprzednie przerywane (spóźniona odpowiedź nie nadpisuje nowszej); strzałki
  * wybierają wynik, Enter otwiera, Escape zamyka. Grupy i wyniki przychodzą już przycięte do uprawnień użytkownika.
+ * Enter „klika” wybrany link (a nie woła navigate()), więc strażniki niezapisanych zmian, które łapią kliknięcie <a>
+ * w fazie przechwytywania, działają tak samo jak przy myszy. Okno jest modalne: Escape i Tab obsługuje nasłuch na
+ * window w fazie przechwytywania — Escape nie dociera do okien pod spodem, a Tab nie wychodzi pod nakładkę.
  */
 export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [data, setData] = useState<GlobalSearchResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -65,6 +73,24 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     return () => {
       if (opener && document.contains(opener)) opener.focus()
     }
+  }, [open])
+
+  // okno modalne: Escape zamyka tylko wyszukiwanie (nie okno pod spodem, np. subskrypcję kalendarza), Tab i Shift+Tab
+  // zostają w polu wyszukiwania — jedynym elemencie okna, do którego prowadzi Tab (wyniki wybiera się strzałkami)
+  useEffect(() => {
+    if (!open) return
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        onOpenChangeRef.current(false)
+      } else if (e.key === 'Tab') {
+        e.preventDefault()
+        inputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [open])
 
   const trimmed = query.trim()
@@ -133,9 +159,9 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     onOpenChange(false)
   }
 
-  function openUrl(url: string) {
-    close()
-    navigate(url)
+  /** Enter = kliknięcie wybranego linku: przechodzi przez strażniki niezapisanych zmian jak kliknięcie myszą. */
+  function openOption(option: Option) {
+    document.getElementById(option.id)?.click()
   }
 
   function onInputKey(e: KeyboardEvent<HTMLInputElement>) {
@@ -148,7 +174,7 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     } else if (e.key === 'Enter') {
       if (activeOption) {
         e.preventDefault()
-        openUrl(activeOption.url)
+        openOption(activeOption)
       }
     }
   }
@@ -169,12 +195,6 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
         aria-modal="true"
         aria-label="Szukaj w całej aplikacji"
         className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-lg"
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.preventDefault()
-            close()
-          }
-        }}
       >
         <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-2">
           <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-slate-500" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -238,6 +258,7 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
                         key={id}
                         id={id}
                         to={hit.url}
+                        state={GLOBAL_SEARCH_STATE}
                         role="option"
                         aria-selected={selected}
                         tabIndex={-1}
@@ -271,6 +292,7 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
                       <Link
                         id={id}
                         to={group.more_url}
+                        state={GLOBAL_SEARCH_STATE}
                         role="option"
                         aria-selected={selected}
                         tabIndex={-1}

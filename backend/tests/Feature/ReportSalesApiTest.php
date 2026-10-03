@@ -123,14 +123,14 @@ final class ReportSalesApiTest extends TestCase
         ], $all['channels']);
         // mail przejęty przez kilka osób liczy się każdej z nich: Bartek (3 własne + kopia z odpowiedzią), Celina (kopia kopii)
         // mediana z własnych odpowiedzi osoby: Bartek 2 h na kopii; Anna (3 dni − 1 min, 3 dni + 1 min) = 3 dni;
-        // Celina sama nie odpowiadała
+        // Celina sama nie odpowiadała — skuteczność (zamówione z własnych odpowiedzi) nie ma mianownika: null
         $this->assertSame([
             ['user_id' => $bartek->id, 'name' => 'Bartek', 'received' => 4, 'replied' => 1, 'replied_1bd' => 1, 'waiting' => 3,
                 'median_reply_seconds' => 7200, 'ordered' => 0, 'ordered_percent' => 0, 'order_value' => '0.00'],
             ['user_id' => $anna->id, 'name' => 'Anna', 'received' => 3, 'replied' => 3, 'replied_1bd' => 2, 'waiting' => 0,
                 'median_reply_seconds' => 259200, 'ordered' => 0, 'ordered_percent' => 0, 'order_value' => '0.00'],
             ['user_id' => $celina->id, 'name' => 'Celina', 'received' => 1, 'replied' => 1, 'replied_1bd' => 1, 'waiting' => 0,
-                'median_reply_seconds' => null, 'ordered' => 0, 'ordered_percent' => 0, 'order_value' => '0.00'],
+                'median_reply_seconds' => null, 'ordered' => 0, 'ordered_percent' => null, 'order_value' => '0.00'],
         ], $all['people']);
 
         // bez inquiries.view_all tylko własne oryginały; odpowiedź na cudzej kopii nadal się liczy
@@ -195,6 +195,35 @@ final class ReportSalesApiTest extends TestCase
         $this->getJson('/api/reports/sales?days=30')->assertOk()->assertJsonPath('inquiries.funnel', [
             'received' => 3, 'replied' => 3, 'ordered_confirmed' => 2, 'possible' => 1, 'value_confirmed' => '1000.00', 'ordered_without_document' => 1,
         ]);
+    }
+
+    public function test_ordered_percent_counts_only_own_replies_and_stale_hint_is_not_possible(): void
+    {
+        $anna = $this->userWith(['reports.view', 'inquiries.use'], 'Anna');
+        $bartek = $this->userWith(['reports.view', 'inquiries.use'], 'Bartek');
+        $boss = $this->userWith(['reports.view', 'inquiries.use', 'inquiries.view_all'], 'Szef');
+
+        // ten sam mail u Anny i Bartka — odpowiedziała tylko Anna (Bartek nie wysłał oferty)
+        $original = $this->inquiry($anna, ['created_at' => '2026-09-21 08:00', 'replied_at' => '2026-09-21 09:00']);
+        $this->inquiry($bartek, ['created_at' => '2026-09-21 08:10', 'duplicate_of_id' => $original->id]);
+        // własne zapytanie Bartka: odpowiedział i klient zamówił
+        $this->inquiry($bartek, ['created_at' => '2026-09-22 08:00', 'replied_at' => '2026-09-22 09:00', 'outcome' => 'ordered']);
+        // podpowiedź policzona dla poprzedniego klienta zapytania (inny kontrahent XL) — to nie jest „możliwe”
+        $client = Client::query()->create(['name' => 'Obecny klient', 'xl_gid' => 60001]);
+        $stale = $this->inquiry($anna, ['created_at' => '2026-09-23 08:00', 'replied_at' => '2026-09-23 09:00', 'client_id' => $client->id, 'client_link_source' => 'manual']);
+        InquiryOrderHint::query()->create([
+            'client_inquiry_id' => $stale->id, 'customer_xl_gid' => 60002, 'document_type' => 2033, 'document_id' => 1, 'document_number' => 'FS-STARY',
+            'issued_at' => '2026-09-30', 'document_net' => 500, 'matched_net' => 300, 'offered_items' => 2, 'linked_items' => 2, 'matched_items' => 1,
+            'computed_at' => now(),
+        ]);
+
+        Sanctum::actingAs($boss);
+        $json = $this->getJson('/api/reports/sales?days=30')->assertOk()->json('inquiries');
+        $this->assertSame(0, $json['funnel']['possible']);
+        $people = collect($json['people'])->keyBy('name');
+        // Bartek: grupa z odpowiedzią Anny liczy się do „odpowiedziane” grupy, ale nie do mianownika jego skuteczności
+        $this->assertSame([2, 1, 100], [$people['Bartek']['replied'], $people['Bartek']['ordered'], $people['Bartek']['ordered_percent']]);
+        $this->assertSame([2, 0, 0], [$people['Anna']['replied'], $people['Anna']['ordered'], $people['Anna']['ordered_percent']]);
     }
 
     public function test_tenders_scope_weighted_masked_margin_and_upcoming(): void
@@ -349,10 +378,16 @@ final class ReportSalesApiTest extends TestCase
         return $inquiry;
     }
 
+    /** Podpowiedź z ERP XL dla obecnego klienta zapytania (klient z XL dopinany, gdy zapytanie go nie ma). */
     private function hint(ClientInquiry $inquiry): void
     {
+        if ($inquiry->client_id === null) {
+            $client = Client::query()->create(['name' => 'Klient XL '.$inquiry->id, 'xl_gid' => 50000 + $inquiry->id]);
+            $inquiry->forceFill(['client_id' => $client->id, 'client_link_source' => 'email'])->save();
+        }
+        $gid = (int) Client::query()->whereKey($inquiry->client_id)->value('xl_gid');
         InquiryOrderHint::query()->create([
-            'client_inquiry_id' => $inquiry->id, 'document_type' => 2033, 'document_id' => $inquiry->id, 'document_number' => 'FS-H'.$inquiry->id,
+            'client_inquiry_id' => $inquiry->id, 'customer_xl_gid' => $gid, 'document_type' => 2033, 'document_id' => $inquiry->id, 'document_number' => 'FS-H'.$inquiry->id,
             'issued_at' => '2026-09-30', 'document_net' => 500, 'matched_net' => 300, 'offered_items' => 2, 'linked_items' => 2, 'matched_items' => 1,
             'computed_at' => now(),
         ]);

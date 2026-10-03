@@ -231,9 +231,14 @@ function EventBody({ event, canOpenCampaign }: { event: Exclude<TimelineEvent, N
           {event.confirmed_inquiry && (
             <p className="text-slate-500">
               Potwierdzone przez handlowca jako zamówienie z{' '}
-              <Link to={`/inquiries/${event.confirmed_inquiry.id}`} className="text-blue-700 hover:underline">
-                zapytania z {fmtDate(event.confirmed_inquiry.date)}
-              </Link>
+              {event.confirmed_inquiry.can_open ? (
+                <Link to={`/inquiries/${event.confirmed_inquiry.id}`} className="text-blue-700 hover:underline">
+                  zapytania z {fmtDate(event.confirmed_inquiry.date)}
+                </Link>
+              ) : (
+                // cudze zapytanie bez uprawnienia do otwierania cudzych — sama data, bez linku
+                <>zapytania z {fmtDate(event.confirmed_inquiry.date)}</>
+              )}
             </p>
           )}
         </>

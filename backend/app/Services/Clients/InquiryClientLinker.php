@@ -6,11 +6,13 @@ namespace App\Services\Clients;
 
 use App\Models\Client;
 use App\Models\ClientInquiry;
+use App\Models\InquiryOrderHint;
 use App\Models\User;
 use App\Services\Erp\ErpCustomerSync;
 use App\Support\CompanyName;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Powiązanie zapytania klienta z klientem z zakładki Klienci — tylko pewne, bez zgadywania (decyzja 03.10.2026):
@@ -24,6 +26,10 @@ use Illuminate\Database\Query\Builder;
  * E-mail i NIP wskazujące różnych klientów → brak powiązania. Domena adresu nigdy nie wystarcza.
  * Powiązania automatyczne są przeliczane co noc (linkAll, inquiries:order-hints) — brak dopasowania zdejmuje
  * automatyczne powiązanie. Zapytanie z client_id, ale bez źródła (zapis sprzed tej reguły) traktujemy jak ręczne.
+ *
+ * Zmiana albo zdjęcie klienta (ręczne i automatyczne) w tej samej transakcji kasuje to, co policzono albo wskazano dla
+ * poprzedniego klienta: podpowiedzi z ERP XL (inquiry_order_hints) i dokument skopiowany do wyniku (numer, data,
+ * wartość). Sam wynik i powód zostają — to ocena handlowca, nie dane klienta.
  */
 final class InquiryClientLinker
 {
@@ -38,6 +44,13 @@ final class InquiryClientLinker
         self::SOURCE_MANUAL => 'wybrane przez handlowca',
         self::SOURCE_EMAIL => 'ten sam adres e-mail co w ERP XL',
         self::SOURCE_NIP => 'NIP z maila',
+    ];
+
+    /** Dokument z ERP XL skopiowany do wyniku — należał do poprzedniego klienta, więc przy zmianie klienta znika. */
+    private const CLEARED_DOCUMENT = [
+        'outcome_document_number' => null,
+        'outcome_document_date' => null,
+        'outcome_net_value' => null,
     ];
 
     /** Etykieta „NIP”, do 12 znaków bez cyfr (dwukropek, „PL”, „UE:”), potem 10 cyfr z pojedynczymi separatorami. */
@@ -91,11 +104,23 @@ final class InquiryClientLinker
      */
     public function link(ClientInquiry $inquiry, ?int $clientId): void
     {
-        $inquiry->forceFill([
-            'client_id' => $clientId,
-            'client_link_source' => self::SOURCE_MANUAL,
-            'client_linked_at' => CarbonImmutable::now(),
-        ])->save();
+        DB::transaction(static function () use ($inquiry, $clientId): void {
+            /** @var ClientInquiry $row */
+            $row = ClientInquiry::query()->whereKey($inquiry->id)->lockForUpdate()->firstOrFail();
+            $previous = $row->client_id !== null ? (int) $row->client_id : null;
+            $values = [
+                'client_id' => $clientId,
+                'client_link_source' => self::SOURCE_MANUAL,
+                'client_linked_at' => CarbonImmutable::now(),
+            ];
+            if ($previous !== $clientId) {
+                $values += self::CLEARED_DOCUMENT;
+                self::forgetHints((int) $row->id);
+            }
+            $row->forceFill($values)->save();
+            // model wywołującego widzi to samo co baza
+            $inquiry->forceFill($values)->syncOriginalAttributes(array_keys($values));
+        });
     }
 
     /**
@@ -127,14 +152,14 @@ final class InquiryClientLinker
                 if ((int) $inquiry->client_id === $match['client_id'] && $source === $match['source']) {
                     continue;
                 }
-                $stats['changed'] += $this->updateAutomatic((int) $inquiry->id, [
+                $stats['changed'] += $this->updateAutomatic((int) $inquiry->id, $inquiry->client_id, [
                     'client_id' => $match['client_id'],
                     'client_link_source' => $match['source'],
                     'client_linked_at' => $now,
                 ]);
             } elseif ($source !== null) {
                 // tu źródło to email albo nip (ręczne pominięte wyżej) — dopasowanie zniknęło, zdejmujemy powiązanie
-                $stats['removed'] += $this->updateAutomatic((int) $inquiry->id, [
+                $stats['removed'] += $this->updateAutomatic((int) $inquiry->id, $inquiry->client_id, [
                     'client_id' => null,
                     'client_link_source' => null,
                     'client_linked_at' => null,
@@ -146,14 +171,15 @@ final class InquiryClientLinker
     }
 
     /**
-     * Powiązanie do pokazania: klient i źródło; null, gdy zapytanie nie ma klienta (także po ręcznym „bez klienta”).
+     * Powiązanie do pokazania: klient i źródło. Świadome „Bez klienta” (wybór handlowca: źródło manual bez klienta)
+     * → {client: null, source: manual} — nocne powiązanie tego nie zmieni; null, gdy zapytanie po prostu nie ma klienta.
      *
-     * @return array{client: array{id: int, name: string}, source: 'manual'|'email'|'nip'}|null
+     * @return array{client: array{id: int, name: string}|null, source: 'manual'|'email'|'nip'}|null
      */
     public static function present(ClientInquiry $inquiry): ?array
     {
         if ($inquiry->client_id === null) {
-            return null;
+            return self::isDeliberatelyWithoutClient($inquiry) ? ['client' => null, 'source' => self::SOURCE_MANUAL] : null;
         }
         $client = $inquiry->relationLoaded('client') ? $inquiry->client : Client::query()->select(['id', 'name'])->find($inquiry->client_id);
         if (! $client instanceof Client) {
@@ -188,6 +214,12 @@ final class InquiryClientLinker
         return $out;
     }
 
+    /** Handlowiec wybrał „Bez klienta”: źródło manual i brak klienta. */
+    public static function isDeliberatelyWithoutClient(ClientInquiry $inquiry): bool
+    {
+        return $inquiry->client_id === null && $inquiry->client_link_source === self::SOURCE_MANUAL;
+    }
+
     /** Ręczne: źródło manual albo client_id bez źródła (zapis sprzed reguły, np. client_id z formularza). */
     private static function isManual(?string $source, mixed $clientId): bool
     {
@@ -195,21 +227,49 @@ final class InquiryClientLinker
     }
 
     /**
-     * Zapis powiązania automatycznego bez dotykania updated_at — tylko gdy wiersz nadal nie jest ręczny.
+     * Zapis powiązania automatycznego bez dotykania updated_at — tylko gdy wiersz nadal nie jest ręczny i ma tego
+     * samego klienta co przy odczycie. Zmiana albo zdjęcie klienta w tej samej transakcji kasuje podpowiedzi z ERP XL
+     * i dokument skopiowany do wyniku (należały do poprzedniego klienta).
      *
      * @param  array<string, mixed>  $values
      */
-    private function updateAutomatic(int $id, array $values): int
+    private function updateAutomatic(int $id, mixed $readClientId, array $values): int
     {
-        return ClientInquiry::query()->toBase()
-            ->where('id', $id)
-            ->where(static function (Builder $q): void {
-                $q->whereIn('client_link_source', [self::SOURCE_EMAIL, self::SOURCE_NIP])
-                    ->orWhere(static function (Builder $q): void {
-                        $q->whereNull('client_link_source')->whereNull('client_id');
-                    });
-            })
-            ->update($values);
+        $previous = $readClientId !== null ? (int) $readClientId : null;
+        $next = $values['client_id'] !== null ? (int) $values['client_id'] : null;
+        if ($previous !== $next) {
+            $values += self::CLEARED_DOCUMENT;
+        }
+
+        return DB::transaction(static function () use ($id, $previous, $next, $values): int {
+            $updated = ClientInquiry::query()->toBase()
+                ->where('id', $id)
+                ->where(static function (Builder $q) use ($previous): void {
+                    if ($previous === null) {
+                        $q->whereNull('client_id');
+                    } else {
+                        $q->where('client_id', $previous);
+                    }
+                })
+                ->where(static function (Builder $q): void {
+                    $q->whereIn('client_link_source', [self::SOURCE_EMAIL, self::SOURCE_NIP])
+                        ->orWhere(static function (Builder $q): void {
+                            $q->whereNull('client_link_source')->whereNull('client_id');
+                        });
+                })
+                ->update($values);
+            if ($updated > 0 && $previous !== $next) {
+                self::forgetHints($id);
+            }
+
+            return $updated;
+        });
+    }
+
+    /** Podpowiedzi z ERP XL policzone dla poprzedniego klienta — nowe policzy nocne sprawdzenie. */
+    private static function forgetHints(int $inquiryId): void
+    {
+        InquiryOrderHint::query()->where('client_inquiry_id', $inquiryId)->delete();
     }
 
     /**

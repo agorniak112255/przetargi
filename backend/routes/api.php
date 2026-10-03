@@ -111,10 +111,12 @@ Route::get('/campaign-assets/{uuid}', [CampaignAssetController::class, 'show'])
 // Wypis z mailingu kampanii — publiczny link z maila. GET tylko pokazuje przycisk (skanery linków w poczcie klikają
 // w GET), wypisuje dopiero POST: przycisk na stronie albo nagłówek List-Unsubscribe-Post (RFC 8058).
 // Wypis jednym kliknięciem z Gmaila/Yahoo przychodzi ze wspólnych adresów dostawcy poczty — POST z wyższym limitem.
-Route::get('/wypis/{token}', [UnsubscribeController::class, 'show'])->where('token', '[A-Za-z0-9]{40}')->middleware('throttle:30,1')->name('campaigns.unsubscribe');
-Route::post('/wypis/{token}', [UnsubscribeController::class, 'confirm'])->where('token', '[A-Za-z0-9]{40}')->middleware('throttle:300,1');
+// Publiczne trasy z limitem mają własne przedrostki: bez nich licznik (klucz = domena|IP) jest wspólny dla wszystkich
+// tras bez przedrostka — kliknięcia linków kampanii z pośrednika poczty zjadałyby limit wypisu i kalendarza.
+Route::get('/wypis/{token}', [UnsubscribeController::class, 'show'])->where('token', '[A-Za-z0-9]{40}')->middleware('throttle:30,1,unsubscribe-page')->name('campaigns.unsubscribe');
+Route::post('/wypis/{token}', [UnsubscribeController::class, 'confirm'])->where('token', '[A-Za-z0-9]{40}')->middleware('throttle:300,1,unsubscribe-confirm');
 // Linki z maila kampanii: zapis kliknięcia i przejście do „Zapytaj o ofertę” (mail) albo strony produktu
-Route::middleware('throttle:300,1')->group(function (): void {
+Route::middleware('throttle:300,1,campaign-links')->group(function (): void {
     Route::get('/k/{token}/o/{item}', [CampaignClickController::class, 'offer'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
     Route::get('/k/{token}/p/{item}', [CampaignClickController::class, 'product'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
     Route::get('/k/{token}/l/{item}', [CampaignClickController::class, 'link'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
@@ -167,7 +169,7 @@ Route::post('/chat/livekit/webhook', LiveKitWebhookController::class);
 // kontroler przy każdym pobraniu; nieznany klucz → 404.
 Route::get('/calendar/{token}.ics', [CalendarIcsController::class, 'show'])
     ->where('token', '[A-Za-z0-9]{40}')
-    ->middleware('throttle:60,1');
+    ->middleware('throttle:60,1,calendar-ics');
 
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
@@ -178,12 +180,12 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     // Moje konto › Powiadomienia: zdarzenia × dzwonek / e-mail i momenty przypomnień o terminie
     Route::get('/me/notification-preferences', [NotificationPreferenceController::class, 'show']);
     Route::put('/me/notification-preferences', [NotificationPreferenceController::class, 'update']);
-    // osobisty adres kalendarza terminów (ICS): stan, wygenerowanie nowego (adres widoczny raz), wyłączenie
-    Route::middleware('permission:tenders.view_own|tenders.view_all')->group(function (): void {
-        Route::get('/me/calendar-feed', [CalendarFeedController::class, 'show']);
-        Route::post('/me/calendar-feed', [CalendarFeedController::class, 'store']);
-        Route::delete('/me/calendar-feed', [CalendarFeedController::class, 'destroy']);
-    });
+    // osobisty adres kalendarza terminów (ICS): stan, wygenerowanie nowego (adres widoczny raz), wyłączenie.
+    // Stan i wyłączenie bez uprawnienia do przetargów — osoba, która je straciła, nadal może wyłączyć swój adres
+    // (sam plik ICS i tak sprawdza uprawnienia przy każdym pobraniu); nowy adres tylko z uprawnieniem.
+    Route::get('/me/calendar-feed', [CalendarFeedController::class, 'show']);
+    Route::delete('/me/calendar-feed', [CalendarFeedController::class, 'destroy']);
+    Route::post('/me/calendar-feed', [CalendarFeedController::class, 'store'])->middleware('permission:tenders.view_own|tenders.view_all');
     // własny cel sprzedaży na Dashboardzie — każdy widzi tylko swój
     Route::get('/me/sales-target', [SalesTargetController::class, 'mine']);
     Route::post('/logout', [AuthController::class, 'logout']);

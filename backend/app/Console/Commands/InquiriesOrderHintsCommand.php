@@ -19,7 +19,7 @@ use Throwable;
  */
 final class InquiriesOrderHintsCommand extends Command
 {
-    protected $signature = 'inquiries:order-hints {--days=60 : Odpowiedzi z tylu ostatnich dni}';
+    protected $signature = 'inquiries:order-hints {--days= : Odpowiedzi z tylu ostatnich dni (domyślnie 62: okno podpowiedzi 60 dni i 2 dni zapasu)}';
 
     protected $description = 'Wiąże zapytania z klientami i szuka w ERP XL możliwych zamówień z wysłanych ofert';
 
@@ -27,7 +27,9 @@ final class InquiriesOrderHintsCommand extends Command
     {
         DB::disableQueryLog();
         $failed = false;
-        $days = max(1, (int) $this->option('days'));
+        // ile dni odpowiedzi przeliczyć — samo okno dokumentu (60 dni od odpowiedzi) jest stałe
+        $option = $this->option('days');
+        $days = $option !== null && $option !== '' ? max(1, (int) $option) : OrderHintBuilder::SELECT_DAYS;
 
         try {
             $links = $linker->linkAll();

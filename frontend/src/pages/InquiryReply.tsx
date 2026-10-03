@@ -1899,11 +1899,13 @@ export function InquiryReply() {
   const patchClientLink = (link: InquiryClientLink | null) =>
     setInquiry((cur) => {
       if (!cur || cur.id !== inquiry.id) return cur
-      const sameClient = (link?.client.id ?? null) === (cur.client_id ?? null)
+      // { client: null, source: 'manual' } — handlowiec świadomie wybrał „Bez klienta”
+      const picked = link?.client ?? null
+      const sameClient = (picked?.id ?? null) === (cur.client_id ?? null)
       return {
         ...cur,
-        client_id: link?.client.id ?? null,
-        client: link ? { id: link.client.id, name: link.client.name } : null,
+        client_id: picked?.id ?? null,
+        client: picked ? { id: picked.id, name: picked.name } : null,
         client_link: link,
         // podpowiedzi liczono dla poprzedniego klienta (serwer je usunął) — nowe policzy nocne sprawdzenie
         order_hints: !sameClient
@@ -1911,10 +1913,12 @@ export function InquiryReply() {
               ...cur.order_hints,
               hints: [],
               computed_at: null,
-              status: link ? cur.order_hints.status : 'no_client',
-              rule: link
+              status: picked ? cur.order_hints.status : 'no_client',
+              rule: picked
                 ? 'Klient zmieniony — podpowiedzi z ERP XL dla tego klienta pojawią się po nocnym sprawdzeniu.'
-                : 'Zapytanie bez klienta — podpowiedzi z ERP XL nie ma.',
+                : link
+                  ? 'Wybrano „Bez klienta” — podpowiedzi z ERP XL nie ma.'
+                  : 'Zapytanie bez klienta — podpowiedzi z ERP XL nie ma.',
             }
           : cur.order_hints,
       }

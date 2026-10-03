@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { AddToCampaignMenu } from '../components/AddToCampaignMenu'
 import { CampaignPickBanner } from '../components/CampaignPickBanner'
@@ -292,6 +292,7 @@ function SortTh({
 export function Products() {
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
   const canEnrich = can(user, 'price_lists.import')
   const canExportPresta = can(user, 'presta.export')
   const canDelete = can(user, 'products.delete')
@@ -385,15 +386,23 @@ export function Products() {
     setPage(1)
   }, [searchParams])
 
-  // Ponowne „Pokaż wszystkie” przy otwartej liście zmienia tylko ?q= (bez ponownego montowania strony).
+  // „Pokaż wszystkie” przy otwartej liście zmienia tylko adres (bez ponownego montowania strony). Fraza z adresu
+  // trafia do pola, gdy ?q= się zmieniło albo gdy przejście przyszło z wyszukiwania (znacznik fromGlobalSearch
+  // w location.state z GlobalSearch) — wtedy także przy tej samej frazie, którą użytkownik w międzyczasie zmienił
+  // w polu. Inne zmiany adresu (np. zdjęcie filtra cennika B2B) nie ruszają wpisanego tekstu.
   const lastUrlQ = useRef(urlQ)
+  const lastLocationKey = useRef(location.key)
+  const fromGlobalSearch =
+    typeof location.state === 'object' && location.state !== null && 'fromGlobalSearch' in location.state
   useEffect(() => {
-    if (lastUrlQ.current === urlQ) return
+    const keyChanged = lastLocationKey.current !== location.key
+    lastLocationKey.current = location.key
+    if (lastUrlQ.current === urlQ && !(keyChanged && fromGlobalSearch)) return
     lastUrlQ.current = urlQ
     setQ(urlQ)
     setDebouncedQ(urlQ.trim())
     setPage(1)
-  }, [urlQ])
+  }, [urlQ, location.key, fromGlobalSearch])
 
   useEffect(() => {
     lastSelectIndex.current = null

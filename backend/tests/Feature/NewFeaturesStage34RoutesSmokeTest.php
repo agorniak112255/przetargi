@@ -63,9 +63,11 @@ final class NewFeaturesStage34RoutesSmokeTest extends TestCase
 
         return [
             ['GET', '/api/tenders/calendar?from=2026-10-01&to=2026-10-31', false],
-            ['GET', '/api/me/calendar-feed', false],
+            // stan i wyłączenie własnego adresu także bez uprawnień do przetargów (ktoś, kto je stracił, może go
+            // wyłączyć); nowy adres tylko z uprawnieniem
+            ['GET', '/api/me/calendar-feed', true],
             ['POST', '/api/me/calendar-feed', false],
-            ['DELETE', '/api/me/calendar-feed', false],
+            ['DELETE', '/api/me/calendar-feed', true],
             // każda grupa wyników sprawdza własne uprawnienie — bez uprawnień pusta odpowiedź, nie odmowa
             ['GET', '/api/search?q=rękawice', true],
             ['GET', "/api/clients/{$c}", false],
@@ -99,7 +101,7 @@ final class NewFeaturesStage34RoutesSmokeTest extends TestCase
         }
     }
 
-    public function test_user_without_permissions_is_refused_except_search_and_own_target(): void
+    public function test_user_without_permissions_is_refused_except_search_own_target_and_own_calendar_address(): void
     {
         Sanctum::actingAs(User::factory()->create());
 
@@ -173,7 +175,8 @@ final class NewFeaturesStage34RoutesSmokeTest extends TestCase
             ->first(static fn (Route $r): bool => $r->uri() === 'api/calendar/{token}.ics');
         $this->assertNotNull($route);
         $middleware = $route->gatherMiddleware();
-        $this->assertContains('throttle:60,1', $middleware);
+        // własny przedrostek licznika — bez niego limit dzieliłyby trasy wypisu i linków kampanii (klucz = domena|IP)
+        $this->assertContains('throttle:60,1,calendar-ics', $middleware);
         $this->assertNotContains('auth:sanctum', $middleware);
         $this->assertNotContains('log.activity', $middleware);
     }

@@ -54,7 +54,8 @@ final class ProductListTextSearch
                 }
             });
         } else {
-            $like = '%'.$term.'%';
+            // znaki % i _ we frazie szukane dosłownie — bez ucieczki „__” pasowało do każdej karty (pełny skan)
+            $like = '%'.addcslashes($term, '%_\\').'%';
             $codes = $this->modelFuzzy->shortCodes($term);
             $tokens = $brands === [] ? [] : $this->queryTokens($term, $brands);
             $query->where(function ($builder) use ($like, $term, $codes, $brands, $tokens) {

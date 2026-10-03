@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ClientInquiry;
+use App\Models\ErpSaleDocument;
 use App\Models\InquiryOrderHint;
 use App\Services\ClientInquiryService;
 use App\Services\Clients\InquiryClientLinker;
@@ -78,10 +79,20 @@ class InquiryOutcomeController extends Controller
                 if (! $hint instanceof InquiryOrderHint) {
                     throw ValidationException::withMessages(['hint_id' => 'Ta podpowiedź nie należy do tego zapytania.']);
                 }
+                // podpowiedź policzona dla poprzedniego klienta zapytania nie jest już podpowiedzią tego zapytania
+                if (! InquiryOrderHint::query()->whereKey($hint->id)->ofCurrentClient()->exists()) {
+                    throw ValidationException::withMessages(['hint_id' => 'Ta podpowiedź dotyczy innego klienta niż obecny klient zapytania.']);
+                }
+                // wartość całego dokumentu z dokumentów sprzedaży ERP XL (nagłówek, z korektami ze znakiem jak w XL);
+                // suma pozycji z podpowiedzi (tylko ilości > 0) tylko, gdy dokumentu jeszcze nie ma w erp_sale_documents
+                $documentNet = ErpSaleDocument::query()
+                    ->where('document_type', $hint->document_type)
+                    ->where('document_id', $hint->document_id)
+                    ->value('net_value');
                 $changes += [
                     'outcome_document_number' => (string) $hint->document_number,
                     'outcome_document_date' => $hint->issued_at?->toDateString(),
-                    'outcome_net_value' => (string) $hint->document_net,
+                    'outcome_net_value' => $documentNet !== null ? (string) $documentNet : (string) $hint->document_net,
                 ];
             } elseif (($hasHintKey && $hintId === null) || ! in_array($outcome, self::ORDERED, true)) {
                 // wskazanie dokumentu zdjęte albo wynik bez zakupu — dokument z wyniku znika;
@@ -112,14 +123,9 @@ class InquiryOutcomeController extends Controller
             abort(403, 'Brak uprawnienia do listy klientów.');
         }
 
-        $previous = $inquiry->client_id !== null ? (int) $inquiry->client_id : null;
-        DB::transaction(static function () use ($inquiry, $clientId, $previous): void {
-            app(InquiryClientLinker::class)->link($inquiry, $clientId);
-            // podpowiedzi liczono z dokumentów poprzedniego klienta — nowe policzy nocne sprawdzenie
-            if ($previous !== $clientId) {
-                InquiryOrderHint::query()->where('client_inquiry_id', $inquiry->id)->delete();
-            }
-        });
+        // zmiana klienta w tej samej transakcji kasuje podpowiedzi i dokument z wyniku poprzedniego klienta
+        // (wynik i powód zostają) — InquiryClientLinker::link
+        app(InquiryClientLinker::class)->link($inquiry, $clientId);
         $inquiry->unsetRelation('client');
 
         return response()->json(['client_link' => InquiryClientLinker::present($inquiry)]);

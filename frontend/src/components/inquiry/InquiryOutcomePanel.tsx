@@ -341,7 +341,8 @@ type ClientOption = { id: number; name: string; nip: string | null; city: string
 /**
  * Powiązanie zapytania z klientem z zakładki Klienci — pokazuje regułę słowami; autor może wybrać klienta (lista
  * z podpowiedziami) albo zostawić zapytanie świadomie bez klienta. Wybór handlowca jest ręczny: nocne powiązania
- * automatyczne (ten sam adres e-mail, NIP z maila) już go nie zmienią.
+ * automatyczne (ten sam adres e-mail, NIP z maila) już go nie zmienią. Świadome „Bez klienta” przychodzi jako
+ * {client: null, source: 'manual'}; brak powiązania (null) znaczy, że nocne sprawdzenie nikogo pewnie nie wskazało.
  */
 export function InquiryClientLinkBox({
   inquiryId,
@@ -379,22 +380,29 @@ export function InquiryClientLinkBox({
     void save(null)
   }
 
+  const client = link?.client ?? null
+  const chosenWithout = link !== null && client === null
+
   return (
     <div className="mt-1 text-[11px] text-slate-500">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        {link ? (
+        {link && client ? (
           <span>
-            Klient: <b className="font-medium text-slate-700">{link.client.name}</b> <span className="text-slate-400">({LINK_RULE[link.source]})</span>
+            Klient: <b className="font-medium text-slate-700">{client.name}</b> <span className="text-slate-400">({LINK_RULE[link.source]})</span>
+          </span>
+        ) : chosenWithout ? (
+          <span>
+            <b className="font-medium text-slate-700">Bez klienta</b> — wybór handlowca; nocne powiązanie tego nie zmieni.
           </span>
         ) : (
           <span>Zapytanie nie jest powiązane z klientem z zakładki Klienci.</span>
         )}
         {canEdit && !picking && canPick && (
           <button type="button" disabled={busy} onClick={() => setPicking(true)} className="text-blue-700 underline disabled:opacity-50">
-            {link ? 'Zmień klienta' : 'Powiąż z klientem'}
+            {client ? 'Zmień klienta' : 'Powiąż z klientem'}
           </button>
         )}
-        {canEdit && !picking && link && (
+        {canEdit && !picking && client && (
           <button type="button" disabled={busy} onClick={withoutClient} className="text-blue-700 underline disabled:opacity-50">
             Bez klienta
           </button>

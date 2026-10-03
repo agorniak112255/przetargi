@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\Client;
 use App\Models\ClientInquiry;
+use App\Models\InquiryOrderHint;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -48,6 +50,10 @@ final class OfferValidityReminderTest extends TestCase
         $this->assertSame('/inquiries/'.$inquiry->id, $data['url']);
         $this->assertStringContainsString('6.10.2026', (string) $data['title']);
         $this->assertStringContainsString('Szpital Miejski nr 3', (string) ($data['body'] ?? ''));
+        // warunkiem jest tylko pusty wynik — nie twierdzimy, że klient nie zamówił
+        $this->assertStringContainsString('wynik zapytania nie jest wpisany', (string) $data['title']);
+        $this->assertStringNotContainsString('nie zamówił', (string) $data['title'].' '.($data['body'] ?? ''));
+        $this->assertStringNotContainsString('ERP XL podpowiada', (string) ($data['body'] ?? ''));
 
         // kolejne przebiegi tego i następnego dnia — bez powtórki (raz na ofertę)
         $this->at('2026-10-05 07:15');
@@ -76,6 +82,24 @@ final class OfferValidityReminderTest extends TestCase
 
         $this->at('2026-10-05 08:00');
         $this->assertSame(0, $this->author->notifications()->count());
+    }
+
+    public function test_hint_from_erp_is_mentioned_as_possible_order_and_event_name_does_not_claim_no_order(): void
+    {
+        $client = Client::query()->create(['name' => 'Ciepłownia Wisłok', 'xl_gid' => 7001]);
+        $inquiry = $this->offer('2026-09-22 15:00', '14 dni', ['client_id' => $client->id, 'client_link_source' => 'email']);
+        InquiryOrderHint::query()->create([
+            'client_inquiry_id' => $inquiry->id, 'customer_xl_gid' => 7001, 'document_type' => 2033, 'document_id' => 1,
+            'document_number' => 'FS-1', 'issued_at' => '2026-09-30', 'document_net' => 10, 'matched_net' => 10,
+            'offered_items' => 1, 'linked_items' => 1, 'matched_items' => 1, 'computed_at' => now(),
+        ]);
+
+        $this->at('2026-10-05 07:00');
+        $data = $this->author->notifications()->sole()->data;
+        $this->assertStringContainsString('wynik zapytania nie jest wpisany', (string) $data['title']);
+        $this->assertStringContainsString('ERP XL podpowiada możliwe zamówienie — sprawdź i wpisz wynik', (string) ($data['body'] ?? ''));
+
+        $this->assertSame('Kończy się ważność mojej oferty, a wynik zapytania nie jest wpisany', config('notifications.events.offer_validity_ending.label'));
     }
 
     private function at(string $polish): void

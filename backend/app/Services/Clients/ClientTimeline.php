@@ -330,20 +330,29 @@ final class ClientTimeline
         $rows = $rows->take(self::LIMIT);
 
         // dokument potwierdzony przez handlowca jako zamówienie z zapytania (wynik zapytania) — tylko zapytania,
-        // które użytkownik widzi
+        // które użytkownik widzi; can_open jak przy wpisie zapytania: własne albo z inquiries.view_others (sam
+        // inquiries.view_all pokazuje cudze na liście, ale ich nie otwiera). Przy kilku zapytaniach z tym samym
+        // dokumentem pierwszeństwo ma takie, które użytkownik może otworzyć.
         $confirmed = [];
         $numbers = $rows->pluck('document_number')->filter()->unique()->values()->all();
         if ($inquiriesVisible && $numbers !== []) {
+            $myId = (int) $user->id;
+            $viewOthers = $user->can('inquiries.view_others');
             $query = DB::table('client_inquiries')
                 ->where('client_id', $client->id)
                 ->whereIn('outcome', self::ORDERED_OUTCOMES)
                 ->whereIn('outcome_document_number', $numbers)
-                ->when(! $user->can('inquiries.view_all'), static fn ($q) => $q->where('user_id', $user->id))
+                ->when(! $user->can('inquiries.view_all'), static fn ($q) => $q->where('user_id', $myId))
                 ->orderBy('id')
-                ->get(['id', 'outcome_document_number', 'source_sent_at', 'created_at']);
+                ->get(['id', 'user_id', 'outcome_document_number', 'source_sent_at', 'created_at']);
             foreach ($query as $row) {
+                $number = (string) $row->outcome_document_number;
+                $canOpen = (int) $row->user_id === $myId || $viewOthers;
+                if (isset($confirmed[$number]) && ($confirmed[$number]['can_open'] || ! $canOpen)) {
+                    continue;
+                }
                 $date = self::parse($row->source_sent_at ?? $row->created_at);
-                $confirmed[(string) $row->outcome_document_number] ??= ['id' => (int) $row->id, 'date' => $date?->toIso8601String()];
+                $confirmed[$number] = ['id' => (int) $row->id, 'date' => $date?->toIso8601String(), 'can_open' => $canOpen];
             }
         }
 

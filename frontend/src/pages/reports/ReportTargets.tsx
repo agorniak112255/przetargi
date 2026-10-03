@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { SectionNote } from '../../components/ReportKit'
 import { errorText } from '../../lib/campaignFormat'
 import { plural } from '../../lib/plural'
-import { fetchSalesTargets, fmtDec, groupInt, NBSP, saveSalesTargets, stampDate, type SalesTargetsReport, type Tone } from '../../lib/reports'
+import { fetchSalesTargets, fmtDec, groupInt, longDate, NBSP, saveSalesTargets, type SalesTargetsReport, type Tone } from '../../lib/reports'
 
 /**
  * Raport „Cele handlowców” (ekran 11 makiety) — GET/PUT /reports/targets; wymaga reports.view
@@ -26,6 +26,13 @@ const BAR_FILL: Record<Tone, string> = {
 }
 
 /** Kwota z serwera („420000.00”) w pełnych złotych: „420 000 zł”. */
+/** „3 października 2026, 05:41” — moment odczytu pełnymi słowami (bez skrótu miesiąca). */
+function readStamp(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return `${longDate(iso)}, ${d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`
+}
+
 function zl(value: string | null): string {
   if (value == null) return '—'
   const n = Number(value)
@@ -265,7 +272,7 @@ export function ReportTargets({ onDirtyChange }: { onDirtyChange?: (dirty: boole
         {data && (
           <span className="text-xs text-slate-500">
             {data.data_until
-              ? `Faktury i paragony z ERP XL według odczytu z ${stampDate(data.data_until)}`
+              ? `Faktury i paragony z ERP XL według odczytu z ${readStamp(data.data_until)}`
               : 'Nie ma jeszcze nocnego odczytu faktur i paragonów z ERP XL'}
           </span>
         )}

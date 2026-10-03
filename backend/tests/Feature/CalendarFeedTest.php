@@ -284,12 +284,46 @@ final class CalendarFeedTest extends TestCase
         $this->get('/api/calendar/'.str_repeat('A', 41).'.ics')->assertNotFound();
     }
 
-    public function test_feed_endpoints_need_tender_access(): void
+    public function test_public_routes_have_separate_rate_limit_counters(): void
+    {
+        // 60 kliknięć linków kampanii z jednego adresu IP (pośrednik poczty) — limit 300/min tych linków
+        $click = '/api/k/'.str_repeat('B', 40).'/l/1';
+        for ($i = 0; $i < 60; $i++) {
+            $this->assertNotSame(429, $this->get($click)->getStatusCode());
+        }
+
+        // kalendarz (60/min) i strona wypisu (30/min) liczą osobno — nieznany klucz to 404, nie „za dużo zapytań”
+        $this->ics(str_repeat('A', 40))->assertNotFound();
+        $this->assertNotSame(429, $this->get('/api/wypis/'.str_repeat('C', 40))->getStatusCode());
+    }
+
+    public function test_new_address_needs_tender_access_but_state_and_switching_off_do_not(): void
     {
         Sanctum::actingAs($this->userWith(['dashboard.view']));
-        $this->getJson('/api/me/calendar-feed')->assertForbidden();
         $this->postJson('/api/me/calendar-feed', ['scope' => 'mine'])->assertForbidden();
-        $this->deleteJson('/api/me/calendar-feed')->assertForbidden();
+        $this->getJson('/api/me/calendar-feed')->assertOk()->assertJsonPath('active', false);
+        $this->deleteJson('/api/me/calendar-feed')->assertOk()->assertJsonPath('ok', true);
+    }
+
+    public function test_person_who_lost_tender_access_can_still_switch_off_the_address(): void
+    {
+        $role = Role::findOrCreate('kalendarz-'.Str::random(6), 'web');
+        $role->givePermissionTo(Permission::findOrCreate('tenders.view_own', 'web'));
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
+        $user = User::factory()->create();
+        $user->assignRole($role);
+        Sanctum::actingAs($user);
+        $token = $this->token($this->postJson('/api/me/calendar-feed', ['scope' => 'mine'])->assertOk()->json('url'));
+
+        $role->revokePermissionTo('tenders.view_own');
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
+        $user = $user->fresh();
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/me/calendar-feed')->assertOk()->assertJsonPath('active', true);
+        $this->deleteJson('/api/me/calendar-feed')->assertOk();
+        $this->assertNull($user->fresh()->calendar_token_hash);
+        $this->ics($token)->assertNotFound();
     }
 
     private function ics(string $token): TestResponse

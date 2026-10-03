@@ -225,6 +225,80 @@ final class InquiryOrderHintsCommandTest extends TestCase
         $this->assertSame([], $this->xl->documentLineCalls);
     }
 
+    public function test_hint_remembers_customer_it_was_computed_for(): void
+    {
+        $client = $this->client(7020);
+        $gloves = $this->product('R1');
+        $this->link($gloves, 1201, ErpItemLink::STATUS_AUTO);
+        $this->repliedInquiry($client, [$gloves], '2026-09-20 10:00');
+        $this->xl->documentLineRows = [FakeErpXlGateway::documentLine(1, $this->d('2026-09-21'), 7020, 1201, 1, 10)];
+
+        $this->assertSame(0, Artisan::call('inquiries:order-hints'));
+        $this->assertSame(7020, InquiryOrderHint::query()->sole()->customer_xl_gid);
+    }
+
+    public function test_nightly_relink_or_unlink_drops_hints_and_confirmed_document_of_previous_client(): void
+    {
+        config(['erpxl.enabled' => false]);
+        $acme = Client::query()->create(['name' => 'ACME', 'xl_gid' => 7030, 'emails' => ['zakupy@acme.pl']]);
+        $beta = Client::query()->create(['name' => 'BETA', 'xl_gid' => 7031]);
+        $document = ['outcome' => 'ordered', 'outcome_document_number' => 'FS-7', 'outcome_document_date' => '2026-09-21', 'outcome_net_value' => '10.00'];
+        // powiązane automatycznie z BETA (adres był kiedyś na jej karcie), dziś adres jest na karcie ACME
+        $moved = $this->autoLinked($beta, 'zakupy@acme.pl', $document);
+        $this->hint($moved, 1, 7031);
+        // powiązane automatycznie z BETA, adres zniknął z kart — powiązanie zdjęte
+        $gone = $this->autoLinked($beta, 'stary@beta.pl', $document);
+        $this->hint($gone, 2, 7031);
+        // automatyczne bez zmiany klienta — podpowiedź i dokument zostają
+        $kept = $this->autoLinked($acme, 'zakupy@acme.pl', $document);
+        $this->hint($kept, 3, 7030);
+
+        $this->assertSame(0, Artisan::call('inquiries:order-hints'));
+
+        foreach ([[$moved, $acme->id], [$gone, null]] as [$inquiry, $clientId]) {
+            $fresh = $inquiry->fresh();
+            $this->assertSame($clientId, $fresh->client_id);
+            $this->assertSame([null, null, null], [$fresh->outcome_document_number, $fresh->outcome_document_date, $fresh->outcome_net_value]);
+            $this->assertSame('ordered', $fresh->outcome, 'Wynik wpisany przez handlowca zostaje.');
+        }
+        $this->assertSame([3], InquiryOrderHint::query()->pluck('document_id')->all());
+        $this->assertSame('FS-7', $kept->fresh()->outcome_document_number);
+    }
+
+    public function test_reply_from_61_days_ago_still_gets_document_from_last_day_of_window(): void
+    {
+        $client = $this->client(7040);
+        $gloves = $this->product('R1');
+        $this->link($gloves, 1301, ErpItemLink::STATUS_AUTO);
+        // odpowiedź 3.08 — dziś 3.10 to „odpowiedź + 61 dni”; dokument z 2.10 (+60) jeszcze w oknie
+        $inquiry = $this->repliedInquiry($client, [$gloves], '2026-08-03 10:00');
+        // odpowiedź 1.08 (+63) — poza przeliczaniem
+        $older = $this->repliedInquiry($client, [$gloves], '2026-08-01 10:00');
+        $this->xl->documentLineRows = [FakeErpXlGateway::documentLine(21, $this->d('2026-10-02'), 7040, 1301, 1, 10)];
+
+        $this->assertSame(0, Artisan::call('inquiries:order-hints'));
+        $this->assertSame([21], InquiryOrderHint::query()->where('client_inquiry_id', $inquiry->id)->pluck('document_id')->all());
+        $this->assertSame(0, InquiryOrderHint::query()->where('client_inquiry_id', $older->id)->count());
+        $this->assertStringContainsString('zapytania z odpowiedzią z 62 dni: 1', Artisan::output());
+    }
+
+    public function test_one_xl_item_linked_to_two_offered_cards_counts_both_cards(): void
+    {
+        $client = $this->client(7050);
+        // karta producenta i karta dystrybutora tego samego wyrobu — obie powiązane z jednym towarem XL
+        [$maker, $distributor] = [$this->product('P1'), $this->product('D1')];
+        $item = ErpItem::query()->create(['xl_gid' => 1401, 'code' => 'T1401', 'name' => 'Towar 1401', 'unit' => 'szt', 'archived' => false]);
+        foreach ([$maker, $distributor] as $product) {
+            ErpItemLink::query()->create(['erp_item_id' => $item->id, 'product_id' => $product->id, 'status' => ErpItemLink::STATUS_AUTO, 'method' => 'manual']);
+        }
+        $this->repliedInquiry($client, [$maker, $distributor], '2026-09-20 10:00');
+        $this->xl->documentLineRows = [FakeErpXlGateway::documentLine(31, $this->d('2026-09-21'), 7050, 1401, 1, 10)];
+
+        $this->assertSame(0, Artisan::call('inquiries:order-hints'));
+        $hint = InquiryOrderHint::query()->sole();
+        $this->assertSame([2, 2, 2], [$hint->offered_items, $hint->linked_items, $hint->matched_items]);
+    }
+
     public function test_xl_failure_ends_with_error_code(): void
     {
         $client = $this->client(7007);
@@ -239,6 +313,23 @@ final class InquiryOrderHintsCommandTest extends TestCase
         $this->assertSame(1, Artisan::call('inquiries:order-hints'));
         $this->assertStringContainsString('Odczyt dokumentów z ERP XL przerwany: serwer XL nie odpowiada', Artisan::output());
         $this->assertSame(0, InquiryOrderHint::query()->count());
+    }
+
+    /**
+     * Zapytanie powiązane automatycznie (po adresie e-mail) z klientem, z odpowiedzią i podanymi polami wyniku.
+     *
+     * @param  array<string, mixed>  $attrs
+     */
+    private function autoLinked(Client $client, string $fromEmail, array $attrs): ClientInquiry
+    {
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $this->author->id, 'source_body' => 'Proszę o ofertę', 'source_channel' => 'web', 'source_from_email' => $fromEmail,
+        ]);
+        $inquiry->forceFill([
+            'client_id' => $client->id, 'client_link_source' => 'email', 'replied_at' => now()->subDays(10), ...$attrs,
+        ])->save();
+
+        return $inquiry;
     }
 
     private function d(string $date): int
@@ -303,10 +394,10 @@ final class InquiryOrderHintsCommandTest extends TestCase
         return $inquiry;
     }
 
-    private function hint(ClientInquiry $inquiry, int $documentId): InquiryOrderHint
+    private function hint(ClientInquiry $inquiry, int $documentId, int $customerGid = 7004): InquiryOrderHint
     {
         return InquiryOrderHint::query()->create([
-            'client_inquiry_id' => $inquiry->id, 'document_type' => 2033, 'document_id' => $documentId,
+            'client_inquiry_id' => $inquiry->id, 'customer_xl_gid' => $customerGid, 'document_type' => 2033, 'document_id' => $documentId,
             'document_number' => 'FS-'.$documentId, 'issued_at' => '2026-09-21', 'document_net' => 10, 'matched_net' => 10,
             'offered_items' => 1, 'linked_items' => 1, 'matched_items' => 1, 'computed_at' => now(),
         ]);

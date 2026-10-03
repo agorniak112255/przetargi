@@ -61,6 +61,24 @@ final class GlobalSearchApiTest extends TestCase
         );
     }
 
+    public function test_show_all_inquiries_link_never_shows_less_than_the_search(): void
+    {
+        $moreUrl = fn (): ?string => collect($this->search('rękawice')->assertOk()->json('groups'))->firstWhere('key', 'inquiries')['more_url'];
+
+        // lista wszystkich osób — parametr zakresu listy zapytań to scope=all
+        Sanctum::actingAs($this->userWith(['inquiries.use', 'inquiries.view_all', 'inquiries.view_others']));
+        $this->assertSame('/inquiries?q=r%C4%99kawice&scope=all', $moreUrl());
+        Sanctum::actingAs($this->userWith(['inquiries.use', 'inquiries.view_all']));
+        $this->assertSame('/inquiries?q=r%C4%99kawice&scope=all', $moreUrl());
+
+        // wyszukiwanie znajduje cudze (view_others), a lista bez view_all pokazałaby tylko własne — bez linku
+        Sanctum::actingAs($this->userWith(['inquiries.use', 'inquiries.view_others']));
+        $this->assertNull($moreUrl());
+
+        Sanctum::actingAs($this->userWith(['inquiries.use']));
+        $this->assertSame('/inquiries?q=r%C4%99kawice', $moreUrl());
+    }
+
     public function test_query_length_is_validated_after_trimming(): void
     {
         Sanctum::actingAs($this->userWith(['products.view']));

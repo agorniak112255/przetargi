@@ -2222,7 +2222,10 @@ export type GlobalSearchResponse = {
     label: string
     items: GlobalSearchHit[]
     has_more: boolean
-    /** „Pokaż wszystkie” — tylko produkty (/products?q=) i zapytania (/inquiries?q=) */
+    /**
+     * „Pokaż wszystkie” — tylko produkty (/products?q=) i zapytania (/inquiries?q=, przy inquiries.view_all
+     * z &scope=all). null — lista nie pokaże tych samych wyników (np. same cudze zapytania z inquiries.view_others).
+     */
     more_url: string | null
   }[]
 }
@@ -2320,7 +2323,8 @@ export type TimelineEvent =
       document_number: string
       kind: string
       net_value: string
-      confirmed_inquiry: { id: number; date: string } | null
+      /** can_open — własne zapytanie albo inquiries.view_others; inaczej bez linku */
+      confirmed_inquiry: { id: number; date: string; can_open: boolean } | null
     }
   | {
       type: 'inquiry'
@@ -2399,8 +2403,9 @@ export type InquiryOutcomeView = {
   can_edit: boolean
 }
 
+/** client null tylko przy source 'manual' — handlowiec świadomie wybrał „Bez klienta” (automat tego nie zmienia). */
 export type InquiryClientLink = {
-  client: { id: number; name: string }
+  client: { id: number; name: string } | null
   source: InquiryClientLinkSource
 }
 

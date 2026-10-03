@@ -7,6 +7,7 @@ namespace App\Services\Reports;
 use App\Models\Campaign;
 use App\Models\CampaignRecipient;
 use App\Models\ClientInquiry;
+use App\Models\InquiryOrderHint;
 use App\Models\Tender;
 use App\Models\User;
 use App\Services\Campaigns\CampaignSalesResult;
@@ -159,8 +160,8 @@ final class SalesReport
         $channels = array_fill_keys(self::CHANNELS, 0);
         $people = [];
         $funnel = ['received' => 0, 'replied' => 0, 'ordered_confirmed' => 0, 'possible' => 0, 'value_confirmed' => 0.0, 'ordered_without_document' => 0];
-        // zapytania z podpowiedzią z ERP XL (wniosek) — mała tabela, bez JOIN-ów
-        $hinted = array_flip(DB::table('inquiry_order_hints')->distinct()->pluck('client_inquiry_id')->map(static fn ($id): int => (int) $id)->all());
+        // zapytania z podpowiedzią z ERP XL (wniosek) policzoną dla obecnego klienta zapytania
+        $hinted = array_flip(InquiryOrderHint::query()->ofCurrentClient()->distinct()->pluck('client_inquiry_id')->map(static fn ($id): int => (int) $id)->all());
 
         foreach ($groups as $group) {
             $start = $group['start'] ?? $now;
@@ -218,7 +219,7 @@ final class SalesReport
             // mail przejęty przez kilka osób liczy się każdej z nich (suma wierszy może przekroczyć liczbę zapytań)
             foreach (array_keys($group['members']) as $memberId) {
                 $person = &$people[$memberId];
-                $person ??= ['received' => 0, 'replied' => 0, 'replied_1bd' => 0, 'waiting' => 0, 'reply_seconds' => [], 'ordered' => 0, 'order_value' => 0.0];
+                $person ??= ['received' => 0, 'replied' => 0, 'replied_1bd' => 0, 'waiting' => 0, 'reply_seconds' => [], 'own_replied' => 0, 'ordered' => 0, 'order_value' => 0.0];
                 $person['received']++;
                 $person['replied'] += $replied !== null ? 1 : 0;
                 $person['replied_1bd'] += $inTime ? 1 : 0;
@@ -242,6 +243,8 @@ final class SalesReport
                 if ($ownReplied !== null && $ownReplied->gte($start)) {
                     $person['reply_seconds'][] = (int) $start->diffInSeconds($ownReplied, true);
                 }
+                // mianownik „zamówione z odpowiedzianych”: tylko grupy, w których ta osoba sama odpowiedziała
+                $person['own_replied'] += $ownReplied !== null ? 1 : 0;
                 $person['ordered'] += $ownOrdered ? 1 : 0;
                 $person['order_value'] += array_sum($ownDocuments);
                 unset($person);
@@ -317,7 +320,7 @@ final class SalesReport
     }
 
     /**
-     * @param  array<int, array{received: int, replied: int, replied_1bd: int, waiting: int, reply_seconds: list<int>, ordered: int, order_value: float}>  $people
+     * @param  array<int, array{received: int, replied: int, replied_1bd: int, waiting: int, reply_seconds: list<int>, own_replied: int, ordered: int, order_value: float}>  $people
      * @return list<array<string, mixed>>
      */
     private function people(array $people): array
@@ -334,9 +337,10 @@ final class SalesReport
                 'waiting' => $counts['waiting'],
                 // zwykle odpowiada w: mediana od przyjścia maila do własnej odpowiedzi tej osoby
                 'median_reply_seconds' => self::median($counts['reply_seconds']),
-                // zamówione z odpowiedzianych — wynik potwierdzony przez tę osobę (zamówił albo zamówił część)
+                // zamówione z odpowiedzianych — wynik potwierdzony przez tę osobę (zamówił albo zamówił część) wśród
+                // zapytań, na które sama odpowiedziała (odpowiedź kolegi na kopię maila to nie jej oferta)
                 'ordered' => $counts['ordered'],
-                'ordered_percent' => $counts['replied'] > 0 ? round($counts['ordered'] * 100 / $counts['replied'], 1) : null,
+                'ordered_percent' => $counts['own_replied'] > 0 ? round($counts['ordered'] * 100 / $counts['own_replied'], 1) : null,
                 'order_value' => number_format($counts['order_value'], 2, '.', ''),
             ];
         }

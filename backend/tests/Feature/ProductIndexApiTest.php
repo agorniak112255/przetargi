@@ -202,6 +202,19 @@ final class ProductIndexApiTest extends TestCase
             ->assertJsonPath('data.0.sku', 'BW200/LB202FLR/AZ003/2AZ029');
     }
 
+    /** Znaki % i _ we frazie to zwykłe znaki — „__” nie może pasować do każdej karty (pełny skan katalogu). */
+    public function test_products_q_treats_like_wildcards_literally(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        foreach (['RK-1' => 'Rękawice nitrylowe', 'BT-2' => 'Buty robocze S3'] as $sku => $name) {
+            Product::query()->create(['sku' => $sku, 'name' => $name, 'manufacturer' => 'X', 'catalog_price_net' => 10, 'purchase_price' => 5, 'stock' => 1]);
+        }
+
+        $this->getJson('/api/products?q=__')->assertOk()->assertJsonPath('total', 0);
+        $this->getJson('/api/products?q='.rawurlencode('%%'))->assertOk()->assertJsonPath('total', 0);
+        $this->getJson('/api/products?q=nitryl')->assertOk()->assertJsonPath('total', 1);
+    }
+
     public function test_manufacturers_endpoint_returns_distinct_sorted_list(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

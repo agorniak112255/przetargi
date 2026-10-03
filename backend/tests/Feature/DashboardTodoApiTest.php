@@ -196,15 +196,21 @@ class DashboardTodoApiTest extends TestCase
     {
         $me = $this->userWith(['dashboard.view', 'inquiries.use']);
         $other = $this->userWith(['dashboard.view', 'inquiries.use']);
-        $client = Client::query()->create(['name' => 'Szpital Miejski nr 3']);
+        // podpowiedź z ERP XL liczy się tylko dla obecnego klienta zapytania (ten sam kontrahent XL)
+        $client = Client::query()->create(['name' => 'Szpital Miejski nr 3', 'xl_gid' => 7001]);
         // dziś sobota 3.10: oferta do poniedziałku 5.10 — od piątku 2.10 (ostatni dzień roboczy przed) jest sprawą na dziś
         $monday = $this->offer($me, '2026-09-21 12:00', '14 dni', ['client_id' => $client->id, 'source_subject' => 'Półmaski i fartuchy']);
         DB::table('inquiry_order_hints')->insert([
-            'client_inquiry_id' => $monday->id, 'document_type' => 2033, 'document_id' => 1, 'document_number' => 'FS-1', 'issued_at' => '2026-09-30',
+            'client_inquiry_id' => $monday->id, 'customer_xl_gid' => 7001, 'document_type' => 2033, 'document_id' => 1, 'document_number' => 'FS-1', 'issued_at' => '2026-09-30',
             'document_net' => 10, 'matched_net' => 10, 'offered_items' => 1, 'linked_items' => 1, 'matched_items' => 1, 'created_at' => now(), 'updated_at' => now(),
         ]);
         // ważna do dziś — jeszcze na liście; firma ze stopki, gdy nie ma klienta
         $today = $this->offer($me, '2026-09-19 12:00', '14 dni', ['contact' => ['company' => 'Zakłady Metalowe Sanwal']]);
+        // podpowiedź z czasu, gdy zapytanie miało klienta — dziś zapytanie jest bez klienta, więc się nie liczy
+        DB::table('inquiry_order_hints')->insert([
+            'client_inquiry_id' => $today->id, 'customer_xl_gid' => 7001, 'document_type' => 2033, 'document_id' => 2, 'document_number' => 'FS-2', 'issued_at' => '2026-09-30',
+            'document_net' => 10, 'matched_net' => 10, 'offered_items' => 1, 'linked_items' => 1, 'matched_items' => 1, 'created_at' => now(), 'updated_at' => now(),
+        ]);
         $this->offer($me, '2026-09-18 12:00', '14 dni');                          // ważność minęła wczoraj
         $this->offer($me, '2026-09-22 12:00', '14 dni');                          // do wtorku 6.10 — od poniedziałku
         $this->offer($me, '2026-09-21 12:00', '14 dni', ['outcome' => 'ordered']); // wynik wpisany

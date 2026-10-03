@@ -54,7 +54,7 @@ return [
             'permission' => ['clients.view'],
         ],
         'offer_validity_ending' => [
-            'label' => 'Kończy się ważność mojej oferty, a klient nie zamówił',
+            'label' => 'Kończy się ważność mojej oferty, a wynik zapytania nie jest wpisany',
             'description' => 'Od ostatniego dnia roboczego przed końcem ważności oferty z Twojej odpowiedzi na zapytanie, gdy wynik zapytania nie jest wpisany. Raz na ofertę.',
             'default_bell' => true,
             'default_mail' => false,

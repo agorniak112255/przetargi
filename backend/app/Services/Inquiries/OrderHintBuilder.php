@@ -9,6 +9,7 @@ use App\Models\ClientInquiry;
 use App\Models\ErpItemLink;
 use App\Models\InquiryOrderHint;
 use App\Services\ClientInquiryService;
+use App\Services\Clients\InquiryClientLinker;
 use App\Services\Erp\ErpXlGateway;
 use App\Support\ClarionDate;
 use App\Support\PolishTime;
@@ -20,8 +21,9 @@ use Throwable;
 /**
  * Podpowiedź „możliwe, że to zamówienie z tej oferty” (inquiries:order-hints, co noc 05:55 czasu polskiego).
  *
- * Dla zapytań z odpowiedzią z ostatnich N dni (domyślnie 60), bez wpisanego wyniku i z pewnym klientem z ERP XL
- * (InquiryClientLinker: wybór handlowca, ten sam adres e-mail, NIP z maila — klient z clients.xl_gid): pozycje FS, PA
+ * Dla zapytań z odpowiedzią z ostatnich N dni (domyślnie SELECT_DAYS = okno + 2 dni zapasu), bez wpisanego wyniku
+ * i z pewnym klientem z ERP XL (InquiryClientLinker: wybór handlowca, ten sam adres e-mail, NIP z maila — klient
+ * z clients.xl_gid): pozycje FS, PA
  * i FSE tych kontrahentów z ERP XL (ErpXlGateway::customerDocumentLines, od najwcześniejszego dnia odpowiedzi).
  * Towary oferty = ClientInquiryService::offeredProductIds() (wyroby z listu i zatwierdzone zamienniki), porównywane
  * przez powiązania kart z towarami XL o statusie auto albo confirmed (bez towarów usuniętych z XL). Zapisujemy
@@ -36,6 +38,12 @@ final class OrderHintBuilder
     /** Dokument liczy się do podpowiedzi, gdy wystawiono go najpóźniej tyle dni po dniu odpowiedzi. */
     public const WINDOW_DAYS = 60;
 
+    /**
+     * Ile ostatnich dni odpowiedzi przeliczamy co noc: całe okno i 2 dni zapasu — przebieg z rana dnia „odpowiedź + 61”
+     * i „+ 62” widzi jeszcze dokumenty z ostatniego dnia okna wpisane do XL z opóźnieniem.
+     */
+    public const SELECT_DAYS = self::WINDOW_DAYS + 2;
+
     /** Kiedy ostatnio przeliczono podpowiedzi (ISO) — „stan na” przy zapytaniu bez podpowiedzi. */
     public const COMPUTED_AT_CACHE_KEY = 'inquiries.order_hints.computed_at';
 
@@ -48,18 +56,19 @@ final class OrderHintBuilder
     ) {}
 
     /**
+     * @param  int|null  $days  ile ostatnich dni odpowiedzi przeliczyć (null = SELECT_DAYS); okna dokumentu nie zmienia
      * @return array{inquiries: int, without_client: int, customers: int, documents: int, hints: int, removed: int, errors: int}
      */
-    public function run(int $days = self::WINDOW_DAYS): array
+    public function run(?int $days = null): array
     {
         DB::disableQueryLog();
         $startedAt = CarbonImmutable::now()->startOfSecond();
-        $since = PolishTime::today()->subDays(max(1, $days) - 1);
+        $since = PolishTime::today()->subDays(max(1, $days ?? self::SELECT_DAYS));
         $stats = ['inquiries' => 0, 'without_client' => 0, 'customers' => 0, 'documents' => 0, 'hints' => 0, 'removed' => 0, 'errors' => 0];
 
         // 1. zapytania: odpowiedź w oknie, bez wyniku; klient pewny i z ERP XL
         $xlByClient = Client::query()->whereNotNull('xl_gid')->pluck('xl_gid', 'id')->map(static fn ($gid): int => (int) $gid)->all();
-        /** @var array<int, array{customer: int, day: CarbonImmutable, products: list<int>, gids: array<int, int>, linked: int}> $plans */
+        /** @var array<int, array{customer: int, day: CarbonImmutable, products: list<int>, gids: array<int, list<int>>, linked: int}> $plans */
         $plans = [];
         $skipped = [];
         $query = ClientInquiry::query()
@@ -104,7 +113,8 @@ final class OrderHintBuilder
             return $stats;
         }
 
-        // 2. towary XL powiązane z wyrobami ofert: xl_gid towaru → id karty (jedna karta może mieć kilka towarów XL)
+        // 2. towary XL powiązane z wyrobami ofert: xl_gid towaru → id kart oferty (jedna karta może mieć kilka towarów
+        //    XL, a jeden towar XL bywa powiązany z kilkoma kartami — np. karta producenta i dystrybutora)
         $allProducts = array_values(array_unique(array_merge(...array_values(array_map(static fn (array $p): array => $p['products'], $plans)))));
         $productGids = $this->linkedItemGids($allProducts);
         foreach ($plans as &$plan) {
@@ -112,7 +122,7 @@ final class OrderHintBuilder
                 if (($productGids[$productId] ?? []) !== []) {
                     $plan['linked']++;
                     foreach ($productGids[$productId] as $gid) {
-                        $plan['gids'][$gid] = $productId;
+                        $plan['gids'][$gid][] = $productId;
                     }
                 }
             }
@@ -175,7 +185,10 @@ final class OrderHintBuilder
                     $matchedNet = 0.0;
                     foreach ($document['items'] as $gid => $net) {
                         if (isset($plan['gids'][$gid])) {
-                            $matchedProducts[$plan['gids'][$gid]] = true;
+                            // każda zaoferowana karta z tym towarem XL — matched_items liczy karty oferty
+                            foreach ($plan['gids'][$gid] as $productId) {
+                                $matchedProducts[$productId] = true;
+                            }
                             $matchedNet += $net;
                         }
                     }
@@ -184,6 +197,7 @@ final class OrderHintBuilder
                     }
                     $rows[] = [
                         'client_inquiry_id' => $inquiryId,
+                        'customer_xl_gid' => $plan['customer'],
                         'document_type' => $document['type'],
                         'document_id' => $document['id'],
                         'document_number' => $document['number'],
@@ -199,7 +213,7 @@ final class OrderHintBuilder
                     ];
                 }
                 $stats['hints'] += count($rows);
-                $stats['removed'] += $this->replaceHints($inquiryId, $rows);
+                $stats['removed'] += $this->replaceHints($inquiryId, $plan['customer'], $rows);
             } catch (Throwable $e) {
                 report($e);
                 $stats['errors']++;
@@ -225,6 +239,9 @@ final class OrderHintBuilder
         if ($inquiry->replied_at === null) {
             return $empty('not_replied', 'Podpowiedź z ERP XL pojawia się dopiero po wysłaniu odpowiedzi do klienta.');
         }
+        if (InquiryClientLinker::isDeliberatelyWithoutClient($inquiry)) {
+            return $empty('no_client', 'Wybrano „Bez klienta” — podpowiedzi z ERP XL nie ma. Nocne powiązanie tego wyboru nie zmienia.');
+        }
         $client = $inquiry->client_id === null ? null
             : ($inquiry->relationLoaded('client') ? $inquiry->client : Client::query()->select(['id', 'name', 'xl_gid'])->find($inquiry->client_id));
         if (! $client instanceof Client) {
@@ -240,7 +257,8 @@ final class OrderHintBuilder
             return $empty('no_xl', 'Podpowiedzi z ERP XL nie ma, bo połączenie z ERP XL jest wyłączone.');
         }
 
-        $hints = $inquiry->hints()->orderBy('issued_at')->orderBy('id')->get();
+        // tylko podpowiedzi policzone dla obecnego klienta zapytania (po zmianie klienta stare nie obowiązują)
+        $hints = $inquiry->hints()->where('customer_xl_gid', (int) $client->xl_gid)->orderBy('issued_at')->orderBy('id')->get();
         $latest = $hints->max('computed_at');
 
         return [
@@ -290,22 +308,27 @@ final class OrderHintBuilder
     /**
      * Zapis podpowiedzi zapytania: nowe i zmienione dokumenty (upsert), znikają te, których już nie ma (dokument
      * anulowany, towar odpięty) — w jednej transakcji z blokadą wiersza zapytania. Wynik wpisany w międzyczasie
-     * przez handlowca zostawia podpowiedzi bez zmian.
+     * przez handlowca albo zmiana klienta zapytania (inny kontrahent XL niż przy liczeniu) zostawia podpowiedzi bez
+     * zmian — tamte kasuje zmiana klienta, nowe policzy następny przebieg.
      *
      * @param  list<array<string, mixed>>  $rows
      */
-    private function replaceHints(int $inquiryId, array $rows): int
+    private function replaceHints(int $inquiryId, int $customerGid, array $rows): int
     {
-        return DB::transaction(static function () use ($inquiryId, $rows): int {
-            $inquiry = ClientInquiry::query()->whereKey($inquiryId)->lockForUpdate()->first(['id', 'outcome']);
-            if ($inquiry === null || $inquiry->outcome !== null) {
+        return DB::transaction(static function () use ($inquiryId, $customerGid, $rows): int {
+            $inquiry = ClientInquiry::query()->whereKey($inquiryId)->lockForUpdate()->first(['id', 'outcome', 'client_id']);
+            if ($inquiry === null || $inquiry->outcome !== null || $inquiry->client_id === null) {
+                return 0;
+            }
+            $currentGid = Client::query()->whereKey($inquiry->client_id)->value('xl_gid');
+            if ($currentGid === null || (int) $currentGid !== $customerGid) {
                 return 0;
             }
             if ($rows !== []) {
                 InquiryOrderHint::query()->upsert(
                     $rows,
                     ['client_inquiry_id', 'document_type', 'document_id'],
-                    ['document_number', 'issued_at', 'document_net', 'matched_net', 'offered_items', 'linked_items', 'matched_items', 'computed_at', 'updated_at'],
+                    ['customer_xl_gid', 'document_number', 'issued_at', 'document_net', 'matched_net', 'offered_items', 'linked_items', 'matched_items', 'computed_at', 'updated_at'],
                 );
             }
             $keep = array_map(static fn (array $r): string => $r['document_type'].':'.$r['document_id'], $rows);

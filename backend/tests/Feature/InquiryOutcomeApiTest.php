@@ -11,6 +11,7 @@ use App\Models\User;
 use Carbon\CarbonImmutable;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -96,8 +97,10 @@ final class InquiryOutcomeApiTest extends TestCase
 
     public function test_confirming_hint_copies_document_and_foreign_hint_is_rejected(): void
     {
-        $inquiry = $this->inquiry();
-        $other = $this->inquiry();
+        // podpowiedź obowiązuje tylko dla obecnego klienta zapytania (z ERP XL) — oba zapytania przy kliencie 7001
+        $client = Client::query()->create(['name' => 'Ciepłownia Wisłok', 'xl_gid' => 7001]);
+        $inquiry = $this->inquiry(attrs: ['client_id' => $client->id, 'client_link_source' => 'email']);
+        $other = $this->inquiry(attrs: ['client_id' => $client->id, 'client_link_source' => 'email']);
         $hint = $this->hint($inquiry, 1842, '6240.00');
         $foreign = $this->hint($other, 1900, '50.00');
         Sanctum::actingAs($this->author);
@@ -200,11 +203,81 @@ final class InquiryOutcomeApiTest extends TestCase
         $this->artisan('inquiries:order-hints')->assertSuccessful();
         $this->assertSame($beta->id, $inquiry->fresh()->client_id);
 
-        // świadomie bez klienta — też ręczne, automat już go nie powiąże
-        $this->putJson("/api/inquiries/{$inquiry->id}/client", ['client_id' => null])->assertOk()->assertJsonPath('client_link', null);
+        // świadomie bez klienta — też ręczne, automat już go nie powiąże; widok mówi, że to wybór handlowca
+        $this->putJson("/api/inquiries/{$inquiry->id}/client", ['client_id' => null])->assertOk()
+            ->assertJsonPath('client_link', ['client' => null, 'source' => 'manual']);
         $this->artisan('inquiries:order-hints')->assertSuccessful();
         $this->assertSame([null, 'manual'], [$inquiry->fresh()->client_id, $inquiry->fresh()->client_link_source]);
         $this->assertNotSame($acme->id, $inquiry->fresh()->client_id);
+        $detail = $this->getJson("/api/inquiries/{$inquiry->id}")->assertOk()
+            ->assertJsonPath('client_link', ['client' => null, 'source' => 'manual'])
+            ->assertJsonPath('order_hints.status', 'no_client')
+            ->json('order_hints.rule');
+        $this->assertStringContainsString('Wybrano „Bez klienta”', $detail);
+        $this->assertStringNotContainsString('Po powiązaniu', $detail);
+    }
+
+    public function test_hint_computed_for_previous_client_is_neither_shown_nor_confirmable(): void
+    {
+        config(['erpxl.enabled' => true]);
+        $acme = Client::query()->create(['name' => 'ACME', 'xl_gid' => 7001]);
+        $beta = Client::query()->create(['name' => 'BETA', 'xl_gid' => 7002]);
+        $inquiry = $this->inquiry(attrs: ['client_id' => $acme->id, 'client_link_source' => 'email']);
+        $hint = $this->hint($inquiry, 1842, '6240.00', 7001);
+        // klient zmieniony z pominięciem kasowania (np. nocny przebieg i zmiana klienta się minęły)
+        $inquiry->forceFill(['client_id' => $beta->id])->save();
+        Sanctum::actingAs($this->author);
+
+        $this->getJson("/api/inquiries/{$inquiry->id}")->assertOk()
+            ->assertJsonPath('order_hints.status', 'ok')
+            ->assertJsonPath('order_hints.hints', []);
+        $this->putJson("/api/inquiries/{$inquiry->id}/outcome", ['outcome' => 'ordered', 'reason' => null, 'hint_id' => $hint->id])
+            ->assertUnprocessable()->assertJsonValidationErrors('hint_id');
+        $this->assertNull($inquiry->fresh()->outcome_document_number);
+    }
+
+    public function test_changing_client_clears_hints_and_confirmed_document_but_keeps_outcome(): void
+    {
+        $acme = Client::query()->create(['name' => 'ACME', 'xl_gid' => 7001]);
+        $beta = Client::query()->create(['name' => 'BETA', 'xl_gid' => 7002]);
+        $inquiry = $this->inquiry(attrs: [
+            'client_id' => $acme->id, 'client_link_source' => 'email',
+            'outcome' => 'partial', 'outcome_reason' => 'price', 'outcome_by' => $this->author->id, 'outcome_at' => now(),
+            'outcome_document_number' => 'FS-1842/09/2026', 'outcome_document_date' => '2026-09-22', 'outcome_net_value' => '6240.00',
+        ]);
+        $this->hint($inquiry, 1842, '6240.00', 7001);
+        Sanctum::actingAs($this->author);
+
+        // ten sam klient wybrany ręcznie — nic nie znika
+        $this->putJson("/api/inquiries/{$inquiry->id}/client", ['client_id' => $acme->id])->assertOk();
+        $this->assertSame('FS-1842/09/2026', $inquiry->fresh()->outcome_document_number);
+        $this->assertSame(1, InquiryOrderHint::query()->count());
+
+        $this->putJson("/api/inquiries/{$inquiry->id}/client", ['client_id' => $beta->id])->assertOk();
+        $fresh = $inquiry->fresh();
+        $this->assertSame([null, null, null], [$fresh->outcome_document_number, $fresh->outcome_document_date, $fresh->outcome_net_value]);
+        $this->assertSame(['partial', 'price', $this->author->id], [$fresh->outcome, $fresh->outcome_reason, $fresh->outcome_by]);
+        $this->assertSame(0, InquiryOrderHint::query()->count());
+    }
+
+    public function test_confirmed_document_value_comes_from_sale_documents_when_synced(): void
+    {
+        $client = Client::query()->create(['name' => 'ACME', 'xl_gid' => 7001]);
+        $inquiry = $this->inquiry(attrs: ['client_id' => $client->id, 'client_link_source' => 'email']);
+        // podpowiedź liczy tylko pozycje z ilością > 0 (6240), nagłówek dokumentu w XL ma 7000 (np. z pozycją usługi)
+        $hint = $this->hint($inquiry, 1842, '6240.00', 7001);
+        $unsynced = $this->hint($inquiry, 1900, '50.00', 7001);
+        DB::table('erp_sale_documents')->insert([
+            'document_type' => 2033, 'document_id' => 1842, 'document_number' => 'FS-1842/09/2026', 'kind' => 'invoice', 'issued_at' => '2026-09-22',
+            'customer_xl_gid' => 7001, 'client_id' => $client->id, 'net_value' => '7000.00', 'synced_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        Sanctum::actingAs($this->author);
+
+        $this->putJson("/api/inquiries/{$inquiry->id}/outcome", ['outcome' => 'ordered', 'reason' => null, 'hint_id' => $hint->id])
+            ->assertOk()->assertJsonPath('document.net_value', '7000.00');
+        // dokumentu jeszcze nie ma w erp_sale_documents — wartość z podpowiedzi
+        $this->putJson("/api/inquiries/{$inquiry->id}/outcome", ['outcome' => 'ordered', 'reason' => null, 'hint_id' => $unsynced->id])
+            ->assertOk()->assertJsonPath('document.net_value', '50.00');
     }
 
     public function test_client_chosen_at_creation_is_manual_link(): void
@@ -239,10 +312,10 @@ final class InquiryOutcomeApiTest extends TestCase
         return $inquiry;
     }
 
-    private function hint(ClientInquiry $inquiry, int $documentId, string $net): InquiryOrderHint
+    private function hint(ClientInquiry $inquiry, int $documentId, string $net, int $customerGid = 7001): InquiryOrderHint
     {
         return InquiryOrderHint::query()->create([
-            'client_inquiry_id' => $inquiry->id, 'document_type' => 2033, 'document_id' => $documentId,
+            'client_inquiry_id' => $inquiry->id, 'customer_xl_gid' => $customerGid, 'document_type' => 2033, 'document_id' => $documentId,
             'document_number' => 'FS-'.$documentId.'/09/2026', 'issued_at' => '2026-09-22', 'document_net' => $net,
             'matched_net' => $net, 'offered_items' => 5, 'linked_items' => 3, 'matched_items' => 3, 'computed_at' => now(),
         ]);

@@ -175,7 +175,8 @@ final class InquiryClientLinkerTest extends TestCase
         $linker->link($inquiry->fresh(), null);
         $linker->linkAll();
         $this->assertNull($inquiry->fresh()->client_id);
-        $this->assertNull(InquiryClientLinker::present($inquiry->fresh()));
+        // świadome „Bez klienta” widać jako wybór handlowca (a nie jako brak powiązania)
+        $this->assertSame(['client' => null, 'source' => 'manual'], InquiryClientLinker::present($inquiry->fresh()));
         $this->assertNotNull($acme->id);
     }
 

@@ -74,17 +74,31 @@ export function CalendarFeedModal({ open, onClose, canAll }: { open: boolean; on
     }
   }, [open])
 
-  const onCloseRef = useRef(onClose)
+  // Escape i kliknięcie obok okna przy widocznym adresie pytają przed zamknięciem — adres jest jednorazowy
+  const urlShown = url !== null
+  const dismissRef = useRef<() => void>(onClose)
   useEffect(() => {
-    onCloseRef.current = onClose
-  }, [onClose])
+    dismissRef.current = () => {
+      if (
+        urlShown &&
+        !window.confirm('Zamknąć okno? Adresu kalendarza nie da się potem odczytać — trzeba będzie wygenerować nowy. Skopiuj go, zanim zamkniesz.')
+      ) {
+        return
+      }
+      onClose()
+    }
+  }, [onClose, urlShown])
 
   useEffect(() => {
     if (!open) return
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
     closeRef.current?.focus()
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onCloseRef.current()
+      // Escape obsłużony już wyżej (np. zamknięcie okna wyszukiwania otwartego nad tym oknem) nie zamyka tego okna
+      if (e.key === 'Escape' && !e.defaultPrevented) {
+        e.preventDefault()
+        dismissRef.current()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => {
@@ -149,7 +163,7 @@ export function CalendarFeedModal({ open, onClose, canAll }: { open: boolean; on
       role="dialog"
       aria-modal="true"
       aria-labelledby="calendar-feed-title"
-      onClick={onClose}
+      onClick={() => dismissRef.current()}
     >
       <div
         className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-lg"

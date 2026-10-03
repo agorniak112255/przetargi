@@ -63,13 +63,27 @@ final class GlobalSearch
             $groups[] = $this->group('tenders', 'Przetargi', $this->tenders($user, $q), null);
         }
         if ($user->can('inquiries.use')) {
-            $groups[] = $this->group('inquiries', 'Zapytania', $this->inquiries($user, $q), '/inquiries?q='.rawurlencode($q));
+            $groups[] = $this->group('inquiries', 'Zapytania', $this->inquiries($user, $q), self::inquiriesMoreUrl($user, $q));
         }
         if ($user->can('clients.view')) {
             $groups[] = $this->group('clients', 'Klienci', $this->clients($q), null);
         }
 
         return ['query' => $q, 'groups' => $groups];
+    }
+
+    /**
+     * „Pokaż wszystkie” zapytania — lista nie może pokazać mniej niż wyszukiwanie. Z inquiries.view_all lista
+     * wszystkich osób (/inquiries?q=…&scope=all — parametr zakresu listy zapytań); z samym inquiries.view_others
+     * wyszukiwanie znajduje cudze, a lista pokazuje tylko własne — linku nie ma (null); bez obu — własne (/inquiries?q=).
+     */
+    private static function inquiriesMoreUrl(User $user, string $q): ?string
+    {
+        if ($user->can('inquiries.view_all')) {
+            return '/inquiries?q='.rawurlencode($q).'&scope=all';
+        }
+
+        return $user->can('inquiries.view_others') ? null : '/inquiries?q='.rawurlencode($q);
     }
 
     /**
