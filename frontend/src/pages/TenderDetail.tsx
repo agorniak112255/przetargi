@@ -350,6 +350,14 @@ type PreviewItem = {
   norms?: string | null
   description?: string | null
   selected: boolean
+  /** pozycje z treści ogłoszenia (POST /tenders/{id}/documents/from-notice-text): część zamówienia, jednostka,
+   * ilość nie podana w ogłoszeniu (quantity = 1 do uzupełnienia), ocena modelu „towar BHP” i cytat z ogłoszenia */
+  lot_no?: number | null
+  unit?: string | null
+  quantity_missing?: boolean
+  bhp?: boolean
+  quote?: string
+  quote_found?: boolean
 }
 type PreviewCondition = { category: string | null; content: string; selected: boolean }
 
@@ -951,6 +959,8 @@ function TenderDetailView() {
     mapping_notes?: string | null
     items: PreviewItem[]
     conditions: PreviewCondition[]
+    /** podgląd z treści ogłoszenia — zawsze lista pozycji (także przy ustawieniu odczytu „tylko tekst”) */
+    fromNotice?: boolean
   } | null>(null)
   const [replaceItems, setReplaceItems] = useState(false)
   const [replaceConditions, setReplaceConditions] = useState(false)
@@ -1105,6 +1115,7 @@ function TenderDetailView() {
     const firstDocument = handoff.noticeDocuments[0]
     if (firstDocument) void readNoticeDocument(firstDocument)
     else if (handoff.files[0]) void readHandoffFile(handoff.files[0])
+    else if (handoff.noticeText) void readNoticeText()
   })
 
   const load = useCallback(async () => {
@@ -1525,6 +1536,22 @@ function TenderDetailView() {
     if (existingId !== null) await openDocumentPreview(existingId)
   }
 
+  /**
+   * Pozycje z treści ogłoszenia przetargu (POST /tenders/{id}/documents/from-notice-text): model wypisuje towary z
+   * opisu przedmiotu zamówienia, serwer sprawdza cytaty. Tylko podgląd — do przetargu trafia po „Dodaj do przetargu”.
+   */
+  async function readNoticeText() {
+    const error = await runDocumentAnalysis(
+      'treść ogłoszenia',
+      'ai',
+      () => api<DocumentAnalysis>(`/tenders/${id}/documents/from-notice-text`, { method: 'POST', body: '{}' }),
+      false,
+      ' (odczyt modelem)',
+    )
+    if (!error) setDocPreview((p) => (p ? { ...p, fromNotice: true } : p))
+    dropFromHandoff((h) => ({ ...h, noticeText: false }))
+  }
+
   async function openDocumentPreview(docId: number) {
     setErr('')
     setBusy(true)
@@ -1573,7 +1600,7 @@ function TenderDetailView() {
     setMsg('')
     setBusy(true)
     try {
-      if (docMode === 'simple') {
+      if (docMode === 'simple' && !docPreview.fromNotice) {
         const res = await api<{ items_created: number; conditions_created: number }>(
           `/tenders/${id}/documents/commit`,
           {
@@ -2809,7 +2836,7 @@ function TenderDetailView() {
 
   const documentsSection = (
     <div className="space-y-4">
-      {handoff && (
+      {handoff && (handoff.noticeDocuments.length > 0 || handoff.files.length > 0) && (
         <div className="rounded-xl border border-blue-200 bg-white p-4 text-xs shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <h2 className="text-sm font-semibold">
@@ -2914,6 +2941,24 @@ function TenderDetailView() {
           </p>
         ) : (
           <>
+            {tender.notice_number && (
+              <div className="mb-3 flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                <span className="min-w-0 flex-1 text-slate-600">
+                  Gdy ogłoszenie <span className="app-code">{tender.notice_number}</span> wymienia towary i ilości (na
+                  przykład „hełm strażacki – 23 szt.”), model odczyta je z treści ogłoszenia — bez dokumentów.
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void readNoticeText()}
+                  className="rounded border border-blue-600 bg-white px-2 py-1 font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                >
+                  {busy && docStatus.startsWith('Wybrano: treść ogłoszenia')
+                    ? 'Odczytuję treść ogłoszenia…'
+                    : 'Odczytaj pozycje z treści ogłoszenia'}
+                </button>
+              </div>
+            )}
             <label
               onDragOver={(e) => {
                 e.preventDefault()
@@ -3087,7 +3132,7 @@ function TenderDetailView() {
                     onClick={() => void commitDocument()}
                     className="rounded bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                   >
-                    {docMode === 'simple'
+                    {docMode === 'simple' && !docPreview.fromNotice
                       ? 'Dodaj do przetargu'
                       : `Dodaj do przetargu: ${docPreview.items.filter((i) => i.selected).length} pozycji, ${
                           docPreview.conditions.filter((c) => c.selected).length
@@ -3134,7 +3179,7 @@ function TenderDetailView() {
                   Odznacz wszystkie
                 </button>
               </p>
-              {docMode === 'simple' ? (
+              {docMode === 'simple' && !docPreview.fromNotice ? (
                 <textarea
                   className="h-48 w-full rounded border border-slate-300 bg-white p-2 text-xs"
                   value={docPreview.extracted_text}
@@ -3151,10 +3196,22 @@ function TenderDetailView() {
                   )}
                   <div>
                     <h4 className="mb-1 text-xs font-semibold">
-                      Pozycje z dokumentacji przetargu ({docPreview.items.length})
+                      {docPreview.fromNotice ? 'Towary z treści ogłoszenia' : 'Pozycje z dokumentacji przetargu'} (
+                      {docPreview.items.length})
                     </h4>
+                    {docPreview.fromNotice && (
+                      <p className="mb-1 text-[11px] text-slate-600">
+                        Towary BHP są zaznaczone, pozostałe odznaczone — to ocena modelu, sprawdź ją. Ilości są z
+                        ogłoszenia; gdy ogłoszenie ich nie podaje, pozycja dostaje 1 do poprawienia w zakładce Pozycje.
+                        Numer części jest tylko informacją — pozycje przetargu nie są dzielone na części.
+                      </p>
+                    )}
                     {docPreview.items.length === 0 ? (
-                      <p className="text-xs text-slate-400">W pliku nie znaleziono pozycji.</p>
+                      <p className="text-xs text-slate-400">
+                        {docPreview.fromNotice
+                          ? 'Ogłoszenie nie wymienia towarów — są w dokumentach postępowania.'
+                          : 'W pliku nie znaleziono pozycji.'}
+                      </p>
                     ) : (
                       <div className="max-h-72 overflow-auto rounded border border-slate-200 bg-white">
                         <table className="w-full text-left text-xs">
@@ -3195,6 +3252,24 @@ function TenderDetailView() {
                                       it.description || splitSiwzRequirement(it.requirement).description
                                     }
                                   />
+                                  {(it.lot_no != null || it.bhp === false || it.quote_found === false) && (
+                                    <div className="mt-0.5 flex flex-wrap gap-1 text-[10px]">
+                                      {it.lot_no != null && (
+                                        <span className="rounded bg-slate-100 px-1 text-slate-700">część {it.lot_no}</span>
+                                      )}
+                                      {it.bhp === false && (
+                                        <span className="rounded bg-amber-100 px-1 text-amber-800">poza BHP</span>
+                                      )}
+                                      {it.quote_found === false && (
+                                        <span className="rounded bg-red-100 px-1 text-red-800">
+                                          nie znaleziono w treści ogłoszenia — sprawdź
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                  {it.quote && (
+                                    <p className="mt-0.5 text-[10px] text-slate-500">z ogłoszenia: „{it.quote}”</p>
+                                  )}
                                 </td>
                                 <td className="p-1.5 max-w-[200px] text-[11px] text-slate-700">
                                   {it.norms ?? '—'}
@@ -3204,7 +3279,13 @@ function TenderDetailView() {
                                     ? `${Number(it.offer_price).toFixed(2)} ${currencyLabel(it.currency)}`
                                     : '—'}
                                 </td>
-                                <td className="p-1.5 text-right">{it.quantity}</td>
+                                <td className="p-1.5 text-right">
+                                  {it.quantity}
+                                  {it.unit ? ` ${it.unit}` : ''}
+                                  {it.quantity_missing && (
+                                    <span className="block text-[10px] text-amber-700">ilość nie podana w ogłoszeniu</span>
+                                  )}
+                                </td>
                               </tr>
                             ))}
                           </tbody>

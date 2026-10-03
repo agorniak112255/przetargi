@@ -251,6 +251,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/tenders/{tender}/documents/commit', [TenderDocumentController::class, 'commit'])->middleware('permission:tenders.import');
         // plik z platformy e-Zamówienia (dokument postępowania z ogłoszenia) → ta sama ścieżka co analyze, podgląd do zatwierdzenia
         Route::post('/tenders/{tender}/documents/from-notice', [TenderDocumentController::class, 'fromNotice'])->middleware('permission:tenders.import');
+        Route::post('/tenders/{tender}/documents/from-notice-text', [TenderDocumentController::class, 'fromNoticeText'])->middleware('permission:tenders.import');
         Route::get('/tenders/{tender}/documents/{document}', [TenderDocumentController::class, 'show']);
         Route::get('/tenders/{tender}/documents/{document}/download', [TenderDocumentController::class, 'download']);
         Route::post('/tenders/{tender}/documents/{document}/reanalyze', [TenderDocumentController::class, 'reanalyze'])->middleware('permission:tenders.import');

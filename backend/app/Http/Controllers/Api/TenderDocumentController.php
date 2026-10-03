@@ -9,6 +9,7 @@ use App\Models\ProcurementNotice;
 use App\Models\Tender;
 use App\Models\TenderDocument;
 use App\Services\Bzp\EzamowieniaDocuments;
+use App\Services\Bzp\NoticeItemsReader;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderActivityLogger;
 use App\Services\TenderDocumentImportService;
@@ -194,6 +195,69 @@ class TenderDocumentController extends Controller
                 'name' => $download['name'],
                 'file_name' => $download['file_name'],
                 'size_bytes' => $download['size'],
+            ],
+        ]);
+    }
+
+    /**
+     * Pozycje z TREŚCI ogłoszenia przetargu (opisy części, sekcja „Przedmiot zamówienia”) — bez pliku, dla postępowań,
+     * w których towary i ilości są w samym ogłoszeniu. Zwraca podgląd w kształcie odczytu dokumentu (document_id null);
+     * do przetargu pozycje zapisuje dopiero człowiek przez „commit”. Towary spoza BHP przychodzą odznaczone, pozycje
+     * bez cytatu w ogłoszeniu — odznaczone, ilość bez pokrycia w cytacie — 1 z quantity_missing (do uzupełnienia).
+     */
+    public function fromNoticeText(Request $request, Tender $tender, NoticeItemsReader $reader): JsonResponse
+    {
+        $this->assertEditable($tender);
+
+        $notice = $this->noticeFor($tender);
+        if ($notice === null) {
+            throw ValidationException::withMessages([
+                'notice' => ['Ten przetarg nie jest połączony z ogłoszeniem z Biuletynu Zamówień Publicznych — wpisz numer ogłoszenia albo dodaj dokumenty.'],
+            ]);
+        }
+
+        // odczyt z modelem w jednym żądaniu
+        @set_time_limit(180);
+
+        try {
+            $result = $reader->read($notice);
+        } catch (RuntimeException $e) {
+            throw ValidationException::withMessages(['notice' => [$e->getMessage()]]);
+        }
+
+        $items = array_map(static function (array $row): array {
+            return [
+                'sku' => null,
+                'name' => $row['name'],
+                'requirement' => $row['name'],
+                'quantity' => $row['quantity'] ?? 1,
+                'offer_price' => null,
+                'currency' => null,
+                'norms' => null,
+                'description' => null,
+                'selected' => $row['bhp'] && $row['quote_found'],
+                'lot_no' => $row['lot_no'],
+                'unit' => $row['unit'],
+                'quantity_missing' => $row['quantity'] === null,
+                'bhp' => $row['bhp'],
+                'quote' => $row['quote'],
+                'quote_found' => $row['quote_found'],
+            ];
+        }, $result['items']);
+
+        return response()->json([
+            'document_id' => null,
+            'mode' => 'ai',
+            'targets' => ['items'],
+            'extracted_text' => $result['text'],
+            'mapping_notes' => 'Pozycje odczytane modelem z treści ogłoszenia '.$notice->notice_number.'.',
+            'items' => $items,
+            'conditions' => [],
+            'items_count' => count($items),
+            'conditions_count' => 0,
+            'source' => [
+                'notice_id' => $notice->id,
+                'notice_number' => $notice->notice_number,
             ],
         ]);
     }

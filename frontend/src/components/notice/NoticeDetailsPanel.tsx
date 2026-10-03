@@ -501,7 +501,9 @@ export function NoticeDetailsPanel({
             <span className="mr-auto text-slate-500">
               {withDocuments
                 ? `${chosenDocs.length + chosenFiles.length} ${plural(chosenDocs.length + chosenFiles.length, 'dokument', 'dokumenty', 'dokumentów')} do odczytu. Pozycje i warunki zobaczysz w kreatorze jako podgląd — do przetargu trafią po Twoim zatwierdzeniu.`
-                : 'Bez dokumentów kreator otworzy krok „Dokumenty”.'}
+                : mayAddDocs
+                  ? 'Bez dokumentów kreator odczyta towary z treści ogłoszenia — zobaczysz je jako podgląd do zatwierdzenia.'
+                  : 'Bez dokumentów kreator otworzy krok „Dokumenty”.'}
             </span>
           )}
           {!row.tender &&

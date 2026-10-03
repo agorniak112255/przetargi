@@ -38,6 +38,8 @@ export type TenderWizardHandoff = {
   procedureUrl: string | null
   noticeDocuments: { id: string; name: string }[]
   files: File[]
+  /** odczytać pozycje z treści ogłoszenia (POST /tenders/{id}/documents/from-notice-text), gdy nie ma dokumentów */
+  noticeText?: boolean
   /** kreator zaczął już sam odczyt pierwszego dokumentu — po powrocie na stronę przetargu nie robi tego drugi raz */
   started?: boolean
 }
@@ -45,7 +47,7 @@ export type TenderWizardHandoff = {
 const handoffs = new Map<string, TenderWizardHandoff>()
 
 export function isEmptyHandoff(handoff: TenderWizardHandoff): boolean {
-  return handoff.files.length === 0 && handoff.noticeDocuments.length === 0
+  return handoff.files.length === 0 && handoff.noticeDocuments.length === 0 && !handoff.noticeText
 }
 
 export function setTenderWizardHandoff(tenderId: number | string, handoff: TenderWizardHandoff): void {

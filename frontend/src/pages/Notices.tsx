@@ -401,10 +401,10 @@ export function Notices() {
         <p className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
           „Szczegóły” (albo kliknięcie przedmiotu zamówienia) pokazuje treść ogłoszenia, części z opisami i dokumenty
           postępowania. „Załóż przetarg” otwiera kreator z wypełnionym tytułem, zamawiającym, terminem składania z
-          godziną i numerem ogłoszenia. Ogłoszenie nie zawiera listy pozycji — są w dokumentach:
+          godziną i numerem ogłoszenia.
           {can(user, 'tenders.import')
-            ? ' w szczegółach wybierz je z listy e-Zamówień albo dodaj pliki pobrane ze strony postępowania, a kreator pokaże odczytane pozycje do sprawdzenia.'
-            : ' odczyt dokumentów w kreatorze wymaga uprawnienia „Dodawanie dokumentów” — poproś o nie administratora.'} „Pomiń” chowa ogłoszenie z zakładki „Nowe” u całego zespołu.
+            ? ' Gdy ogłoszenie wymienia towary i ilości, kreator odczyta je z jego treści; pełną listę pozycji mają zwykle dokumenty — w szczegółach wybierz je z listy e-Zamówień albo dodaj pliki pobrane ze strony postępowania. Odczytane pozycje kreator pokaże do sprawdzenia.'
+            : ' Odczyt pozycji z ogłoszenia i dokumentów w kreatorze wymaga uprawnienia „Dodawanie dokumentów” — poproś o nie administratora.'} „Pomiń” chowa ogłoszenie z zakładki „Nowe” u całego zespołu.
         </p>
       </div>
 
@@ -429,6 +429,7 @@ export function Notices() {
         <CreateTenderDialog
           row={confirm.row}
           selection={confirm.selection}
+          canImport={can(user, 'tenders.import')}
           onClose={() => setConfirm(null)}
           onCreated={(id, res) => {
             const chosen = confirm.selection?.documents ?? []
@@ -439,6 +440,8 @@ export function Notices() {
               procedureUrl: confirm.row.procedure_url,
               noticeDocuments: confirmed,
               files: confirm.selection?.files ?? [],
+              // bez dokumentów kreator odczyta towary z treści ogłoszenia (przy dokumentach — przyciskiem)
+              noticeText: true,
             })
             setTenderWizardActive(id, true)
             navigate(`/tenders/${id}`)
@@ -622,6 +625,7 @@ function candidatesFrom(body: Record<string, unknown>): NoticeClientCandidate[] 
 function CreateTenderDialog({
   row,
   selection,
+  canImport,
   onClose,
   onCreated,
   onConflict,
@@ -629,6 +633,8 @@ function CreateTenderDialog({
 }: {
   row: NoticeRow
   selection: NoticeDocumentSelection | null
+  /** uprawnienie tenders.import — bez niego kreator nie odczyta pozycji z ogłoszenia ani dokumentów */
+  canImport: boolean
   onClose: () => void
   onCreated: (tenderId: number, result: CreateTenderFromNoticeResult) => void
   onConflict: () => void
@@ -860,8 +866,9 @@ function CreateTenderDialog({
                 </div>
               ) : (
                 <p className="text-slate-600">
-                  Ogłoszenie nie zawiera listy pozycji. Dokumenty dodasz w kreatorze (krok „Dokumenty”) albo wybierzesz
-                  je wcześniej w szczegółach ogłoszenia.
+                  {canImport
+                    ? 'Kreator odczyta towary z treści ogłoszenia, jeśli ogłoszenie je wymienia (podgląd do zatwierdzenia). Dokumenty dodasz w kreatorze (krok „Dokumenty”) albo wybierzesz je wcześniej w szczegółach ogłoszenia.'
+                    : 'Kreator otworzy krok „Dokumenty”. Odczyt pozycji wymaga uprawnienia „Dodawanie dokumentów”.'}
                 </p>
               )}
             </>
