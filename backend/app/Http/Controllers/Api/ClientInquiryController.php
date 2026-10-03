@@ -20,6 +20,7 @@ use App\Services\Chat\RealtimeConfig;
 use App\Services\ClientInquiryService;
 use App\Services\InquiryFileText;
 use App\Services\Pricing\SupplierSpecialMask;
+use App\Support\OfferValidity;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -71,6 +72,8 @@ class ClientInquiryController extends Controller
             'q' => ['nullable', 'string', 'max:200'],
             'status' => ['nullable', 'string', 'in:all,waiting,replied'],
             'channel' => ['nullable', 'string', 'in:all,web,thunderbird,file'],
+            // wynik zapytania; missing = wysłane bez wpisanego wyniku
+            'outcome' => ['nullable', 'string', 'in:ordered,partial,not_ordered,unknown,missing'],
             'scope' => ['nullable', 'string', 'in:mine,all'],
             'user_id' => ['nullable', 'integer', 'exists:users,id'],
             'from' => ['nullable', 'date_format:Y-m-d'],
@@ -82,6 +85,7 @@ class ClientInquiryController extends Controller
             'q.max' => 'Szukana fraza może mieć najwyżej 200 znaków.',
             'status.in' => 'Nieznany status. Dozwolone: all, waiting, replied.',
             'channel.in' => 'Nieznane źródło. Dozwolone: all, web, thunderbird, file.',
+            'outcome.in' => 'Nieznany wynik. Dozwolone: ordered, partial, not_ordered, unknown, missing.',
             'scope.in' => 'Nieznany zakres. Dozwolone: mine, all.',
             'user_id.integer' => 'Identyfikator użytkownika musi być liczbą.',
             'user_id.exists' => 'Nie ma takiego użytkownika.',
@@ -131,6 +135,9 @@ class ClientInquiryController extends Controller
                 'created_at',
                 'analysis_status',
                 'analysis_started_at',
+                // wynik zapytania i ważność oferty (warunek „Ważność oferty” + dzień odpowiedzi)
+                'outcome',
+                'offer_terms',
             ])
             // has_reply bez wczytywania całej treści listu
             ->selectRaw("CASE WHEN reply_body IS NOT NULL AND reply_body <> '' THEN 1 ELSE 0 END as has_reply")
@@ -156,6 +163,13 @@ class ClientInquiryController extends Controller
         $channel = (string) ($validated['channel'] ?? 'all');
         if ($channel !== 'all') {
             $query->where('source_channel', $channel);
+        }
+
+        $outcome = (string) ($validated['outcome'] ?? '');
+        if ($outcome === 'missing') {
+            $query->whereNotNull('replied_at')->whereNull('outcome');
+        } elseif ($outcome !== '') {
+            $query->where('outcome', $outcome);
         }
 
         if (! empty($validated['from'])) {
@@ -209,6 +223,8 @@ class ClientInquiryController extends Controller
                 : null,
             'duplicate_of_id' => $row->duplicate_of_id,
             'duplicates_count' => $duplicateCounts[$row->id] ?? 0,
+            'outcome' => $row->outcome,
+            'offer_valid_until' => $this->offerValidUntil($row),
         ])->values();
 
         return response()->json([
@@ -221,6 +237,18 @@ class ClientInquiryController extends Controller
                 'can_view_all' => $canViewAll,
             ],
         ]);
+    }
+
+    /** Do kiedy ważna jest wysłana oferta (dzień RRRR-MM-DD) — null bez odpowiedzi albo przy nieczytelnym tekście ważności. */
+    private function offerValidUntil(ClientInquiry $row): ?string
+    {
+        $terms = is_array($row->offer_terms) ? $row->offer_terms : [];
+        $validity = is_string($terms['validity'] ?? null) ? $terms['validity'] : null;
+        if ($row->replied_at === null || $validity === null) {
+            return null;
+        }
+
+        return OfferValidity::until($validity, CarbonImmutable::instance($row->replied_at))?->toDateString();
     }
 
     /**
@@ -806,6 +834,10 @@ class ClientInquiryController extends Controller
         $done = $inquiry->isAnalyzed();
         $view['can_reanalyze'] = $mayReanalyze && $done;
         $view['reanalyze_blocked'] = $mayReanalyze && $done ? $this->inquiries->reanalysisBlocker($inquiry) : null;
+        // wynik zapisuje tylko autor i dopiero po wysłaniu odpowiedzi (PUT /inquiries/{id}/outcome)
+        if (is_array($view['outcome'] ?? null)) {
+            $view['outcome']['can_edit'] = $owner && $inquiry->replied_at !== null;
+        }
 
         return $view;
     }

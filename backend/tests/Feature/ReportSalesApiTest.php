@@ -8,6 +8,7 @@ use App\Models\Campaign;
 use App\Models\CampaignRecipient;
 use App\Models\Client;
 use App\Models\ClientInquiry;
+use App\Models\InquiryOrderHint;
 use App\Models\Tender;
 use App\Models\TenderInvitation;
 use App\Models\User;
@@ -121,10 +122,15 @@ final class ReportSalesApiTest extends TestCase
             ['channel' => 'file', 'received' => 1],
         ], $all['channels']);
         // mail przejęty przez kilka osób liczy się każdej z nich: Bartek (3 własne + kopia z odpowiedzią), Celina (kopia kopii)
+        // mediana z własnych odpowiedzi osoby: Bartek 2 h na kopii; Anna (3 dni − 1 min, 3 dni + 1 min) = 3 dni;
+        // Celina sama nie odpowiadała
         $this->assertSame([
-            ['user_id' => $bartek->id, 'name' => 'Bartek', 'received' => 4, 'replied' => 1, 'replied_1bd' => 1, 'waiting' => 3],
-            ['user_id' => $anna->id, 'name' => 'Anna', 'received' => 3, 'replied' => 3, 'replied_1bd' => 2, 'waiting' => 0],
-            ['user_id' => $celina->id, 'name' => 'Celina', 'received' => 1, 'replied' => 1, 'replied_1bd' => 1, 'waiting' => 0],
+            ['user_id' => $bartek->id, 'name' => 'Bartek', 'received' => 4, 'replied' => 1, 'replied_1bd' => 1, 'waiting' => 3,
+                'median_reply_seconds' => 7200, 'ordered' => 0, 'ordered_percent' => 0, 'order_value' => '0.00'],
+            ['user_id' => $anna->id, 'name' => 'Anna', 'received' => 3, 'replied' => 3, 'replied_1bd' => 2, 'waiting' => 0,
+                'median_reply_seconds' => 259200, 'ordered' => 0, 'ordered_percent' => 0, 'order_value' => '0.00'],
+            ['user_id' => $celina->id, 'name' => 'Celina', 'received' => 1, 'replied' => 1, 'replied_1bd' => 1, 'waiting' => 0,
+                'median_reply_seconds' => null, 'ordered' => 0, 'ordered_percent' => 0, 'order_value' => '0.00'],
         ], $all['people']);
 
         // bez inquiries.view_all tylko własne oryginały; odpowiedź na cudzej kopii nadal się liczy
@@ -149,6 +155,46 @@ final class ReportSalesApiTest extends TestCase
         $bartekTotals = $this->getJson('/api/reports/sales?days=30')->assertOk()->json('inquiries.totals');
         $this->assertSame(4, $bartekTotals['received']);
         $this->assertSame(2, $bartekTotals['duplicates']);
+    }
+
+    public function test_funnel_counts_mail_group_once_and_possible_orders_separately(): void
+    {
+        $anna = $this->userWith(['reports.view', 'inquiries.use'], 'Anna');
+        $bartek = $this->userWith(['reports.view', 'inquiries.use'], 'Bartek');
+        $boss = $this->userWith(['reports.view', 'inquiries.use', 'inquiries.view_all'], 'Szef');
+
+        // 1. ten sam mail u Anny i Bartka: oboje potwierdzają ten sam dokument — grupa raz, wartość raz
+        $original = $this->inquiry($anna, ['created_at' => '2026-09-21 08:00', 'replied_at' => '2026-09-21 09:00',
+            'outcome' => 'ordered', 'outcome_document_number' => 'FS-1', 'outcome_net_value' => '1000.00']);
+        $this->inquiry($bartek, ['created_at' => '2026-09-21 08:10', 'replied_at' => '2026-09-21 11:00', 'duplicate_of_id' => $original->id,
+            'outcome' => 'partial', 'outcome_document_number' => 'FS-1', 'outcome_net_value' => '1000.00']);
+        // 2. Anna: zamówił bez wskazanego dokumentu
+        $this->inquiry($anna, ['created_at' => '2026-09-22 08:00', 'replied_at' => '2026-09-22 12:00', 'outcome' => 'ordered']);
+        // 3. Anna: tylko podpowiedź z ERP XL, wynik pusty — „możliwe”
+        $possible = $this->inquiry($anna, ['created_at' => '2026-09-23 08:00', 'replied_at' => '2026-09-23 10:00']);
+        $this->hint($possible);
+        // 4. Bartek: podpowiedź, ale handlowiec wpisał „nie zamówił” — człowiek ma pierwszeństwo, to nie jest „możliwe”
+        $rejected = $this->inquiry($bartek, ['created_at' => '2026-09-24 08:00', 'replied_at' => '2026-09-24 08:30', 'outcome' => 'not_ordered', 'outcome_reason' => 'price']);
+        $this->hint($rejected);
+        // 5. Bartek: bez odpowiedzi
+        $this->inquiry($bartek, ['created_at' => '2026-09-25 08:00']);
+
+        Sanctum::actingAs($boss);
+        $json = $this->getJson('/api/reports/sales?days=30')->assertOk()->json('inquiries');
+        $this->assertSame([
+            'received' => 5, 'replied' => 4, 'ordered_confirmed' => 2, 'possible' => 1, 'value_confirmed' => '1000.00', 'ordered_without_document' => 1,
+        ], $json['funnel']);
+        $people = collect($json['people'])->keyBy('name');
+        // Anna: 3 odpowiedzi (1 h, 4 h, 2 h) → mediana 2 h; zamówione 2 z 3 odpowiedzianych grup
+        $this->assertSame([3, 7200, 2, 66.7, '1000.00'], [$people['Anna']['replied'], $people['Anna']['median_reply_seconds'], $people['Anna']['ordered'], $people['Anna']['ordered_percent'], $people['Anna']['order_value']]);
+        // Bartek: kopia maila (3 h od przyjścia oryginału) i 30 min → mediana 1 h 45 min
+        $this->assertSame([2, 6300, 1, 50, '1000.00'], [$people['Bartek']['replied'], $people['Bartek']['median_reply_seconds'], $people['Bartek']['ordered'], $people['Bartek']['ordered_percent'], $people['Bartek']['order_value']]);
+
+        // zakres „own”: tylko grupy Anny
+        Sanctum::actingAs($anna);
+        $this->getJson('/api/reports/sales?days=30')->assertOk()->assertJsonPath('inquiries.funnel', [
+            'received' => 3, 'replied' => 3, 'ordered_confirmed' => 2, 'possible' => 1, 'value_confirmed' => '1000.00', 'ordered_without_document' => 1,
+        ]);
     }
 
     public function test_tenders_scope_weighted_masked_margin_and_upcoming(): void
@@ -301,6 +347,15 @@ final class ReportSalesApiTest extends TestCase
         $inquiry->forceFill(['updated_at' => $attrs['created_at'] ?? now(), ...$attrs])->save();
 
         return $inquiry;
+    }
+
+    private function hint(ClientInquiry $inquiry): void
+    {
+        InquiryOrderHint::query()->create([
+            'client_inquiry_id' => $inquiry->id, 'document_type' => 2033, 'document_id' => $inquiry->id, 'document_number' => 'FS-H'.$inquiry->id,
+            'issued_at' => '2026-09-30', 'document_net' => 500, 'matched_net' => 300, 'offered_items' => 2, 'linked_items' => 2, 'matched_items' => 1,
+            'computed_at' => now(),
+        ]);
     }
 
     private function tender(?User $owner, string $status, ?float $value, ?float $margin, ?float $standardMargin, ?string $deadline): Tender

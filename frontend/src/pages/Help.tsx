@@ -1327,7 +1327,7 @@ function ClientsHelp() {
       slides={[
         {
           action: 'Lista firm',
-          does: 'Książka klientów do wyboru w nowym przetargu. Co noc dopisują się firmy z ERP XL, które w tym roku kupiły za co najmniej 3000 zł netto — z adresem, NIP-em, e-mailami, opiekunem i zakupami w roku. Kliknięcie wiersza pokazuje pełne dane i osoby kontaktowe.',
+          does: 'Książka klientów do wyboru w nowym przetargu. Co noc dopisują się firmy z ERP XL, które w tym roku kupiły za co najmniej 3000 zł netto — z adresem, NIP-em, e-mailami, opiekunem i zakupami w roku. Kliknięcie wiersza otwiera kartę klienta: dane i osoby kontaktowe, zakupy, historia współpracy (faktury, zapytania, przetargi, kampanie) i notatki handlowców — więcej w „Nowościach”.',
           click: 'Menu „Klienci”.',
           tone: 'slate',
           screen: (

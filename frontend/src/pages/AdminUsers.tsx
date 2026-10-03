@@ -1,20 +1,270 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { api, type User } from '../lib/api'
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { api, fetchErpEmployees, type ErpEmployee, type User } from '../lib/api'
 import { TEMPLATES } from '../lib/appearance'
 import { listErpOperators, type ErpOperator } from '../lib/campaigns'
+import { plural } from '../lib/plural'
 
 type RoleOption = { name: string; label?: string }
 
-/** Użytkownik na liście admina — dodatkowo operator ERP XL (ustawia go tylko administrator). */
-type AdminUser = User & { erp_operator_ident?: string | null }
+/**
+ * Użytkownik na liście admina — dodatkowo operator ERP XL (kampanie) i pracownik ERP XL — opiekun klientów
+ * (cele handlowców); oba ustawia tylko administrator.
+ */
+type AdminUser = User & { erp_operator_ident?: string | null; erp_employee_gid?: number | null }
 
 function customersLabel(n: number): string {
   return `${n} ${n === 1 ? 'klient' : 'klientów'}`
 }
 
+function employeeName(e: ErpEmployee): string {
+  return e.name ?? `pracownik nr ${e.gid}`
+}
+
+/** Pracownik w polu po wyborze: „Jan Kowalski (12 klientów)”. */
+function employeeLabel(e: ErpEmployee): string {
+  return `${employeeName(e)} (${e.clients} ${plural(e.clients, 'klient', 'klientów', 'klientów')})`
+}
+
+/** Wpisany tekst = pracownik: ten sam numer albo dokładnie jedno pasujące imię i nazwisko (bez wielkości liter). */
+function exactEmployee(employees: ErpEmployee[], text: string): ErpEmployee | null {
+  const t = text.trim().toLocaleLowerCase('pl-PL')
+  if (t === '') return null
+  const same = employees.filter(
+    (e) => String(e.gid) === t || (e.name ?? '').toLocaleLowerCase('pl-PL') === t || employeeLabel(e).toLocaleLowerCase('pl-PL') === t,
+  )
+  return same.length === 1 ? same[0] : null
+}
+
+/**
+ * Wybór pracownika ERP XL (opiekuna klientów) dla konta — lista z podpowiedziami: strzałki, Enter, Escape;
+ * lista zamyka się, gdy fokus wyjdzie poza pole. Wpisany tekst bez wyboru nie znika: zostaje w polu z ostrzeżeniem
+ * (onPendingChange blokuje zapis), chyba że jednoznacznie wskazuje jednego pracownika. Pracownik przypisany innemu
+ * kontu jest widoczny, ale nie da się go wybrać (serwer też by odmówił).
+ */
+function EmployeeCombobox({
+  employees,
+  userId,
+  value,
+  onChange,
+  onPendingChange,
+  loadFailed,
+}: {
+  /** lista pracowników nie wczytała się (pusta lista nie znaczy wtedy „brak pracowników”) */
+  loadFailed: boolean
+  employees: ErpEmployee[]
+  userId: number
+  value: number | null
+  onChange: (gid: number | null) => void
+  onPendingChange: (pending: boolean) => void
+}) {
+  const listId = useId()
+  const [query, setQueryState] = useState('')
+  const queryRef = useRef('')
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const [pending, setPendingState] = useState(false)
+
+  function setQuery(text: string) {
+    queryRef.current = text
+    setQueryState(text)
+  }
+  function setPending(next: boolean) {
+    setPendingState(next)
+    onPendingChange(next)
+  }
+
+  const selected = value == null ? null : (employees.find((e) => e.gid === value) ?? null)
+  const typed = query.trim().toLocaleLowerCase('pl-PL')
+  const matches = employees
+    .filter((e) => typed === '' || `${e.gid} ${e.name ?? ''} ${e.email ?? ''}`.toLocaleLowerCase('pl-PL').includes(typed))
+    // propozycja dla tego konta na górze
+    .sort((a, b) => Number(b.suggested_user?.id === userId) - Number(a.suggested_user?.id === userId))
+  const options: Array<{ kind: 'none' } | { kind: 'employee'; employee: ErpEmployee }> = [
+    ...(typed === '' ? [{ kind: 'none' as const }] : []),
+    ...matches.map((employee) => ({ kind: 'employee' as const, employee })),
+  ]
+  const isTaken = (e: ErpEmployee) => e.user != null && e.user.id !== userId
+  const activeIndex = options.length > 0 ? Math.min(active, options.length - 1) : -1
+
+  function close() {
+    setOpen(false)
+    setActive(0)
+  }
+
+  function pick(option: (typeof options)[number]) {
+    if (option.kind === 'employee' && isTaken(option.employee)) return
+    onChange(option.kind === 'none' ? null : option.employee.gid)
+    setQuery('')
+    setPending(false)
+    close()
+  }
+
+  /** Wyjście z pola z wpisanym tekstem: jednoznaczny pracownik zostaje wybrany, inny tekst zostaje z ostrzeżeniem. */
+  function commitTyped() {
+    const text = queryRef.current.trim()
+    if (text === '') {
+      setPending(false)
+      return
+    }
+    const hit = exactEmployee(employees, text)
+    if (hit && !isTaken(hit)) {
+      onChange(hit.gid)
+      setQuery('')
+      setPending(false)
+      return
+    }
+    setPending(true)
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') {
+      if (open) {
+        e.preventDefault()
+        close()
+      }
+      return
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!open) {
+        setOpen(true)
+        return
+      }
+      if (options.length === 0) return
+      const step = e.key === 'ArrowDown' ? 1 : -1
+      setActive((activeIndex + step + options.length) % options.length)
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (open && activeIndex >= 0) pick(options[activeIndex])
+    }
+  }
+
+  const inputValue = query !== '' || open ? query : selected ? employeeLabel(selected) : value != null ? `pracownik nr ${value}` : ''
+
+  return (
+    <div
+      className="relative"
+      onBlur={(e) => {
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
+        close()
+        commitTyped()
+      }}
+    >
+      <input
+        aria-label="Pracownik ERP XL (opiekun klientów)"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open && activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
+        aria-invalid={pending || undefined}
+        className={`w-full rounded border px-2 py-1 text-xs ${pending ? 'border-red-500' : ''}`}
+        placeholder={open || value == null ? 'Szukaj po nazwisku, e-mailu albo numerze' : ''}
+        value={inputValue}
+        onFocus={() => {
+          setOpen(true)
+          if (query === '') setActive(0)
+        }}
+        onKeyDown={onKeyDown}
+        onChange={(e) => {
+          setQuery(e.target.value)
+          setActive(0)
+          setOpen(true)
+          if (pending) setPending(false)
+        }}
+      />
+      {open && (
+        <div
+          tabIndex={-1}
+          onMouseDown={(e) => e.preventDefault()}
+          className="absolute z-20 mt-1 max-h-64 w-[22rem] max-w-[80vw] overflow-auto rounded border border-slate-200 bg-white text-xs shadow-lg"
+        >
+          {loadFailed && <p className="px-2 py-1.5 text-red-700">Nie udało się wczytać listy pracowników ERP XL. Odśwież stronę.</p>}
+          {!loadFailed && employees.length === 0 && (
+            <p className="px-2 py-1.5 text-slate-500">
+              Lista jest pusta — pracownicy ERP XL pojawiają się po nocnym odczycie klientów z ERP XL (opiekun z karty klienta).
+            </p>
+          )}
+          {employees.length > 0 && matches.length === 0 && typed !== '' && (
+            <p className="px-2 py-1.5 text-slate-500">Brak takiego pracownika na liście.</p>
+          )}
+          <ul id={listId} role="listbox" aria-label="Pracownicy ERP XL: podpowiedzi">
+            {options.map((option, i) => {
+              const isActive = i === activeIndex
+              if (option.kind === 'none') {
+                return (
+                  <li
+                    key="none"
+                    id={`${listId}-${i}`}
+                    role="option"
+                    aria-selected={isActive}
+                    className={`cursor-pointer px-2 py-1.5 text-slate-600 ${isActive ? 'bg-slate-100' : 'hover:bg-slate-50'}`}
+                    onMouseEnter={() => setActive(i)}
+                    onClick={() => pick(option)}
+                  >
+                    — brak pracownika —
+                  </li>
+                )
+              }
+              const emp = option.employee
+              const taken = isTaken(emp)
+              const suggested = emp.suggested_user?.id === userId
+              return (
+                <li
+                  key={emp.gid}
+                  id={`${listId}-${i}`}
+                  role="option"
+                  aria-selected={isActive}
+                  aria-disabled={taken || undefined}
+                  className={`px-2 py-1.5 ${taken ? 'cursor-not-allowed text-slate-400' : 'cursor-pointer'} ${isActive ? 'bg-slate-100' : 'hover:bg-slate-50'}`}
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => pick(option)}
+                >
+                  <span className="font-medium">{employeeName(emp)}</span>
+                  <span className="text-slate-500">
+                    {' '}
+                    · nr {emp.gid} · {customersLabel(emp.clients)}
+                    {emp.email ? ` · ${emp.email}` : ''}
+                  </span>
+                  {taken && <span className="block text-[11px]">przypisany do konta: {emp.user?.name}</span>}
+                  {suggested && (
+                    <span className="block text-[11px] text-blue-700">propozycja — ten sam e-mail co to konto (sprawdź, zanim wybierzesz)</span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
+      {pending && (
+        <p className="mt-1 text-[11px] leading-snug text-red-700" role="alert">
+          Nie wybrano pracownika — wybierz go z listy albo wyczyść pole.
+        </p>
+      )}
+    </div>
+  )
+}
+
 function operatorOptionLabel(o: ErpOperator, editedUserId: number): string {
   const assigned = o.user && o.user.id !== editedUserId ? ` · przypisany: ${o.user.name}` : ''
   return `${o.ident}${o.name ? ` — ${o.name}` : ''} · ${customersLabel(o.customers)}${assigned}`
+}
+
+/** Pracownik ERP XL konta na liście (bez edycji) i — gdy go nie ma — propozycja po tym samym e-mailu. */
+function EmployeeCell({ u, employees }: { u: AdminUser; employees: ErpEmployee[] }) {
+  if (u.erp_employee_gid != null) {
+    const e = employees.find((x) => x.gid === u.erp_employee_gid)
+    return <span>{e ? employeeLabel(e) : `pracownik nr ${u.erp_employee_gid}`}</span>
+  }
+  const proposal = employees.find((x) => x.suggested_user?.id === u.id)
+  return (
+    <span className="text-slate-500">
+      nie przypisany
+      {proposal && <span className="block text-[11px] text-blue-700">propozycja: {employeeName(proposal)} (ten sam e-mail)</span>}
+    </span>
+  )
 }
 
 /** Wartość pola „Wygląd”: "szablon|tryb" (puste = brak). */
@@ -56,6 +306,8 @@ function appearancePayload(value: string): { ui_template: string | null; ui_mode
 export function AdminUsers() {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [operators, setOperators] = useState<ErpOperator[]>([])
+  const [employees, setEmployees] = useState<ErpEmployee[]>([])
+  const [employeesFailed, setEmployeesFailed] = useState(false)
   const [roleOptions, setRoleOptions] = useState<RoleOption[]>([])
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
@@ -73,6 +325,8 @@ export function AdminUsers() {
   const [editPassword, setEditPassword] = useState('')
   const [editAppearance, setEditAppearance] = useState(NO_APPEARANCE)
   const [editOperator, setEditOperator] = useState('')
+  const [editEmployee, setEditEmployee] = useState<number | null>(null)
+  const [editEmployeePending, setEditEmployeePending] = useState(false)
 
   async function load() {
     const [usersData, rolesData] = await Promise.all([
@@ -85,6 +339,16 @@ export function AdminUsers() {
     void listErpOperators()
       .then((res) => setOperators(res.data))
       .catch(() => setOperators([]))
+    // tak samo lista pracowników ERP XL (opiekunów klientów)
+    void fetchErpEmployees()
+      .then((list) => {
+        setEmployees(list)
+        setEmployeesFailed(false)
+      })
+      .catch(() => {
+        setEmployees([])
+        setEmployeesFailed(true)
+      })
     if (rolesData.roles.length && !rolesData.roles.some((r) => r.name === role)) {
       setRole(rolesData.roles[0].name)
     }
@@ -138,12 +402,13 @@ export function AdminUsers() {
     }
   }
 
-  async function onSaveEdit(userId: number) {
+  async function onSaveEdit(u: AdminUser) {
+    const userId = u.id
     setBusy(true)
     setErr('')
     setMsg('')
     try {
-      const body: Record<string, string | null> = {
+      const body: Record<string, string | number | null> = {
         role: editRole,
         name: editName.trim(),
         email: editEmail.trim(),
@@ -151,6 +416,8 @@ export function AdminUsers() {
         erp_operator_ident: editOperator || null,
       }
       if (editPassword) body.password = editPassword
+      // pracownik ERP XL tylko po zmianie — zapis innych pól nie rusza przypisania
+      if (editEmployee !== (u.erp_employee_gid ?? null)) body.erp_employee_gid = editEmployee
       await api(`/admin/users/${userId}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
@@ -278,6 +545,7 @@ export function AdminUsers() {
             <th className="p-2">Rola</th>
             <th className="p-2">Wygląd</th>
             <th className="p-2">Operator ERP XL</th>
+            <th className="p-2">Pracownik ERP XL (opiekun klientów)</th>
             <th className="p-2">Akcje</th>
           </tr>
         </thead>
@@ -386,6 +654,39 @@ export function AdminUsers() {
               </td>
               <td className="p-2">
                 {editId === u.id ? (
+                  <div className="max-w-[18rem] min-w-[14rem]">
+                    <EmployeeCombobox
+                      employees={employees}
+                      userId={u.id}
+                      value={editEmployee}
+                      onChange={setEditEmployee}
+                      onPendingChange={setEditEmployeePending}
+                      loadFailed={employeesFailed}
+                    />
+                    {(() => {
+                      // propozycja „ten sam e-mail” — tylko przycisk; nic nie przypisuje się samo
+                      const proposal = employees.find((e) => e.suggested_user?.id === u.id)
+                      return proposal && editEmployee == null ? (
+                        <button
+                          type="button"
+                          onClick={() => setEditEmployee(proposal.gid)}
+                          className="mt-1 text-left text-[11px] text-blue-700 underline"
+                        >
+                          Propozycja: {employeeLabel(proposal)} — ten sam e-mail co konto. Użyj
+                        </button>
+                      ) : null
+                    })()}
+                    <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                      Klienci, których ten pracownik jest opiekunem w karcie ERP XL, liczą się do celu sprzedaży tego
+                      użytkownika (Raporty → Cele handlowców).
+                    </p>
+                  </div>
+                ) : (
+                  <EmployeeCell u={u} employees={employees} />
+                )}
+              </td>
+              <td className="p-2">
+                {editId === u.id ? (
                   <div className="flex flex-wrap items-center gap-1">
                     <input
                       type="password"
@@ -396,8 +697,9 @@ export function AdminUsers() {
                     />
                     <button
                       type="button"
-                      disabled={busy || !editEmail.trim() || !editName.trim()}
-                      onClick={() => void onSaveEdit(u.id)}
+                      disabled={busy || !editEmail.trim() || !editName.trim() || editEmployeePending}
+                      title={editEmployeePending ? 'Wybierz pracownika ERP XL z listy albo wyczyść pole' : undefined}
+                      onClick={() => void onSaveEdit(u)}
                       className="rounded bg-green-600 px-2 py-1 text-xs text-white disabled:opacity-50"
                     >
                       Zapisz
@@ -435,6 +737,8 @@ export function AdminUsers() {
                         setEditPassword('')
                         setEditAppearance(appearanceValue(u))
                         setEditOperator(u.erp_operator_ident ?? '')
+                        setEditEmployee(u.erp_employee_gid ?? null)
+                        setEditEmployeePending(false)
                       }}
                       className="rounded bg-slate-200 px-2 py-1 text-xs"
                     >

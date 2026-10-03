@@ -1,45 +1,19 @@
-import { Fragment, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { api } from '../lib/api'
-import { fmtDate, fmtDateTime } from '../lib/campaignFormat'
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { useAuth } from '../auth'
+import { api, can, fetchClientCard, type ClientRecord } from '../lib/api'
+import { fmtDate } from '../lib/campaignFormat'
 import { formatPln } from '../lib/campaigns'
 import { sortDate, sortRows, useTableSort } from '../lib/tableSort'
 import { SortTh } from '../components/CampaignsUi'
+import { ClientFields } from '../components/client/ClientFields'
+import { ClientOwnerPicker, type OwnerOption } from '../components/client/ClientOwnerPicker'
+import { nipText } from '../components/client/clientText'
 
-type Contact = { name?: string; position?: string; email?: string; phone?: string; mobile?: string }
-
-type Client = {
-  id: number
-  name: string
-  acronym: string | null
-  nip: string | null
-  nip_prefix: string | null
-  regon: string | null
-  street: string | null
-  address_line2: string | null
-  postal_code: string | null
-  city: string | null
-  county: string | null
-  commune: string | null
-  voivodeship: string | null
-  country: string | null
-  phone: string | null
-  phone2: string | null
-  fax: string | null
-  emails: string[] | null
-  website: string | null
-  contacts: Contact[] | null
-  account_manager: string | null
-  account_manager_email: string | null
-  source: 'manual' | 'erp_xl'
-  xl_gid: number | null
-  xl_archived: boolean
-  sales_year: number | null
-  sales_net: string | null
-  sale_documents: number | null
-  last_sale_at: string | null
-  xl_synced_at: string | null
+/** Wiersz listy (GET /clients?details=1): pełne dane klienta, liczba przetargów i opiekun w aplikacji. */
+type Client = ClientRecord & {
   tenders_count: number
-  owner?: { name: string } | null
+  owner?: OwnerOption | null
 }
 
 type SortKey = 'name' | 'nip' | 'city' | 'manager' | 'sales' | 'last_sale' | 'tenders'
@@ -110,12 +84,6 @@ function addressLine(c: Client): string {
   return [street, town].filter(Boolean).join(', ')
 }
 
-function nipText(c: Client): string | null {
-  if (!c.nip) return null
-  // prefiks kraju z XL tylko przy firmach zagranicznych — „PL” przy polskim NIP-ie nic nie wnosi
-  return c.nip_prefix && c.nip_prefix !== 'PL' && !c.nip.startsWith(c.nip_prefix) ? `${c.nip_prefix} ${c.nip}` : c.nip
-}
-
 function matches(c: Client, q: string): boolean {
   if (!q) return true
   const hay = [
@@ -143,96 +111,6 @@ function matches(c: Client, q: string): boolean {
     .every((word) => hay.includes(word)) || (digits.length >= 5 && (c.nip ?? '').replace(/\D+/g, '').includes(digits))
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt className="text-[11px] text-slate-500">{label}</dt>
-      <dd className="break-words">{children || '—'}</dd>
-    </div>
-  )
-}
-
-function ClientDetails({ c }: { c: Client }) {
-  const contacts = c.contacts ?? []
-  return (
-    <div className="grid gap-4 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-        <Field label="Pełna nazwa">{c.name}</Field>
-        <Field label="Akronim w XL">{c.acronym}</Field>
-        <Field label="NIP">{nipText(c)}</Field>
-        <Field label="REGON">{c.regon}</Field>
-        <Field label="Ulica">{[c.street, c.address_line2].filter(Boolean).join(', ')}</Field>
-        <Field label="Kod i miejscowość">{[c.postal_code, c.city].filter(Boolean).join(' ')}</Field>
-        <Field label="Powiat / gmina">{[c.county, c.commune].filter(Boolean).join(' / ')}</Field>
-        <Field label="Województwo / kraj">{[c.voivodeship, c.country].filter(Boolean).join(' / ')}</Field>
-        <Field label="Telefon">{[c.phone, c.phone2].filter(Boolean).join(', ')}</Field>
-        <Field label="Faks">{c.fax}</Field>
-        <Field label="E-mail">
-          {(c.emails ?? []).length > 0
-            ? (c.emails ?? []).map((e) => (
-                <a key={e} href={`mailto:${e}`} className="mr-2 text-blue-700 hover:underline">
-                  {e}
-                </a>
-              ))
-            : null}
-        </Field>
-        <Field label="Strona WWW">{c.website}</Field>
-        <Field label="Opiekun w XL">
-          {c.account_manager}
-          {c.account_manager_email ? <span className="text-slate-500"> · {c.account_manager_email}</span> : null}
-        </Field>
-        <Field label="Opiekun w panelu">{c.owner?.name}</Field>
-        {c.xl_gid != null && (
-          <>
-            <Field label={`Zakupy netto ${c.sales_year ?? ''}`}>
-              {formatPln(salesValue(c))}
-              {c.sale_documents ? <span className="text-slate-500"> · {c.sale_documents} dok.</span> : null}
-            </Field>
-            <Field label="Odczyt z ERP XL">
-              {fmtDateTime(c.xl_synced_at)} <span className="text-slate-500">(kontrahent nr {c.xl_gid})</span>
-            </Field>
-          </>
-        )}
-      </dl>
-      <div className="text-xs">
-        <h3 className="mb-1 text-[11px] text-slate-500">Osoby kontaktowe ({contacts.length})</h3>
-        {contacts.length === 0 ? (
-          <p className="text-slate-500">Brak osób kontaktowych na karcie XL.</p>
-        ) : (
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b text-slate-500">
-                <th className="py-1 pr-2 font-normal">Osoba</th>
-                <th className="py-1 pr-2 font-normal">Stanowisko</th>
-                <th className="py-1 pr-2 font-normal">E-mail</th>
-                <th className="py-1 font-normal">Telefon</th>
-              </tr>
-            </thead>
-            <tbody>
-              {contacts.map((p, i) => (
-                <tr key={i} className="border-b border-slate-200 align-top">
-                  <td className="py-1 pr-2">{p.name ?? '—'}</td>
-                  <td className="py-1 pr-2">{p.position ?? '—'}</td>
-                  <td className="py-1 pr-2">
-                    {p.email ? (
-                      <a href={`mailto:${p.email}`} className="text-blue-700 hover:underline">
-                        {p.email}
-                      </a>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td className="py-1">{[p.phone, p.mobile].filter(Boolean).join(', ') || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  )
-}
-
 export function Clients() {
   const [rows, setRows] = useState<Client[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -248,6 +126,11 @@ export function Clients() {
   const [cityFilter, setCityFilter] = useState('')
   const [managerFilter, setManagerFilter] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const canManage = can(user, 'clients.manage')
+  // lista osób do wyboru opiekuna — raz na wizytę, z karty klienta (serwer podaje ją tylko przy clients.manage)
+  const ownerOptions = useRef<Promise<OwnerOption[]> | null>(null)
   const [sort, toggleSort] = useTableSort<SortKey>(['sales', 'last_sale', 'tenders'], { key: 'sales', dir: 'desc' })
 
   async function load() {
@@ -263,6 +146,25 @@ export function Clients() {
   useEffect(() => {
     void load()
   }, [])
+
+  function loadOwnerOptions(clientId: number): Promise<OwnerOption[]> {
+    ownerOptions.current ??= fetchClientCard(clientId).then((card) => card.owner_options ?? [])
+    const pending = ownerOptions.current
+    // po błędzie kolejna próba pyta serwer od nowa
+    pending.catch(() => {
+      if (ownerOptions.current === pending) ownerOptions.current = null
+    })
+    return pending
+  }
+
+  /** Kliknięcie w wiersz otwiera kartę klienta (klawiaturą — link w nazwie); przyciski i linki w wierszu działają po swojemu. */
+  function openCard(e: MouseEvent<HTMLTableRowElement>, id: number) {
+    if (e.target instanceof Element && e.target.closest('a, button, input, select, textarea')) return
+    if (window.getSelection()?.toString()) return
+    // nowa karta przeglądarki — przez link w nazwie (Ctrl + kliknięcie działa tam samo)
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return
+    navigate(`/clients/${id}`)
+  }
 
   async function onCreate(e: FormEvent) {
     e.preventDefault()
@@ -485,15 +387,25 @@ export function Clients() {
                   <Fragment key={c.id}>
                     <tr
                       className={`cursor-pointer border-b align-top hover:bg-slate-50 ${isOpen ? 'bg-slate-50' : ''}`}
-                      onClick={() => setExpanded(isOpen ? null : c.id)}
-                      aria-expanded={isOpen}
+                      onClick={(e) => openCard(e, c.id)}
                     >
                       <td className="p-2">
-                        <span className="mr-1 text-slate-400">{isOpen ? '▾' : '▸'}</span>
-                        <span className="font-medium">{c.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => setExpanded(isOpen ? null : c.id)}
+                          aria-expanded={isOpen}
+                          aria-label={isOpen ? `Zwiń dane klienta ${c.name}` : `Rozwiń dane klienta ${c.name}`}
+                          title={isOpen ? 'Zwiń dane klienta' : 'Rozwiń dane klienta i osoby kontaktowe'}
+                          className="mr-1 rounded px-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                        >
+                          {isOpen ? '▾' : '▸'}
+                        </button>
+                        <Link to={`/clients/${c.id}`} className="font-medium text-blue-700 hover:underline">
+                          {c.name}
+                        </Link>
                         {c.acronym && c.acronym !== c.name && <div className="pl-4 text-slate-500">{c.acronym}</div>}
                         {c.xl_archived && (
-                          <span className="ml-4 rounded bg-amber-100 px-1 text-[10px] text-amber-800">archiwalny w XL</span>
+                          <span className="ml-4 rounded bg-amber-100 px-1 text-[10px] text-amber-800">archiwalny w ERP XL</span>
                         )}
                       </td>
                       <td className="whitespace-nowrap p-2">{nipText(c) ?? '—'}</td>
@@ -514,7 +426,24 @@ export function Clients() {
                     {isOpen && (
                       <tr className="border-b">
                         <td colSpan={9} className="p-0">
-                          <ClientDetails c={c} />
+                          <ClientFields
+                            c={c}
+                            owner={
+                              <ClientOwnerPicker
+                                clientId={c.id}
+                                owner={c.owner ?? null}
+                                canManage={canManage}
+                                loadOptions={() => loadOwnerOptions(c.id)}
+                                onSaved={(saved) =>
+                                  setRows((list) =>
+                                    list.map((row) =>
+                                      row.id === c.id ? { ...row, owner_id: saved.owner_id, owner: saved.owner ?? null } : row,
+                                    ),
+                                  )
+                                }
+                              />
+                            }
+                          />
                         </td>
                       </tr>
                     )}

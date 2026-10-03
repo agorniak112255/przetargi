@@ -13,6 +13,7 @@ use App\Models\Campaign;
 use App\Models\Role;
 use App\Models\User;
 use App\Support\PermissionCatalog;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -66,7 +67,17 @@ class UserController extends Controller
             $ident = mb_strtoupper(trim((string) $data['erp_operator_ident']));
             $user->forceFill(['erp_operator_ident' => $ident === '' ? null : $ident]);
         }
-        $user->save();
+        if (array_key_exists('erp_employee_gid', $data)) {
+            $user->forceFill(['erp_employee_gid' => $data['erp_employee_gid'] === null ? null : (int) $data['erp_employee_gid']]);
+        }
+        try {
+            $user->save();
+        } catch (UniqueConstraintViolationException) {
+            // dwa równoczesne zapisy tego samego pracownika — walidacja przeszła w obu, baza przepuściła jeden
+            $message = 'Ten pracownik ERP XL jest już przypisany do innego konta.';
+
+            return response()->json(['message' => $message, 'errors' => ['erp_employee_gid' => [$message]]], 422);
+        }
 
         if (isset($data['role'])) {
             $user->syncPrimaryRole($data['role']);
@@ -129,13 +140,17 @@ class UserController extends Controller
     }
 
     /**
-     * Dane użytkownika w panelu admina: jak /me plus operator ERP XL (tylko tutaj — ustawia go administrator).
+     * Dane użytkownika w panelu admina: jak /me plus operator i pracownik ERP XL (tylko tutaj — ustawia je administrator).
      *
      * @return array<string, mixed>
      */
     private function present(User $user): array
     {
-        return [...$user->toAuthArray(), 'erp_operator_ident' => $user->getAttribute('erp_operator_ident')];
+        return [
+            ...$user->toAuthArray(),
+            'erp_operator_ident' => $user->getAttribute('erp_operator_ident'),
+            'erp_employee_gid' => $user->erp_employee_gid === null ? null : (int) $user->erp_employee_gid,
+        ];
     }
 
     private function roleLabel(User $user): string

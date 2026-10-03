@@ -48,6 +48,9 @@ final class SalesReport
 
     private const CHANNELS = ['thunderbird', 'web', 'file'];
 
+    /** Wynik zapytania z zakupem (wpisany przez handlowca). */
+    private const ORDERED_OUTCOMES = ['ordered', 'partial'];
+
     /** Kampanie po starcie wysyłki (jak lista kampanii przy campaigns.view). */
     private const CAMPAIGN_STARTED = [Campaign::STATUS_SENDING, Campaign::STATUS_SENT, Campaign::STATUS_CANCELLED];
 
@@ -102,9 +105,11 @@ final class SalesReport
         foreach (DB::table('client_inquiries')
             ->whereNull('duplicate_of_id')
             ->whereRaw('COALESCE(source_sent_at, created_at) >= ?', [$this->dbTime($from)])
-            ->select(['id', 'user_id', 'source_channel', 'source_sent_at', 'created_at', 'replied_at', 'send_requested_at', 'analysis_status', 'analysis_started_at'])
+            ->select(['id', 'user_id', 'source_channel', 'source_sent_at', 'created_at', 'replied_at', 'send_requested_at', 'analysis_status', 'analysis_started_at', 'outcome', 'outcome_document_number', 'outcome_net_value'])
             ->lazyById(1000) as $row) {
             $groups[(int) $row->id] = [
+                // wiersze grupy (oryginał i kopie): każda osoba z własną odpowiedzią i wynikiem
+                'rows' => [$this->funnelRow($row)],
                 'user_id' => (int) $row->user_id,
                 'channel' => (string) $row->source_channel,
                 'start' => $this->parse($row->source_sent_at ?? $row->created_at),
@@ -125,7 +130,7 @@ final class SalesReport
         $copies = [];
         foreach (DB::table('client_inquiries')
             ->whereNotNull('duplicate_of_id')
-            ->select(['id', 'user_id', 'duplicate_of_id', 'replied_at', 'send_requested_at'])
+            ->select(['id', 'user_id', 'duplicate_of_id', 'replied_at', 'send_requested_at', 'outcome', 'outcome_document_number', 'outcome_net_value'])
             ->lazyById(1000) as $row) {
             $parent[(int) $row->id] = (int) $row->duplicate_of_id;
             $copies[] = $row;
@@ -137,6 +142,7 @@ final class SalesReport
             }
             $groups[$root]['copies']++;
             $groups[$root]['members'][(int) $row->user_id] = true;
+            $groups[$root]['rows'][] = $this->funnelRow($row);
             $replied = $this->parse($row->replied_at);
             if ($replied !== null && ($groups[$root]['replied'] === null || $replied->lt($groups[$root]['replied']))) {
                 $groups[$root]['replied'] = $replied;
@@ -152,6 +158,9 @@ final class SalesReport
         $weekly = $this->emptyWeeks($from, $now, ['received' => 0, 'replied' => 0]);
         $channels = array_fill_keys(self::CHANNELS, 0);
         $people = [];
+        $funnel = ['received' => 0, 'replied' => 0, 'ordered_confirmed' => 0, 'possible' => 0, 'value_confirmed' => 0.0, 'ordered_without_document' => 0];
+        // zapytania z podpowiedzią z ERP XL (wniosek) — mała tabela, bez JOIN-ów
+        $hinted = array_flip(DB::table('inquiry_order_hints')->distinct()->pluck('client_inquiry_id')->map(static fn ($id): int => (int) $id)->all());
 
         foreach ($groups as $group) {
             $start = $group['start'] ?? $now;
@@ -179,14 +188,62 @@ final class SalesReport
             }
             $channels[$group['channel']] = ($channels[$group['channel']] ?? 0) + 1;
 
+            // od zapytania do sprzedaży: grupa raz; „zamówił” potwierdza handlowiec (którykolwiek wiersz grupy),
+            // „możliwe” to sama podpowiedź z ERP XL przy grupie bez żadnego wpisanego wyniku — osobno
+            $funnel['received']++;
+            $funnel['replied'] += $replied !== null ? 1 : 0;
+            $confirmed = false;
+            $anyOutcome = false;
+            $hint = false;
+            $documents = [];
+            foreach ($group['rows'] as $row) {
+                $anyOutcome = $anyOutcome || $row['outcome'] !== null;
+                $hint = $hint || isset($hinted[$row['id']]);
+                if ($row['ordered']) {
+                    $confirmed = true;
+                    if ($row['document'] !== null) {
+                        // ten sam dokument potwierdzony w dwóch kopiach maila liczy się raz
+                        $documents[$row['document']] = $row['net'];
+                    }
+                }
+            }
+            if ($confirmed) {
+                $funnel['ordered_confirmed']++;
+                $funnel['value_confirmed'] += array_sum($documents);
+                $funnel['ordered_without_document'] += $documents === [] ? 1 : 0;
+            } elseif (! $anyOutcome && $hint && $replied !== null) {
+                $funnel['possible']++;
+            }
+
             // mail przejęty przez kilka osób liczy się każdej z nich (suma wierszy może przekroczyć liczbę zapytań)
             foreach (array_keys($group['members']) as $memberId) {
                 $person = &$people[$memberId];
-                $person ??= ['received' => 0, 'replied' => 0, 'replied_1bd' => 0, 'waiting' => 0];
+                $person ??= ['received' => 0, 'replied' => 0, 'replied_1bd' => 0, 'waiting' => 0, 'reply_seconds' => [], 'ordered' => 0, 'order_value' => 0.0];
                 $person['received']++;
                 $person['replied'] += $replied !== null ? 1 : 0;
                 $person['replied_1bd'] += $inTime ? 1 : 0;
                 $person['waiting'] += $replied === null ? 1 : 0;
+                // własna odpowiedź i własny wynik tej osoby (kopia u kolegi to jego praca)
+                $own = array_values(array_filter($group['rows'], static fn (array $r): bool => $r['user_id'] === $memberId));
+                $ownReplied = null;
+                $ownDocuments = [];
+                $ownOrdered = false;
+                foreach ($own as $row) {
+                    if ($row['replied'] !== null && ($ownReplied === null || $row['replied']->lt($ownReplied))) {
+                        $ownReplied = $row['replied'];
+                    }
+                    if ($row['ordered']) {
+                        $ownOrdered = true;
+                        if ($row['document'] !== null) {
+                            $ownDocuments[$row['document']] = $row['net'];
+                        }
+                    }
+                }
+                if ($ownReplied !== null && $ownReplied->gte($start)) {
+                    $person['reply_seconds'][] = (int) $start->diffInSeconds($ownReplied, true);
+                }
+                $person['ordered'] += $ownOrdered ? 1 : 0;
+                $person['order_value'] += array_sum($ownDocuments);
                 unset($person);
             }
         }
@@ -196,8 +253,48 @@ final class SalesReport
             'totals' => $totals,
             'weekly' => array_values($weekly),
             'channels' => array_map(static fn (string $channel, int $received): array => ['channel' => $channel, 'received' => $received], array_keys($channels), array_values($channels)),
+            'funnel' => [...$funnel, 'value_confirmed' => number_format($funnel['value_confirmed'], 2, '.', '')],
             'people' => $all ? $this->people($people) : null,
         ];
+    }
+
+    /**
+     * Wiersz zapytania do lejka: osoba, jej odpowiedź i wynik (ordered = zamówił albo zamówił część, potwierdzone
+     * przez handlowca), dokument z ERP XL skopiowany do wyniku.
+     *
+     * @return array{id: int, user_id: int, replied: CarbonImmutable|null, outcome: string|null, ordered: bool, document: string|null, net: float}
+     */
+    private function funnelRow(object $row): array
+    {
+        $outcome = is_string($row->outcome ?? null) && $row->outcome !== '' ? $row->outcome : null;
+        $document = is_string($row->outcome_document_number ?? null) && trim($row->outcome_document_number) !== '' ? trim($row->outcome_document_number) : null;
+
+        return [
+            'id' => (int) $row->id,
+            'user_id' => (int) $row->user_id,
+            'replied' => $this->parse($row->replied_at),
+            'outcome' => $outcome,
+            'ordered' => in_array($outcome, self::ORDERED_OUTCOMES, true),
+            'document' => $document,
+            'net' => $document !== null ? (float) ($row->outcome_net_value ?? 0) : 0.0,
+        ];
+    }
+
+    /**
+     * Mediana (sekundy) — środkowa wartość, przy parzystej liczbie średnia dwóch środkowych; null bez danych.
+     *
+     * @param  list<int>  $values
+     */
+    private static function median(array $values): ?int
+    {
+        if ($values === []) {
+            return null;
+        }
+        sort($values);
+        $count = count($values);
+        $middle = intdiv($count, 2);
+
+        return $count % 2 === 1 ? $values[$middle] : (int) round(($values[$middle - 1] + $values[$middle]) / 2);
     }
 
     /**
@@ -220,7 +317,7 @@ final class SalesReport
     }
 
     /**
-     * @param  array<int, array{received: int, replied: int, replied_1bd: int, waiting: int}>  $people
+     * @param  array<int, array{received: int, replied: int, replied_1bd: int, waiting: int, reply_seconds: list<int>, ordered: int, order_value: float}>  $people
      * @return list<array<string, mixed>>
      */
     private function people(array $people): array
@@ -228,7 +325,20 @@ final class SalesReport
         $names = $people === [] ? [] : DB::table('users')->whereIn('id', array_keys($people))->pluck('name', 'id')->all();
         $rows = [];
         foreach ($people as $userId => $counts) {
-            $rows[] = ['user_id' => (int) $userId, 'name' => (string) ($names[$userId] ?? 'Użytkownik #'.$userId), ...$counts];
+            $rows[] = [
+                'user_id' => (int) $userId,
+                'name' => (string) ($names[$userId] ?? 'Użytkownik #'.$userId),
+                'received' => $counts['received'],
+                'replied' => $counts['replied'],
+                'replied_1bd' => $counts['replied_1bd'],
+                'waiting' => $counts['waiting'],
+                // zwykle odpowiada w: mediana od przyjścia maila do własnej odpowiedzi tej osoby
+                'median_reply_seconds' => self::median($counts['reply_seconds']),
+                // zamówione z odpowiedzianych — wynik potwierdzony przez tę osobę (zamówił albo zamówił część)
+                'ordered' => $counts['ordered'],
+                'ordered_percent' => $counts['replied'] > 0 ? round($counts['ordered'] * 100 / $counts['replied'], 1) : null,
+                'order_value' => number_format($counts['order_value'], 2, '.', ''),
+            ];
         }
         usort($rows, static fn (array $a, array $b): int => [$b['received'], $a['name']] <=> [$a['received'], $b['name']]);
 

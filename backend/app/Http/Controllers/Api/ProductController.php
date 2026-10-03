@@ -31,13 +31,12 @@ use App\Services\Pricing\SourcePriceComparison;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
+use App\Services\Search\ProductListTextSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ManufacturerNormFacts;
-use App\Support\ProductModelFuzzy;
 use App\Support\ProductPriceChangeResolver;
 use App\Support\ProductVariantPresenter;
 use App\Support\SupplierSpecialPrice;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -47,7 +46,7 @@ class ProductController extends Controller
 {
     public function __construct(
         private readonly NbpExchangeRateService $fx,
-        private readonly ProductModelFuzzy $modelFuzzy,
+        private readonly ProductListTextSearch $textSearch,
         private readonly EnrichmentDescriptionTemplateService $descriptionTemplates,
         private readonly ProductKitService $kit,
         private readonly ProductDeletionService $deletion,
@@ -107,10 +106,10 @@ class ProductController extends Controller
             if ($erpCodes !== []) {
                 $erpIds = array_keys($erpCodes);
                 $query->where(fn ($outer) => $outer
-                    ->where(fn ($text) => $this->applyTextSearch($text, $term))
+                    ->where(fn ($text) => $this->textSearch->applyTextSearch($text, $term))
                     ->orWhereIn('id', $erpIds));
             } else {
-                $this->applyTextSearch($query, $term);
+                $this->textSearch->applyTextSearch($query, $term);
             }
         }
 
@@ -184,12 +183,7 @@ class ProductController extends Controller
         // Zbioru wyników to nie zawęża: zmienia się tylko kolejność, wybrane sortowanie zostaje kluczem dalszym.
         // Karta wskazana kodem ERP XL stoi razem z dokładnym SKU.
         if ($searchTerm !== null && $searchTerm !== '') {
-            $erpIds = array_keys($erpCodes);
-            $erpCase = $erpIds === [] ? '' : 'WHEN id IN ('.implode(',', array_fill(0, count($erpIds), '?')).') THEN 0 ';
-            $query->orderByRaw(
-                'CASE WHEN sku = ? THEN 0 '.$erpCase.'WHEN sku LIKE ? THEN 1 ELSE 2 END ASC',
-                [$searchTerm, ...$erpIds, '%'.addcslashes($searchTerm, '%_\\').'%'],
-            );
+            $this->textSearch->orderByMatch($query, $searchTerm, array_keys($erpCodes));
         }
 
         // Sortowanie idzie po cenach zapisanych: karta z ceną specjalną stoi tam, gdzie jej cena konta, choć widz bez
@@ -961,98 +955,6 @@ class ProductController extends Controller
         }
 
         return $out;
-    }
-
-    /**
-     * Wyszukiwanie po SKU, nazwie i producencie (z numerem modelu i marką) — warunki idą na przekazany builder.
-     *
-     * @param  Builder<Product>  $query
-     */
-    private function applyTextSearch(Builder $query, string $term): void
-    {
-        $brands = $this->modelFuzzy->catalogBrands($term);
-        $modelNeedles = $this->modelFuzzy->catalogModelNeedles($term);
-
-        if ($modelNeedles !== []) {
-            $wordDigitPairs = $this->modelFuzzy->catalogModelWordDigitPairs($term);
-            $query->where(function ($builder) use ($modelNeedles, $wordDigitPairs) {
-                foreach ($modelNeedles as $needle) {
-                    $esc = '%'.addcslashes($needle, '%_\\').'%';
-                    $builder->orWhere('sku', 'like', $esc)
-                        ->orWhere('name', 'like', $esc)
-                        ->orWhere('search_blob', 'like', $esc);
-                }
-                foreach ($wordDigitPairs as [$word, $num]) {
-                    $w = '%'.addcslashes($word, '%_\\').'%';
-                    $n = '%'.addcslashes($num, '%_\\').'%';
-                    $builder->orWhere(function ($q) use ($w, $n) {
-                        foreach (['sku', 'name', 'search_blob'] as $col) {
-                            $q->orWhere(function ($q2) use ($col, $w, $n) {
-                                $q2->where($col, 'like', $w)->where($col, 'like', $n);
-                            });
-                        }
-                    });
-                }
-            });
-        } else {
-            $like = '%'.$term.'%';
-            $codes = $this->modelFuzzy->shortCodes($term);
-            $tokens = $brands === [] ? [] : $this->queryTokens($term, $brands);
-            $query->where(function ($builder) use ($like, $term, $codes, $brands, $tokens) {
-                $builder->where('sku', 'like', $like)
-                    ->orWhere('name', 'like', $like)
-                    ->orWhere('manufacturer', 'like', $like);
-                if ($term !== '') {
-                    $builder->orWhere('sku', $term);
-                }
-                foreach ($codes as $code) {
-                    $esc = '%'.addcslashes($code, '%_\\').'%';
-                    $builder->orWhere('sku', 'like', $esc)
-                        ->orWhere('name', 'like', $esc);
-                }
-                foreach ($tokens as $token) {
-                    $esc = '%'.addcslashes($token, '%_\\').'%';
-                    $builder->orWhere('sku', 'like', $esc)
-                        ->orWhere('name', 'like', $esc);
-                }
-                if ($brands !== [] && $codes === [] && $tokens === []) {
-                    foreach ($brands as $brand) {
-                        $esc = '%'.addcslashes($brand, '%_\\').'%';
-                        $builder->orWhere('manufacturer', 'like', $esc)
-                            ->orWhere('name', 'like', $esc);
-                    }
-                }
-            });
-        }
-        if ($brands !== []) {
-            $query->where(function ($builder) use ($brands) {
-                foreach ($brands as $brand) {
-                    $esc = '%'.addcslashes($brand, '%_\\').'%';
-                    $builder->orWhere('manufacturer', 'like', $esc)
-                        ->orWhere('name', 'like', $esc);
-                }
-            });
-        }
-    }
-
-    /**
-     * @param  list<string>  $brands
-     * @return list<string>
-     */
-    private function queryTokens(string $term, array $brands): array
-    {
-        $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];
-        $norm = strtr(mb_strtolower($term), $map);
-        $out = [];
-        foreach (preg_split('/[\s,;:·•\/|+]+/u', $norm) ?: [] as $token) {
-            $c = preg_replace('/[^a-z0-9]/', '', $token) ?? '';
-            if (mb_strlen($c) < 4 || in_array($c, $brands, true)) {
-                continue;
-            }
-            $out[] = $c;
-        }
-
-        return array_values(array_unique($out));
     }
 
     /**

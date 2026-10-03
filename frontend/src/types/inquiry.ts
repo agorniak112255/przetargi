@@ -1,6 +1,6 @@
 // Typy 1:1 z kontraktem API „Zapytania” (PLAN_ZAPYTANIA_v2).
 
-import type { OrderQuantity } from '../lib/api'
+import type { InquiryOutcome, InquiryOutcomeFields, OrderQuantity } from '../lib/api'
 
 /** Szablon listu do klienta; nazwy w src/lib/inquiryTone.ts. */
 export type InquiryTone = 'formal' | 'formal_krotki' | 'handlowy' | 'bez_sku'
@@ -247,7 +247,8 @@ export type InquiryAnalysisProgress = {
   total: number
 }
 
-export type InquiryPayload = {
+/** Widok zapytania (present); pola wyniku, powiązania z klientem, ważności oferty i podpowiedzi — InquiryOutcomeFields. */
+export type InquiryPayload = InquiryOutcomeFields & {
   id: number
   client_id: number | null
   client: InquiryClientRef | null
@@ -337,6 +338,10 @@ export type InquiryListItem = {
   duplicates_count?: number
   /** Stan analizy w tle; brak pola = `done`. */
   analysis_status?: InquiryAnalysisStatus
+  /** Wynik wpisany przez autora po wysłaniu odpowiedzi; null = brak wyniku. */
+  outcome: InquiryOutcome | null
+  /** Do kiedy ważna jest oferta (z warunku „Ważność oferty” i dnia odpowiedzi); null = brak albo nieczytelny zapis. */
+  offer_valid_until: string | null
 }
 
 export type InquiryListMeta = {

@@ -2306,6 +2306,8 @@ export type ClientCard = {
   sections: { inquiries: boolean; tenders: boolean; campaigns: boolean }
   can_manage: boolean
   documents_synced_at: string | null
+  /** konta do wyboru opiekuna w aplikacji — tylko przy clients.manage */
+  owner_options?: { id: number; name: string }[]
 }
 
 export type ClientTimelineType = 'all' | 'invoices' | 'inquiries' | 'tenders' | 'campaigns' | 'notes'

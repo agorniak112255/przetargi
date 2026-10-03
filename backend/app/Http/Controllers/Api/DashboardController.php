@@ -11,6 +11,7 @@ use App\Models\Campaign;
 use App\Models\CampaignRecipient;
 use App\Models\CampaignReply;
 use App\Models\ClientInquiry;
+use App\Models\InquiryOrderHint;
 use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductSubstitute;
@@ -21,6 +22,7 @@ use App\Services\Campaigns\CampaignResult;
 use App\Services\Erp\InventoryBoardTotals;
 use App\Services\Erp\InventoryQuery;
 use App\Services\Erp\InventorySnapshots;
+use App\Services\Notifications\OfferValidityPlanner;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductCatalogHealthService;
 use App\Support\PolishTime;
@@ -83,6 +85,7 @@ class DashboardController extends Controller
     public function __construct(
         private readonly B2bConnectorRegistry $connectors,
         private readonly ProductCatalogHealthService $catalogHealth,
+        private readonly OfferValidityPlanner $offerValidity,
     ) {}
 
     public function __invoke(Request $request): JsonResponse
@@ -119,6 +122,7 @@ class DashboardController extends Controller
             if ($waiting !== null) {
                 $items[] = $waiting;
             }
+            array_push($items, ...$this->todoOfferValidity($user));
         }
         if ($canTenders) {
             array_push($items, ...$this->todoResults($user));
@@ -247,6 +251,34 @@ class DashboardController extends Controller
             // lista pod linkiem pokazuje wszystkie zapytania bez odpowiedzi — karta liczy tylko te, opis to mówi
             'scope_label' => 'bez odpowiedzi ponad dobę, z ostatnich '.self::TODO_INQUIRY_DAYS.' dni',
         ];
+    }
+
+    /**
+     * Własne oferty z zapytań, którym kończy się ważność, a wynik nie jest wpisany — od ostatniego dnia roboczego przed
+     * końcem ważności do jej końca (ta sama reguła co przypomnienie offer_validity_ending). has_hint: ERP XL podpowiada
+     * możliwe zamówienie z tej oferty (wniosek — handlowiec sprawdza i wpisuje wynik sam).
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function todoOfferValidity(User $user): array
+    {
+        $rows = array_slice($this->offerValidity->ending(PolishTime::today(), (int) $user->id), 0, self::TODO_LIMIT);
+        if ($rows === []) {
+            return [];
+        }
+        $ids = array_map(static fn (array $r): int => (int) $r['inquiry']->id, $rows);
+        $withHint = array_flip(InquiryOrderHint::query()->whereIn('client_inquiry_id', $ids)->distinct()
+            ->pluck('client_inquiry_id')->map(static fn ($id): int => (int) $id)->all());
+
+        return array_map(static fn (array $r): array => [
+            'kind' => 'offer_validity_ending',
+            'inquiry_id' => (int) $r['inquiry']->id,
+            'client' => OfferValidityPlanner::clientLabel($r['inquiry']),
+            'subject' => $r['inquiry']->source_subject ?? $r['inquiry']->reply_subject,
+            'valid_until' => $r['valid_until']->toDateString(),
+            'has_hint' => isset($withHint[(int) $r['inquiry']->id]),
+            'url' => '/inquiries/'.$r['inquiry']->id,
+        ], $rows);
     }
 
     /**

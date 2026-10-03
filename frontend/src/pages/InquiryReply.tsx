@@ -7,7 +7,9 @@ import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { ShareToChatButton } from '../components/ShareToChatButton'
 import { useAuth } from '../auth'
-import { api, type OrderQuantity } from '../lib/api'
+import { api, can, type InquiryClientLink, type InquiryOutcomeView, type OrderQuantity } from '../lib/api'
+import { InquiryClientLinkBox, InquiryOutcomePanel } from '../components/inquiry/InquiryOutcomePanel'
+import { shortDate } from '../lib/reports'
 import { copyHtmlBySelection } from '../lib/clipboard'
 import { toneHint, toneLabel, toneOptions } from '../lib/inquiryTone'
 import type {
@@ -1890,6 +1892,33 @@ export function InquiryReply() {
   const sender = [inquiry.source_from_name, inquiry.source_from_email]
     .filter(Boolean)
     .join(inquiry.source_from_name && inquiry.source_from_email ? ' · ' : '')
+  const isAuthor = inquiry.user?.id === user?.id
+  // Zapis wyniku albo klienta zmienia tylko swoje pola — reszta ekranu (niezapisany list, warunki) zostaje.
+  const patchOutcome = (outcome: InquiryOutcomeView) =>
+    setInquiry((cur) => (cur && cur.id === inquiry.id ? { ...cur, outcome } : cur))
+  const patchClientLink = (link: InquiryClientLink | null) =>
+    setInquiry((cur) => {
+      if (!cur || cur.id !== inquiry.id) return cur
+      const sameClient = (link?.client.id ?? null) === (cur.client_id ?? null)
+      return {
+        ...cur,
+        client_id: link?.client.id ?? null,
+        client: link ? { id: link.client.id, name: link.client.name } : null,
+        client_link: link,
+        // podpowiedzi liczono dla poprzedniego klienta (serwer je usunął) — nowe policzy nocne sprawdzenie
+        order_hints: !sameClient
+          ? {
+              ...cur.order_hints,
+              hints: [],
+              computed_at: null,
+              status: link ? cur.order_hints.status : 'no_client',
+              rule: link
+                ? 'Klient zmieniony — podpowiedzi z ERP XL dla tego klienta pojawią się po nocnym sprawdzeniu.'
+                : 'Zapytanie bez klienta — podpowiedzi z ERP XL nie ma.',
+            }
+          : cur.order_hints,
+      }
+    })
   const header = (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
@@ -1902,8 +1931,26 @@ export function InquiryReply() {
           {sender && <span>Od: {sender}</span>}
           {inquiry.source_sent_at && <span>Mail z {mailDate(inquiry.source_sent_at)}</span>}
           {inquiry.user?.name && <span>Prowadzi: {inquiry.user.name}</span>}
+          {inquiry.replied_at && inquiry.offer_valid_until && (
+            <span title={inquiry.validity_text ? `Warunek „Ważność oferty”: ${inquiry.validity_text}` : undefined}>
+              Oferta ważna do {shortDate(inquiry.offer_valid_until)}
+            </span>
+          )}
+          {inquiry.replied_at && !inquiry.offer_valid_until && inquiry.validity_text && (
+            <span>
+              Ważność oferty: „{inquiry.validity_text}” — bez daty końca, więc bez przypomnienia o ważności
+            </span>
+          )}
           <InquiryContactChip contact={inquiry.contact} onOpen={() => setContactOpen(true)} />
         </div>
+        <InquiryClientLinkBox
+          key={inquiry.id}
+          inquiryId={inquiry.id}
+          link={inquiry.client_link}
+          canEdit={isAuthor}
+          canPick={can(user, 'clients.view')}
+          onChanged={patchClientLink}
+        />
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
         <ShareToChatButton
@@ -2005,6 +2052,7 @@ export function InquiryReply() {
       )}
 
       <p className={`rounded px-3 py-2 text-sm font-medium ${banner.cls}`}>{banner.text}</p>
+      {inquiry.replied_at && <InquiryOutcomePanel key={inquiry.id} inquiry={inquiry} onChanged={patchOutcome} />}
       {omitted.length > 0 && <OmittedItemsBar list={omitted} limit={inquiry.omitted_limit} />}
 
       {/* Przyciski listu zostają u góry ekranu przy przewijaniu pozycji (reguła .app-inquiry-reply w index.css). */}

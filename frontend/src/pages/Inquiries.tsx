@@ -11,8 +11,9 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BusyLabel, useBusySeconds } from '../components/Busy'
 import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
 import { useAuth } from '../auth'
-import { ApiError, api, can } from '../lib/api'
+import { ApiError, api, can, type InquiryOutcome, type InquiryOutcomeFilter } from '../lib/api'
 import { toneHint, toneOptions } from '../lib/inquiryTone'
+import { shortDate } from '../lib/reports'
 import type {
   InquiryChannelFilter,
   InquiryDuplicateConflict,
@@ -50,6 +51,45 @@ const channelOptions: { id: InquiryChannelFilter; label: string }[] = [
   { id: 'web', label: 'Wklejone w przeglądarce' },
   { id: 'file', label: 'Z pliku klienta' },
 ]
+
+/** Filtr „Wynik”: wpisany przez handlowca albo „wysłane bez wyniku” (missing). */
+const outcomeOptions: { id: InquiryOutcomeFilter | ''; label: string }[] = [
+  { id: '', label: 'Wszystkie' },
+  { id: 'ordered', label: 'Zamówił' },
+  { id: 'partial', label: 'Zamówił część' },
+  { id: 'not_ordered', label: 'Nie zamówił' },
+  { id: 'unknown', label: 'Nie wiadomo' },
+  { id: 'missing', label: 'Wysłane, wynik niewpisany' },
+]
+
+const OUTCOME_FILTERS: readonly string[] = ['ordered', 'partial', 'not_ordered', 'unknown', 'missing']
+
+const outcomeChip: Record<InquiryOutcome, { label: string; cls: string }> = {
+  ordered: { label: 'Zamówił', cls: 'bg-emerald-100 text-emerald-800' },
+  partial: { label: 'Zamówił część', cls: 'bg-emerald-50 text-emerald-800' },
+  not_ordered: { label: 'Nie zamówił', cls: 'bg-slate-200 text-slate-700' },
+  unknown: { label: 'Nie wiadomo', cls: 'bg-slate-100 text-slate-600' },
+}
+
+/** Wynik zapytania i ważność oferty w wierszu listy (GET /inquiries). */
+function OutcomeCell({ row }: { row: InquiryListItem }) {
+  const outcome = row.outcome
+  if (!row.replied_at) return <span className="text-slate-400">—</span>
+  return (
+    <div>
+      {outcome ? (
+        <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${outcomeChip[outcome].cls}`}>
+          {outcomeChip[outcome].label}
+        </span>
+      ) : (
+        <span className="text-[11px] text-slate-500">nie wpisano</span>
+      )}
+      {row.offer_valid_until && (
+        <span className="mt-0.5 block text-[11px] whitespace-nowrap text-slate-500">oferta ważna do {shortDate(row.offer_valid_until)}</span>
+      )}
+    </div>
+  )
+}
 
 const channelLabel: Record<string, string> = {
   thunderbird: 'Thunderbird',
@@ -206,6 +246,8 @@ export function Inquiries() {
   const q = params.get('q') ?? ''
   const status = (params.get('status') ?? 'all') as InquiryStatusFilter
   const channel = (params.get('channel') ?? 'all') as InquiryChannelFilter
+  const outcomeParam = params.get('outcome') ?? ''
+  const outcome = OUTCOME_FILTERS.includes(outcomeParam) ? (outcomeParam as InquiryOutcomeFilter) : ''
   const scope: InquiryScope = params.get('scope') === 'all' ? 'all' : 'mine'
   const userId = params.get('user_id') ?? ''
   const from = params.get('from') ?? ''
@@ -255,6 +297,7 @@ export function Inquiries() {
     if (q) sp.set('q', q)
     if (status !== 'all') sp.set('status', status)
     if (channel !== 'all') sp.set('channel', channel)
+    if (outcome) sp.set('outcome', outcome)
     if (scope === 'all') {
       sp.set('scope', 'all')
       if (userId) sp.set('user_id', userId)
@@ -264,7 +307,7 @@ export function Inquiries() {
     sp.set('page', String(page))
     sp.set('per_page', String(perPage))
     return sp.toString()
-  }, [q, status, channel, scope, userId, from, to, page, perPage])
+  }, [q, status, channel, outcome, scope, userId, from, to, page, perPage])
 
   useEffect(() => {
     let cancelled = false
@@ -408,7 +451,7 @@ export function Inquiries() {
   const lastPage = Math.max(1, meta?.last_page ?? 1)
   const total = meta?.total ?? 0
   const filtersActive = Boolean(
-    q || status !== 'all' || channel !== 'all' || from || to || scope === 'all' || userId,
+    q || status !== 'all' || channel !== 'all' || outcome || from || to || scope === 'all' || userId,
   )
   const contactSubtitle = contactRow
     ? contactRow.source_subject || contactRow.reply_subject || `Zapytanie #${contactRow.id}`
@@ -678,6 +721,20 @@ export function Inquiries() {
             </select>
           </label>
           <label className="block text-xs">
+            Wynik
+            <select
+              className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={outcome}
+              onChange={(e) => setFilters({ outcome: e.target.value || null, page: null })}
+            >
+              {outcomeOptions.map((o) => (
+                <option key={o.id || 'all'} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs">
             Od
             <input
               type="date"
@@ -750,6 +807,7 @@ export function Inquiries() {
                   q: null,
                   status: null,
                   channel: null,
+                  outcome: null,
                   scope: null,
                   user_id: null,
                   from: null,
@@ -772,14 +830,15 @@ export function Inquiries() {
           </p>
         ) : (
           <div className="-mx-4 overflow-x-auto sm:mx-0">
-            <table className="w-full min-w-[62rem] table-fixed border-separate border-spacing-0 text-left text-xs">
+            <table className="w-full min-w-[68rem] table-fixed border-separate border-spacing-0 text-left text-xs">
               <colgroup>
-                <col className="w-[28%]" />
-                <col className="w-[20%]" />
-                <col className="w-[16%]" />
+                <col className="w-[25%]" />
+                <col className="w-[18%]" />
                 <col className="w-[14%]" />
-                <col className="w-[10%]" />
                 <col className="w-[12%]" />
+                <col className="w-[11%]" />
+                <col className="w-[9%]" />
+                <col className="w-[11%]" />
               </colgroup>
               <thead>
                 <tr className="text-[11px] tracking-wide text-slate-500 uppercase">
@@ -787,6 +846,9 @@ export function Inquiries() {
                   <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Od kogo</th>
                   <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Kiedy</th>
                   <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Stan</th>
+                  <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium" title="Jak się skończyło — wpisuje handlowiec po wysłaniu odpowiedzi">
+                    Wynik
+                  </th>
                   <th className="border-b border-slate-200 bg-slate-50 px-3 py-2 font-medium">Prowadzi</th>
                   <th className="border-b border-slate-200 bg-slate-50 px-3 py-2" />
                 </tr>
@@ -851,6 +913,10 @@ export function Inquiries() {
 
                     <td className="border-b border-slate-100 px-3 py-2.5">
                       <StatusChip row={row} />
+                    </td>
+
+                    <td className="border-b border-slate-100 px-3 py-2.5">
+                      <OutcomeCell row={row} />
                     </td>
 
                     <td className="border-b border-slate-100 px-3 py-2.5">

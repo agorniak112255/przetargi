@@ -1,13 +1,21 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { api, can, type Tender } from '../lib/api'
+import { Segmented } from '../components/ReportKit'
+import { CalendarFeedModal } from '../components/tender/CalendarFeedModal'
+import { TenderCalendar } from '../components/tender/TenderCalendar'
+import { api, can, type Tender, type TenderCalendarFilter } from '../lib/api'
 import { tenderStatusLabel } from '../lib/tenderStatus'
 import { setTenderWizardActive } from '../lib/tenderWizard'
 import { formatDeadline } from '../lib/tenderDeadline'
 import { RESULT_STATUS_CLASS, resultStatusLabel } from '../lib/tenderResult'
 
 type Client = { id: number; name: string }
+
+type View = 'lista' | 'kalendarz'
+
+/** Filtry listy, które ma też kalendarz (pozostałe dotyczą stanu przetargu, nie terminu). */
+const CALENDAR_FILTERS: readonly string[] = ['', 'mine', 'invited']
 
 /** Termin w ciągu 7 dni i nie w przeszłości. */
 function isDeadlineSoon(deadline: string | null): boolean {
@@ -23,6 +31,9 @@ export function Tenders() {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const filter = params.get('filter') ?? ''
+  const view: View = params.get('widok') === 'kalendarz' ? 'kalendarz' : 'lista'
+  const calendarFilter = (CALENDAR_FILTERS.includes(filter) ? filter : '') as TenderCalendarFilter
+  const [feedOpen, setFeedOpen] = useState(false)
   const [rows, setRows] = useState<Tender[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [open, setOpen] = useState(false)
@@ -40,17 +51,43 @@ export function Tenders() {
   async function load() {
     const qs = filter ? `?filter=${encodeURIComponent(filter)}` : ''
     const [t, c] = await Promise.all([
-      api<Tender[]>(`/tenders${qs}`),
+      // widok kalendarza pobiera terminy sam (TenderCalendar) — lista nie jest wtedy potrzebna
+      view === 'lista' ? api<Tender[]>(`/tenders${qs}`) : Promise.resolve(null),
       api<Client[]>('/clients'),
     ])
-    setRows(t)
+    if (t !== null) setRows(t)
     setClients(c)
     if (!clientId && c[0]) setClientId(String(c[0].id))
   }
 
   useEffect(() => {
     void load()
-  }, [filter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load czyta filter i view z tego samego renderu
+  }, [filter, view])
+
+  function setView(next: View) {
+    setParams((prev) => {
+      const p = new URLSearchParams(prev)
+      if (next === 'kalendarz') {
+        p.set('widok', 'kalendarz')
+        // filtry stanu („bez wyniku”, „bez godziny”…) nie mają odpowiednika w kalendarzu
+        if (!CALENDAR_FILTERS.includes(p.get('filter') ?? '')) p.delete('filter')
+      } else {
+        p.delete('widok')
+        p.delete('miesiac')
+      }
+      return p
+    })
+  }
+
+  function setFilter(value: string) {
+    setParams((prev) => {
+      const p = new URLSearchParams(prev)
+      if (value) p.set('filter', value)
+      else p.delete('filter')
+      return p
+    })
+  }
 
   async function onCreate(e: FormEvent) {
     e.preventDefault()
@@ -102,23 +139,40 @@ export function Tenders() {
       <div className="app-page-head mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="app-page-title text-xl font-semibold">Przetargi</h1>
         <div className="flex flex-wrap items-center gap-2">
+          <Segmented<View>
+            label="Widok"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: 'lista', label: 'Lista' },
+              { value: 'kalendarz', label: 'Kalendarz' },
+            ]}
+          />
           <select
             className="rounded border border-slate-300 px-2 py-1.5 text-xs"
-            value={filter}
-            onChange={(e) => {
-              const v = e.target.value
-              if (v) setParams({ filter: v })
-              else setParams({})
-            }}
+            aria-label="Które przetargi"
+            value={view === 'kalendarz' ? calendarFilter : filter}
+            onChange={(e) => setFilter(e.target.value)}
           >
             <option value="">{seeAll ? 'Wszystkie przetargi' : 'Moje i zaproszenia'}</option>
             <option value="mine">Tylko te, których jestem opiekunem</option>
             <option value="invited">Tylko zaproszenia</option>
-            <option value="deadline_soon">Termin za mniej niż 7 dni</option>
-            <option value="no_result">Po terminie, bez wpisanego wyniku</option>
-            <option value="no_deadline_time">W toku, bez godziny składania</option>
-            <option value="no_notice">W toku, bez numeru ogłoszenia</option>
+            {view === 'lista' && (
+              <>
+                <option value="deadline_soon">Termin za mniej niż 7 dni</option>
+                <option value="no_result">Po terminie, bez wpisanego wyniku</option>
+                <option value="no_deadline_time">W toku, bez godziny składania</option>
+                <option value="no_notice">W toku, bez numeru ogłoszenia</option>
+              </>
+            )}
           </select>
+          <button
+            type="button"
+            onClick={() => setFeedOpen(true)}
+            className="rounded border border-slate-300 bg-white px-3 py-2 text-xs hover:bg-slate-50"
+          >
+            Dodaj terminy do mojego kalendarza
+          </button>
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
@@ -224,92 +278,98 @@ export function Tenders() {
 
       {err && !open ? <p className="mb-2 text-xs text-red-600">{err}</p> : null}
 
-      <div className="app-card rounded-xl bg-white p-4 shadow-sm">
-        <table className="app-table w-full text-left text-xs">
-          <thead>
-            <tr className="border-b bg-slate-50">
-              <th className="p-2">Numer</th>
-              <th className="p-2">Zamawiający</th>
-              <th className="p-2">Termin składania</th>
-              <th className="p-2">Wartość oferty netto</th>
-              <th className="p-2">Pozycje</th>
-              <th className="p-2">Status</th>
-              <th className="p-2">Wynik</th>
-              <th
-                className="p-2"
-                title="Szacunek, jak bardzo produkty pasują do opisu zamawiającego — średnia z pozycji ocenionych automatycznie; produkty wybrane ręcznie nie mają oceny. Nie zastępuje sprawdzenia karty produktu."
-              >
-                Dopasowanie
-              </th>
-              <th className="p-2">Opiekun przetargu</th>
-              {canDeleteTender ? <th className="p-2"></th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((t) => {
-              const soon = isDeadlineSoon(t.deadline)
-              return (
-                <tr key={t.id} className="border-b hover:bg-slate-50">
-                  <td className="p-2">
-                    <Link className="app-code font-medium text-blue-600 hover:underline" to={`/tenders/${t.id}`}>
-                      {t.number}
-                    </Link>
-                  </td>
-                  <td className="p-2">{t.client?.name}</td>
-                  <td className="p-2">
-                    <span className="app-deadline" data-soon={soon ? 'true' : undefined}>
-                      {formatDeadline(t.deadline, t.deadline_time) || '—'}
-                      {soon && (
-                        <span className="app-deadline-flag ml-1 font-semibold text-red-600" title="Termin składania za mniej niż 7 dni">
-                          !
-                        </span>
-                      )}
-                    </span>
-                  </td>
-                  <td className="app-num p-2">
-                    {t.offer_value_net
-                      ? `${Number(t.offer_value_net).toLocaleString('pl-PL')} zł`
-                      : '—'}
-                  </td>
-                  <td className="app-num p-2">{t.items_count ?? 0}</td>
-                  <td className="p-2">
-                    <span className="app-status" data-status={t.status}>
-                      {tenderStatusLabel(t.status)}
-                    </span>
-                  </td>
-                  <td className="p-2">
-                    {t.result_status ? (
-                      <span className={`whitespace-nowrap rounded border px-1.5 py-0.5 ${RESULT_STATUS_CLASS[t.result_status]}`}>
-                        {resultStatusLabel(t.result_status)}
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="p-2">
-                    <span className="app-ai" style={{ '--ai': `${t.ai_percent}%` } as CSSProperties}>
-                      {t.ai_percent}%
-                    </span>
-                  </td>
-                  <td className="p-2">{t.owner?.name}</td>
-                  {canDeleteTender ? (
-                    <td className="p-2 text-right">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        className="rounded bg-red-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
-                        onClick={() => void deleteTender(t)}
-                      >
-                        Usuń
-                      </button>
+      <CalendarFeedModal open={feedOpen} onClose={() => setFeedOpen(false)} canAll={seeAll} />
+
+      {view === 'kalendarz' ? (
+        <TenderCalendar filter={calendarFilter} />
+      ) : (
+        <div className="app-card rounded-xl bg-white p-4 shadow-sm">
+          <table className="app-table w-full text-left text-xs">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Numer</th>
+                <th className="p-2">Zamawiający</th>
+                <th className="p-2">Termin składania</th>
+                <th className="p-2">Wartość oferty netto</th>
+                <th className="p-2">Pozycje</th>
+                <th className="p-2">Status</th>
+                <th className="p-2">Wynik</th>
+                <th
+                  className="p-2"
+                  title="Szacunek, jak bardzo produkty pasują do opisu zamawiającego — średnia z pozycji ocenionych automatycznie; produkty wybrane ręcznie nie mają oceny. Nie zastępuje sprawdzenia karty produktu."
+                >
+                  Dopasowanie
+                </th>
+                <th className="p-2">Opiekun przetargu</th>
+                {canDeleteTender ? <th className="p-2"></th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((t) => {
+                const soon = isDeadlineSoon(t.deadline)
+                return (
+                  <tr key={t.id} className="border-b hover:bg-slate-50">
+                    <td className="p-2">
+                      <Link className="app-code font-medium text-blue-600 hover:underline" to={`/tenders/${t.id}`}>
+                        {t.number}
+                      </Link>
                     </td>
-                  ) : null}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+                    <td className="p-2">{t.client?.name}</td>
+                    <td className="p-2">
+                      <span className="app-deadline" data-soon={soon ? 'true' : undefined}>
+                        {formatDeadline(t.deadline, t.deadline_time) || '—'}
+                        {soon && (
+                          <span className="app-deadline-flag ml-1 font-semibold text-red-600" title="Termin składania za mniej niż 7 dni">
+                            !
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="app-num p-2">
+                      {t.offer_value_net
+                        ? `${Number(t.offer_value_net).toLocaleString('pl-PL')} zł`
+                        : '—'}
+                    </td>
+                    <td className="app-num p-2">{t.items_count ?? 0}</td>
+                    <td className="p-2">
+                      <span className="app-status" data-status={t.status}>
+                        {tenderStatusLabel(t.status)}
+                      </span>
+                    </td>
+                    <td className="p-2">
+                      {t.result_status ? (
+                        <span className={`whitespace-nowrap rounded border px-1.5 py-0.5 ${RESULT_STATUS_CLASS[t.result_status]}`}>
+                          {resultStatusLabel(t.result_status)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      <span className="app-ai" style={{ '--ai': `${t.ai_percent}%` } as CSSProperties}>
+                        {t.ai_percent}%
+                      </span>
+                    </td>
+                    <td className="p-2">{t.owner?.name}</td>
+                    {canDeleteTender ? (
+                      <td className="p-2 text-right">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="rounded bg-red-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                          onClick={() => void deleteTender(t)}
+                        >
+                          Usuń
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

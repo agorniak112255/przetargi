@@ -14,7 +14,7 @@ use InvalidArgumentException;
 
 /**
  * „Dane do uzupełnienia” na ekranie „Stan systemu”: braki, od których zależą raport skuteczności, pobieranie wyników
- * z Biuletynu i podpowiedzi z ERP XL. Liczniki to pojedyncze count(*) bez GROUP BY; lista wierszy ma limit
+ * z Biuletynu, podpowiedzi z ERP XL i cele handlowców. Liczniki to pojedyncze count(*) bez GROUP BY; lista wierszy ma limit
  * (config system_health.gap_rows_limit).
  */
 class SystemGaps
@@ -25,6 +25,8 @@ class SystemGaps
         'salespeople_without_operator',
         'clients_without_xl',
         'sold_items_without_card',
+        'clients_without_manager',
+        'salespeople_without_employee',
     ];
 
     public const LABELS = [
@@ -33,6 +35,8 @@ class SystemGaps
         'salespeople_without_operator' => 'Handlowcy bez przypisanego operatora ERP XL',
         'clients_without_xl' => 'Zamawiający bez powiązania z kontrahentem w ERP XL',
         'sold_items_without_card' => 'Sprzedawane towary bez karty produktu',
+        'clients_without_manager' => 'Klienci z ERP XL bez opiekuna (ich sprzedaż nie liczy się do niczyjego celu)',
+        'salespeople_without_employee' => 'Handlowcy bez przypisanego pracownika ERP XL (opiekuna klientów)',
     ];
 
     /** Przetargi poza pracą (jak „w toku” na dashboardzie). */
@@ -79,7 +83,7 @@ class SystemGaps
                     'detail' => $t->deadline !== null ? 'Termin składania '.PolishTime::formatDeadline($t) : 'Bez terminu składania',
                     'url' => '/tenders/'.$t->id,
                 ])->values()->all(),
-            'salespeople_without_operator' => $query
+            'salespeople_without_operator', 'salespeople_without_employee' => $query
                 ->orderBy('name')
                 ->get(['id', 'name', 'email'])
                 ->map(static fn (User $u): array => [
@@ -108,8 +112,37 @@ class SystemGaps
                     'detail' => $i->last_sale_at !== null ? 'Ostatnia sprzedaż '.PolishTime::format($i->last_sale_at, false) : null,
                     'url' => '/admin/erp-xl?status=unlinked&search='.rawurlencode((string) $i->code),
                 ])->values()->all(),
+            'clients_without_manager' => $query
+                ->orderByDesc('sales_net')
+                ->orderBy('name')
+                ->orderBy('id')
+                ->get(['id', 'name', 'nip', 'sales_year', 'sales_net', 'account_manager', 'xl_manager_gid'])
+                ->map(static fn (Client $c): array => [
+                    'id' => (int) $c->id,
+                    'label' => (string) $c->name,
+                    'detail' => self::clientWithoutManagerDetail($c),
+                    'url' => '/clients/'.$c->id,
+                ])->values()->all(),
             default => throw new InvalidArgumentException('Nieznany rodzaj braków: '.$kind),
         };
+    }
+
+    /** Opiekun z XL (jeśli jest) i zakupy w roku — żeby było wiadomo, kogo przypisać najpierw. */
+    private static function clientWithoutManagerDetail(Client $c): string
+    {
+        $parts = [];
+        if ($c->nip !== null && $c->nip !== '') {
+            $parts[] = 'NIP '.$c->nip;
+        }
+        $manager = trim((string) $c->account_manager);
+        $parts[] = $c->xl_manager_gid === null
+            ? 'bez opiekuna w ERP XL'
+            : 'opiekun w ERP XL: '.($manager !== '' ? $manager : 'pracownik nr '.$c->xl_manager_gid).' — nieprzypisany do konta';
+        if ($c->sales_year !== null) {
+            $parts[] = 'zakupy netto '.$c->sales_year.': '.number_format((float) $c->sales_net, 0, ',', ' ').' zł';
+        }
+
+        return implode(' · ', $parts);
     }
 
     /** @return Builder<covariant \Illuminate\Database\Eloquent\Model> */
@@ -135,6 +168,15 @@ class SystemGaps
             'clients_without_xl' => Client::query()
                 ->whereNull('xl_gid')
                 ->whereHas('tenders'),
+            // jak ClientAssignment: bez pracownika XL przypisanego do konta i bez opiekuna w aplikacji
+            'clients_without_manager' => Client::query()
+                ->whereNotNull('xl_gid')
+                ->whereNull('owner_id')
+                ->where(static fn (Builder $q) => $q->whereNull('xl_manager_gid')
+                    ->orWhereNotIn('xl_manager_gid', User::query()->select('erp_employee_gid')->whereNotNull('erp_employee_gid'))),
+            'salespeople_without_employee' => User::query()
+                ->whereHas('roles', static fn (Builder $q) => $q->where('name', self::SALESPERSON_ROLE))
+                ->whereNull('erp_employee_gid'),
             'sold_items_without_card' => ErpItem::query()
                 ->whereNull('removed_at')
                 ->where('archived', false)

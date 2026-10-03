@@ -4,9 +4,9 @@ import { useAuth } from '../../auth'
 import { Reports } from '../Reports'
 import { can, canAny } from '../../lib/api'
 
-/** Samouczek „Raporty” — pięć zakładek (pages/Reports.tsx i pages/reports/*.tsx). */
+/** Samouczek „Raporty” — zakładki raportów (pages/Reports.tsx i pages/reports/*.tsx). */
 
-const TABS = ['Baza wiedzy', 'Źródła danych', 'Ruchy cen', 'Sprzedaż i oferty', 'Klienci ERP']
+const TABS = ['Baza wiedzy', 'Źródła danych', 'Ruchy cen', 'Sprzedaż i oferty', 'Klienci ERP', 'Skuteczność przetargów', 'Cele handlowców']
 
 const LEAD: Record<string, string> = {
   'Baza wiedzy': 'Jak kompletne są karty produktów, z których system dobiera wyroby do przetargów i zapytań.',
@@ -14,6 +14,8 @@ const LEAD: Record<string, string> = {
   'Ruchy cen': 'Podwyżki i obniżki cen u dostawców — gdzie i o ile zmieniły się ceny zakupu.',
   'Sprzedaż i oferty': 'Zapytania klientów, przetargi i kampanie: ile przyszło, ile obsłużono i jak szybko.',
   'Klienci ERP': 'Aktywność klientów z Comarch ERP XL: kto kupuje, kto przestał i do ilu można napisać.',
+  'Skuteczność przetargów': 'Ile części zamówień wygrywamy, dlaczego przegrywamy i z kim — według terminu składania ofert.',
+  'Cele handlowców': 'Miesięczne cele sprzedaży handlowców i ich realizacja według faktur i paragonów z ERP XL.',
 }
 
 /** Raporty z uwagą „dane odświeżane co 10 min” przy dacie (ReportCatalog, ReportSources, ReportPrices). */
@@ -106,7 +108,7 @@ export function ReportsHelp() {
       slides={[
         {
           action: 'Wybór raportu',
-          does: 'Raporty to pięć zestawień liczonych z danych aplikacji, każde w swojej zakładce. Menu „Raporty” widzi tylko osoba z uprawnieniem do raportów, a w nim tylko zakładki z danymi, do których ma dostęp: Baza wiedzy i Ruchy cen — produkty, Źródła danych — cenniki albo konta B2B, Klienci ERP — kampanie. Sprzedaż i oferty widać zawsze, ale tylko te części, do których masz uprawnienie. Każdy raport zaczyna się od ramki „Najważniejsze” — kilku zdań policzonych z danych, same fakty.',
+          does: 'Raporty to zestawienia liczone z danych aplikacji, każde w swojej zakładce. Menu „Raporty” widzi tylko osoba z uprawnieniem do raportów, a w nim tylko zakładki z danymi, do których ma dostęp: Baza wiedzy i Ruchy cen — produkty, Źródła danych — cenniki albo konta B2B, Klienci ERP — kampanie, Skuteczność przetargów — przetargi, Cele handlowców — osobne uprawnienie „Cele handlowców” (na start ma je tylko administrator). Sprzedaż i oferty widać zawsze, ale tylko te części, do których masz uprawnienie. Większość raportów zaczyna się od ramki „Najważniejsze” albo jednego zdania z wnioskiem — policzonych z danych, same fakty.',
           click: 'Menu „Raporty”, potem nazwa raportu w zakładkach u góry. Pod tytułem widać, czego dotyczy wybrany raport.',
           tone: 'blue',
           screen: (
@@ -319,7 +321,7 @@ export function ReportsHelp() {
         },
         {
           action: 'Sprzedaż i oferty',
-          does: 'Trzy części, każda tylko z uprawnieniem do swoich danych. „Zapytania klientów”: ile przyszło, na ile odpowiedziano i ile w ciągu dnia roboczego, ile czeka, skąd przychodzą i obsługa według osoby. „Przetargi”: liczba i wartość według statusu, terminy w ciągu 14 dni i zestawienie według opiekuna — przełącznik okresu ich nie dotyczy. „Kampanie”: wysłane maile, kliknięcia, odpowiedzi, wypisani i kupujący. Szara plakietka przy tytule mówi, czy widzisz „cały zespół”, czy „tylko moje”.',
+          does: 'Trzy części, każda tylko z uprawnieniem do swoich danych. „Zapytania klientów”: ile przyszło, na ile odpowiedziano i ile w ciągu dnia roboczego, ile czeka, skąd przychodzą i obsługa według osoby. „Przetargi”: liczba i wartość według statusu, terminy w ciągu 14 dni i zestawienie według opiekuna — przełącznik okresu ich nie dotyczy. „Kampanie”: wysłane maile, kliknięcia, odpowiedzi, wypisani i kupujący. Szara plakietka przy tytule mówi, czy widzisz „cały zespół”, czy „tylko moje”. W zapytaniach blok „Od zapytania do sprzedaży”: przyszło (kopie tego samego maila liczone raz), odpowiedzieliśmy, zamówił — tylko to, co potwierdził handlowiec — i osobno, na szaro, „możliwe”: same podpowiedzi z ERP XL, których nikt jeszcze nie potwierdził. Przy osobach: zwykły czas odpowiedzi (mediana), zamówione z odpowiedzianych i wartość zamówień z potwierdzonych dokumentów.',
           click: 'Okres u góry: „30 dni”, „90 dni” albo „180 dni”.',
           tone: 'blue',
           screen: (
@@ -442,6 +444,58 @@ export function ReportsHelp() {
                   </table>
                 </Card>
               </AppFrame>
+              }
+            />
+          ),
+        },
+        {
+          action: 'Cele handlowców',
+          does: 'Cel sprzedaży na miesiąc dla każdej osoby i jego realizacja: sprzedaż netto z faktur i paragonów w ERP XL, po korektach, klientów przypisanych do tej osoby. Klient należy do handlowca według dzisiejszego opiekuna — najpierw opiekun z karty klienta w ERP XL (gdy administrator przypisał tego pracownika ERP XL do konta), a gdy go nie ma — opiekun w aplikacji. Liczą się tylko klienci z zakładki Klienci (kontrahenci ERP XL, którzy w roku kupili za co najmniej 3000 zł netto). Wiersz „Klienci bez opiekuna” pokazuje sprzedaż, której nikt nie ma w celu. „Klienci, którzy kupili” mają w miesiącu fakturę albo paragon, „nowi” nie kupowali przez 24 miesiące wcześniej. Bieżący miesiąc jest w toku: widać, ile dni roboczych minęło (od poniedziałku do piątku, bez odliczania świąt), a sprzedaż obejmuje dokumenty do ostatniego nocnego odczytu z ERP XL. Następny miesiąc służy do ustalenia celów z wyprzedzeniem — sprzedaż i realizacja pojawią się od jego pierwszego dnia. Handlowiec swój cel widzi na Dashboardzie — kafelek „Mój cel” pojawia się, gdy ma cel w bieżącym miesiącu.',
+          click: 'Wybierz miesiąc (następny, bieżący i 11 poprzednich), potem „Ustaw cele”, wpisz kwoty i „Zapisz cele”. Puste pole usuwa cel; zapisują się tylko zmienione kwoty.',
+          tone: 'violet',
+          screen: (
+            <LivePage
+              nav="Raporty"
+              path="/reports?raport=targets"
+              page={<Reports />}
+              allowed={can(user, 'reports.view') && can(user, 'reports.targets.manage')}
+              fallback={
+                <AppFrame nav="Raporty">
+                  <ReportHead active="Cele handlowców" toolbar={<Mark>Ustaw cele</Mark>} />
+                  <Card className="p-3">
+                    <h2 className="mb-2 text-xs font-semibold">Wrzesień 2026 · zamknięty miesiąc</h2>
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b bg-slate-50">
+                          <Th>Handlowiec</Th>
+                          <Th>Cel</Th>
+                          <Th>Sprzedaż</Th>
+                          <Th>Realizacja</Th>
+                          <Th>Klienci, którzy kupili</Th>
+                          <Th>w tym nowi</Th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(
+                          [
+                            ['Anna Nowak', '420 000 zł', '468 900 zł', '112%', '64', '3'],
+                            ['Piotr Wiśniewski', '380 000 zł', '391 450 zł', '103%', '51', '1'],
+                            ['Klienci bez opiekuna', '—', '184 200 zł', '', '212', '9'],
+                          ] as const
+                        ).map(([name, target, sales, pct, bought, fresh]) => (
+                          <tr key={name} className="border-b last:border-0">
+                            <td className="p-2">{name}</td>
+                            <td className="p-2">{target}</td>
+                            <td className="p-2">{sales}</td>
+                            <td className="p-2">{pct}</td>
+                            <td className="p-2">{bought}</td>
+                            <td className="p-2">{fresh}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </Card>
+                </AppFrame>
               }
             />
           ),

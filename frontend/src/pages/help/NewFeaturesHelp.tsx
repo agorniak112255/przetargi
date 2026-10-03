@@ -6,8 +6,11 @@ import { DashboardView, type Dash } from '../Dashboard'
 import { AppFrame, Btn, Card, Field, LiveFrame, LivePage, LiveScreen, Mark, Slideshow, Th } from './kit'
 
 /**
- * Samouczek „Nowości (październik 2026)”: godzina składania i numer ogłoszenia, wynik przetargu i pobieranie wyniku
- * z Biuletynu, raport skuteczności, powiadomienia i wzmianki „@”, „Do zrobienia dziś”, stan systemu.
+ * Samouczek „Nowości (październik 2026)”. Etapy 3–4: kalendarz terminów i subskrypcja w programie pocztowym,
+ * wyszukiwanie Ctrl+K, karta klienta i notatki, powiązanie zapytania z klientem, wynik zapytania i podpowiedź z ERP XL,
+ * ważność oferty, cele handlowców i przypisanie pracownika ERP XL; „Czego jeszcze nie ma”. Etapy 0–1: godzina składania
+ * i numer ogłoszenia, wynik przetargu i pobieranie wyniku z Biuletynu, raport skuteczności, powiadomienia i wzmianki
+ * „@”, „Do zrobienia dziś”, stan systemu.
  * Ekrany to rysunki poglądowe z przykładowymi danymi (poza dashboardem i stanem systemu — tam prawdziwy widok).
  */
 
@@ -36,6 +39,7 @@ function sampleDashboard(): Dash {
         },
         { kind: 'inquiries_waiting', count: 3, oldest: { id: 1, client: 'Ciepłownia Wisłok', since: new Date(Date.now() - 2 * 86400000).toISOString() }, url: '/inquiries?status=waiting' },
         { kind: 'tender_result_needed', tender_id: 2, number: 'PRZ/2026/0120', title: 'Rękawice ochronne', client: 'Zakład Energetyczny', deadline: day(-3), url: '/tenders' },
+        { kind: 'offer_validity_ending', inquiry_id: 7, client: 'Ciepłownia Wisłok', subject: 'Zapytanie o rękawice nitrylowe', valid_until: day(1), has_hint: false, url: '/inquiries' },
         { kind: 'mention', notification_id: 'x', title: 'Piotr Wiśniewski wspomniał o Tobie w komentarzu', body: '„Sprawdź, czy ten model ma podnosek kompozytowy”', url: '/tenders', created_at: new Date().toISOString() },
       ],
       won_90d: { won_lots: 16, decided_lots: 39 },
@@ -121,7 +125,257 @@ function SystemStatusSketch() {
   )
 }
 
+/** Etapy 3–4: kalendarz terminów, wyszukiwanie, karta klienta, wynik zapytania, cele handlowców. */
+function Stage34Slideshow() {
+  return (
+    <Slideshow
+      title="Nowości: kalendarz, wyszukiwanie, karta klienta, wynik zapytania, cele handlowców"
+      slides={[
+        {
+          action: 'Kalendarz terminów',
+          does: 'Lista przetargów ma przełącznik „Lista” / „Kalendarz”. Kalendarz pokazuje cały miesiąc (od poniedziałku do niedzieli) z terminami składania ofert — z godziną w czasie polskim, gdy jest wpisana — i z wpisem „Wpisz wynik:” przy przetargach po terminie bez wpisanego wyniku (najwyżej 60 dni po terminie). Kolory z legendy: niebieski — „wycena gotowa” (każda pozycja ma produkt i cenę), bursztynowy — „wycena w toku” (są braki, termin dalej niż za 3 dni), czerwony — „braki, termin blisko” (brakuje produktu albo ceny albo nie ma żadnej pozycji, a termin jest dziś lub w ciągu 3 dni), biały z przerywaną ramką — „do zrobienia: wpisz wynik”, szary — „zamknięte” (oferta wysłana, przetarg w archiwum, odrzucony albo z wpisanym wynikiem). Widać tylko przetargi, do których masz dostęp, i tylko te z wpisaną datą terminu składania. Lista obok przełącznika zawęża kalendarz: „Tylko te, których jestem opiekunem” albo „Tylko zaproszenia” (pozostałe filtry listy dotyczą tylko widoku „Lista”).',
+          click: 'Menu „Przetargi” → przełącznik „Kalendarz”. Strzałki obok nazwy miesiąca zmieniają miesiąc, „Bieżący miesiąc” wraca do dzisiejszego. Najechanie na przetarg pokazuje szczegóły i braki, kliknięcie otwiera przetarg.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Przetargi">
+              <div className="mb-2 flex items-center gap-2 text-xs">
+                <span className="rounded border border-slate-300 px-2 py-0.5">Lista</span>
+                <Mark>
+                  <span className="rounded border border-blue-300 bg-blue-50 px-2 py-0.5 font-semibold text-blue-800">Kalendarz</span>
+                </Mark>
+              </div>
+              <Card className="text-xs">
+                <div className="mb-1 grid grid-cols-5 gap-1 text-[10px] text-slate-500">
+                  {['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek'].map((d) => (
+                    <span key={d}>{d}</span>
+                  ))}
+                </div>
+                <div className="grid grid-cols-5 gap-1">
+                  <div className="rounded border-l-4 border-blue-500 bg-blue-50 p-1 text-blue-900">10:00 Szpital nr 2</div>
+                  <div className="rounded border-l-4 border-red-500 bg-red-50 p-1 text-red-800">12:00 Gmina Zielony Dół</div>
+                  <div className="rounded border-l-4 border-amber-500 bg-amber-50 p-1 text-amber-900">Wodociągi</div>
+                  <div className="rounded border border-l-4 border-dashed border-slate-500 bg-white p-1 font-semibold text-slate-900">Wpisz wynik: Zakład</div>
+                  <div className="rounded border-l-4 border-slate-300 bg-slate-100 p-1 text-slate-600">Powiat</div>
+                </div>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Terminy w Outlooku i Thunderbirdzie',
+          does: 'Terminy składania mogą trafić do Twojego kalendarza w Outlooku albo Thunderbirdzie jako subskrypcja. Aplikacja tworzy osobisty, tajny adres — widać go tylko raz, zaraz po utworzeniu; po zamknięciu okna nie da się go odczytać, można tylko wygenerować nowy. Zakres do wyboru: „Moje — przetargi, które prowadzę, i te, do których mnie zaproszono” albo — tylko z uprawnieniem do wszystkich przetargów — „Wszystkie przetargi w aplikacji”; zmiana zakresu wymaga nowego adresu. W kalendarzu jest numer, tytuł, zamawiający i link do przetargu, bez cen. Termin z godziną to wydarzenie o tej godzinie (czas polski), trwające 30 minut; termin bez godziny zajmuje cały dzień. Obejmuje terminy od 90 dni wstecz do roku naprzód, bez odrzuconych przetargów. Nowy albo przesunięty termin program pocztowy pobiera sam, według własnego harmonogramu — może się pojawić z opóźnieniem (w Outlooku nawet kilka godzin). „Wygeneruj nowy adres” unieważnia poprzedni od razu, a „Wyłącz” unieważnia adres bez tworzenia nowego — użyj, gdy adres trafił do niewłaściwej osoby. Gdy stracisz dostęp do przetargów w aplikacji, kalendarz przestanie się aktualizować.',
+          click: 'Menu „Przetargi” → przycisk „Dodaj terminy do mojego kalendarza” (u góry, przy liście i przy kalendarzu) → wybór zakresu → „Utwórz adres kalendarza” → „Kopiuj”. W Outlooku: otwórz Kalendarz, „Dodaj kalendarz” → „Z internetu”, wklej adres i potwierdź. W Thunderbirdzie: otwórz Kalendarz, „Nowy kalendarz” → „W sieci”, wklej adres i zasubskrybuj znaleziony kalendarz.',
+          tone: 'violet',
+          screen: (
+            <AppFrame nav="Przetargi">
+              <Card className="max-w-xl space-y-2 text-xs">
+                <div className="font-semibold">Dodaj terminy do mojego kalendarza</div>
+                <p className="text-slate-600">Adres kalendarza</p>
+                <div className="rounded border border-slate-300 bg-slate-50 px-2 py-1 font-mono">https://…/api/calendar/••••••••.ics</div>
+                <p className="text-slate-500">Adres widać tylko teraz. Po zamknięciu tego okna nie da się go odczytać — można tylko wygenerować nowy.</p>
+                <div className="flex gap-2">
+                  <Btn label="Kopiuj" color="border" />
+                  <Mark>
+                    <Btn label="Wygeneruj nowy adres" color="border" />
+                  </Mark>
+                  <Btn label="Wyłącz" color="border" />
+                </div>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Jedno pole wyszukiwania (Ctrl+K)',
+          does: 'Szuka naraz w produktach (jak lista Produkty: nazwa, kod produktu, producent, numer modelu, marka, a także kod towaru z ERP XL), przetargach (numer, numer ogłoszenia, tytuł, zamawiający; od 3 znaków także treść pozycji przetargów spoza archiwum), zapytaniach (temat, nadawca, adres e-mail, firma z podpisu; treść maila tylko z ostatnich 90 dni) i klientach (nazwa, skrót nazwy, NIP, miasto). Pokazuje do 5 wyników w grupie. Gdy jest ich więcej, w produktach i zapytaniach link „Pokaż wszystkie: produkty” albo „Pokaż wszystkie: zapytania” otwiera pełną listę z tą samą frazą; w przetargach i klientach trzeba wpisać dokładniejszą frazę. Każda grupa pokazuje się tylko z uprawnieniem do swojego modułu; zapytania — Twoje, a cudze tylko z uprawnieniem do otwierania zapytań innych osób. Wyniki nie pokazują cen. Stan magazynu z ostatniego nocnego odczytu ERP XL widać tylko z uprawnieniem do Zapasów.',
+          click: 'Ctrl+K (na Macu Cmd+K) albo przycisk „Szukaj (Ctrl+K)” w menu po lewej, nad „Moje konto”. Wpisz co najmniej 2 znaki; strzałki wybierają wynik, Enter go otwiera, Escape zamyka okno.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Pomoc">
+              <Card className="max-w-xl text-xs">
+                <div className="mb-2 rounded border border-blue-300 px-2 py-1.5">rękawice nitrylowe</div>
+                <div className="text-[10px] font-semibold text-slate-500 uppercase">Produkty</div>
+                <div className="rounded bg-slate-100 px-2 py-1">Rękawice nitrylowe Nitrile Pro · kod RN-100</div>
+                <div className="px-2 py-1">Rękawice nitrylowe długie · kod RN-300</div>
+                <div className="mt-1 text-[10px] font-semibold text-slate-500 uppercase">Zapytania</div>
+                <div className="px-2 py-1">Zapytanie o rękawice · Ciepłownia Wisłok</div>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Karta klienta',
+          does: 'Kliknięcie wiersza na liście Klienci otwiera kartę klienta. U góry: „Opiekun w ERP XL”, „Opiekun w aplikacji” i „Sprzedaż liczy się do celów” (komu klient liczy się do celu sprzedaży). Kafelki: „Zakupy netto” w tym roku, „Ostatni zakup” i „Ostatnie 12 miesięcy” (zapytania, przetargi, faktury i paragony). Niżej „Historia współpracy” — ostatnie 24 miesiące, z filtrami „Wszystko”, „Faktury”, „Zapytania”, „Przetargi”, „Kampanie”, „Notatki” — a z boku „Dodaj notatkę” i „Najczęściej kupuje (24 miesiące)”. Faktury i paragony pochodzą z nocnego odczytu ERP XL (codziennie o 5:40) — dzisiejsze dokumenty pojawią się następnego dnia. Każda część karty pokazuje się tylko z uprawnieniem do swojego modułu. Na karcie są tylko zapytania pewnie powiązane z klientem: ten sam adres e-mail co w ERP XL, NIP z maila albo wybór handlowca (zasady na slajdzie „Zapytanie a klient”) — nigdy po samej domenie adresu. Zapytanie, które handlowiec oznaczył „Bez klienta”, na karcie się nie pojawi. Zaległych płatności karta nie pokazuje (zobacz „Czego jeszcze nie ma”).',
+          click: 'Menu „Klienci” → kliknij wiersz klienta (albo jego nazwę). „Dane klienta i osoby kontaktowe” rozwija dane z ERP XL. Opiekuna w aplikacji zmienia przyciskiem „Zmień” tylko osoba z uprawnieniem do zarządzania klientami.',
+          tone: 'green',
+          screen: (
+            <AppFrame nav="Klienci">
+              <div className="mb-2 text-sm font-semibold">Ciepłownia Wisłok S.A.</div>
+              <div className="mb-2 grid grid-cols-3 gap-2 text-xs">
+                <Card className="p-2">
+                  Zakupy netto 2026
+                  <b className="block text-base">186 420 zł</b>
+                </Card>
+                <Card className="p-2">
+                  Ostatni zakup
+                  <b className="block text-base">22.09.2026</b>
+                </Card>
+                <Card className="p-2">
+                  Ostatnie 12 miesięcy
+                  <b className="block text-base">9 zapytań · 2 przetargi</b>
+                </Card>
+              </div>
+              <Card className="text-xs">
+                <Mark>
+                  <span>Wszystko · Faktury · Zapytania · Przetargi · Kampanie · Notatki</span>
+                </Mark>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Notatki o kliencie z przypomnieniem',
+          does: 'Na karcie klienta każda osoba z dostępem do kart klientów może dodać notatkę — na przykład po rozmowie telefonicznej. Notatki widzą wszyscy, którzy mają dostęp do kart klientów, więc nie wpisuj w nich niczego prywatnego. Przy notatce można ustawić przypomnienie („Przypomnij mi”): „nie przypominaj”, „za tydzień” albo „w wybrany dzień”. Przypomnienie przychodzi tylko do autora notatki, w wybranym dniu od 7:00 — w dzwonku i e-mailem (kanały zmienisz w „Moje konto” → „Powiadomienia”). Gdy w tym dniu przypomnienie nie wyszło (na przykład serwer nie działał), aplikacja nadrabia je najwyżej 7 dni później; starsze przepadają. Notatkę zmienia („Zmień”) albo usuwa („Usuń”) jej autor albo osoba z uprawnieniem do zarządzania klientami; zmiana dnia przypomnienia ustawia przypomnienie od nowa.',
+          click: 'Karta klienta → po prawej „Dodaj notatkę” → wpisz treść, wybierz „Przypomnij mi” → „Zapisz notatkę”. Zapisane notatki są w historii współpracy, w filtrze „Notatki”.',
+          tone: 'green',
+          screen: (
+            <AppFrame nav="Klienci">
+              <Card className="max-w-xl space-y-2 text-xs">
+                <div className="font-semibold">Dodaj notatkę</div>
+                <div className="rounded border border-slate-300 px-2 py-1.5">Rozmowa z zaopatrzeniem: w listopadzie przetarg na odzież zimową.</div>
+                <div>
+                  <div className="mb-1 text-slate-600">Przypomnij mi</div>
+                  <Mark>
+                    <span className="rounded border border-slate-300 bg-white px-2 py-0.5">za tydzień</span>
+                  </Mark>
+                </div>
+                <Btn label="Zapisz notatkę" />
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Zapytanie a klient',
+          does: 'Zapytanie łączy się z klientem tylko wtedy, gdy powiązanie jest pewne: (1) handlowiec sam wybrał klienta — tego automat nigdy nie zmienia; (2) adres nadawcy jest dokładnie taki sam jak adres e-mail z karty klienta albo osoby kontaktowej w ERP XL i należy tylko do jednego klienta; (3) w treści maila jest NIP przy słowie „NIP”, z poprawną sumą kontrolną, jedyny taki w mailu, nie nasz, i pasuje do dokładnie jednego klienta. Gdy adres e-mail i NIP wskazują różnych klientów — powiązania nie ma. Sama domena adresu nigdy nie wystarcza. Powiązania automatyczne aplikacja przelicza co noc (o 5:55) — gdy dopasowanie przestanie się zgadzać, powiązanie automatyczne znika. Przy kliencie w zapytaniu widać w nawiasie, skąd się wzięło: „ten sam adres e-mail co w ERP XL”, „NIP z maila” albo „wybrane przez handlowca”. Tylko takie pewne zapytania pokazują się na karcie klienta.',
+          click: 'W zapytaniu, pod tematem (tylko autor zapytania): „Powiąż z klientem”, gdy powiązania nie ma, albo „Zmień klienta”, gdy jest błędne — klienta wybiera się z listy Klienci, więc potrzebny jest do niej dostęp. „Bez klienta” zostawia zapytanie świadomie bez klienta — nocne powiązanie po adresie e-mail albo NIP-ie już go nie zmieni.',
+          tone: 'slate',
+          screen: (
+            <AppFrame nav="Zapytania">
+              <Card className="max-w-xl text-xs">
+                Klient: <b>Ciepłownia Wisłok S.A.</b> <span className="text-slate-500">(ten sam adres e-mail co w ERP XL)</span>
+                <div className="mt-2 flex gap-2">
+                  <Mark>
+                    <Btn label="Zmień klienta" color="border" />
+                  </Mark>
+                  <Btn label="Bez klienta" color="border" />
+                </div>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Jak się skończyło zapytanie',
+          does: 'Wynik wpisuje tylko autor zapytania (osoba, która je prowadzi) i dopiero po wysłaniu odpowiedzi do klienta: „Zamówił”, „Zamówił część”, „Nie zamówił” albo „Nie wiadomo”; przy „Zamówił część” i „Nie zamówił” można podać powód: „Cena”, „Termin dostawy”, „Kupił gdzie indziej” albo „Klient nie odpowiedział”. Widać, kto i kiedy wpisał wynik. Na liście zapytań jest kolumna „Wynik” i filtr „Wynik” (także „Wysłane, wynik niewpisany”). Podpowiedź z ERP XL: co noc (o 5:55) aplikacja sprawdza, czy klient dostał fakturę albo paragon na zaoferowany towar w ciągu 60 dni od dnia odpowiedzi. Liczą się tylko towary oferty, których karta produktu jest powiązana z towarem w ERP XL (wybrane karty i zatwierdzone zamienniki); ile towarów oferty nie ma takiego powiązania, podpowiedź mówi osobno — ich zakupu nie widać. To wniosek, a nie fakt: klient mógł kupić z innego powodu, dlatego podpowiedź jest szara, z regułą słowami, numerem, datą i wartością dokumentu oraz liczbą trafionych towarów. Aplikacja nigdy nie wpisuje wyniku sama. Podpowiedzi nie ma, gdy zapytanie nie jest pewnie powiązane z klientem z ERP XL — panel mówi wtedy dlaczego.',
+          click: 'W zapytaniu po wysłaniu odpowiedzi, panel „Jak się skończyło”: wybierz wynik (i ewentualnie powód), potem „Zapisz”. Przy podpowiedzi „Potwierdź ten dokument” tylko wskazuje dokument (i zaznacza „Zamówił”, jeśli nic o zakupie nie wybrano) — numer, data i wartość dokumentu zapiszą się w wyniku dopiero po „Zapisz”. „Wyczyść wynik” cofa zapytanie do „wysłane, wynik niewpisany”.',
+          tone: 'amber',
+          screen: (
+            <AppFrame nav="Zapytania">
+              <Card className="max-w-xl space-y-2 text-xs">
+                <div className="font-semibold">Jak się skończyło</div>
+                <div className="rounded border border-slate-200 bg-slate-50 p-2 text-slate-600">
+                  <div className="font-semibold text-slate-700">Podpowiedź z ERP XL</div>
+                  22.09.2026 wystawiono temu klientowi dokument <b>FS-1842/09/2026</b> na 3 z 5 zaoferowanych towarów, 6 240,00 zł netto (w tym towary z
+                  oferty: 4 180,00 zł). Możliwe, że to zamówienie z tej oferty. Sprawdź i potwierdź.
+                  <div className="mt-1">
+                    <Mark>
+                      <Btn label="Potwierdź ten dokument" color="border" />
+                    </Mark>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <span className="rounded border border-blue-300 bg-blue-50 px-2 py-0.5">Zamówił</span>
+                  <span className="rounded border px-2 py-0.5">Zamówił część</span>
+                  <span className="rounded border px-2 py-0.5">Nie zamówił</span>
+                  <span className="rounded border px-2 py-0.5">Nie wiadomo</span>
+                </div>
+                <Btn label="Zapisz" />
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Oferta przestaje być ważna',
+          does: 'Aplikacja czyta warunek „Ważność oferty” z odpowiedzi i liczy datę od dnia jej wysłania. Rozumie tylko jednoznaczne zapisy: samą liczbę dni („14”), „14 dni” (kalendarzowych), „10 dni roboczych” (od poniedziałku do piątku, bez odliczania świąt), tygodnie („2 tygodnie”, „tydzień”), miesiące („1 miesiąc”, „miesiąc”) albo datę w postaci DD.MM.RRRR („31.10.2026”), najwyżej rok naprzód. W zapytaniu i na liście zapytań widać wtedy, do kiedy oferta jest ważna („oferta ważna do …”). Przy innych zapisach (na przykład „do odwołania”) daty końca nie ma, więc nie ma też przypomnienia — zapytanie mówi to wprost. Od ostatniego dnia roboczego przed końcem ważności do jej końca, jeśli wynik zapytania nie jest wpisany, Twoje zapytanie pojawia się w „Do zrobienia dziś” („Oferta ważna …, klient jeszcze nie zamówił”, z dopiskiem „Warto zadzwonić.”), a w dzwonku przychodzi powiadomienie, raz na ofertę, od 7:00. E-mail domyślnie nie przychodzi — możesz go włączyć w „Moje konto” → „Powiadomienia”.',
+          click: 'Dashboard → „Do zrobienia dziś” → „Otwórz zapytanie”.',
+          tone: 'green',
+          screen: (
+            <AppFrame nav="Dashboard">
+              <Card className="max-w-xl text-xs">
+                <b>Oferta ważna do jutra, klient jeszcze nie zamówił</b> · Ciepłownia Wisłok
+                <br />
+                <span className="text-slate-500">Zapytanie o rękawice nitrylowe. Warto zadzwonić.</span>
+                <div className="mt-2">
+                  <Mark>
+                    <Btn label="Otwórz zapytanie" color="border" />
+                  </Mark>
+                </div>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Cele handlowców i przypisanie pracownika ERP XL',
+          does: 'Zarząd (uprawnienie „Cele handlowców”, na start tylko administrator) wpisuje cel sprzedaży na miesiąc dla każdej osoby w Raportach → „Cele handlowców”. Do wyboru jest następny miesiąc (cele ustala się z wyprzedzeniem — sprzedaż i realizacja pojawią się od jego pierwszego dnia), bieżący i 11 poprzednich. Realizacja to sprzedaż netto z faktur i paragonów w ERP XL, po korektach, klientów przypisanych do handlowca według dzisiejszego opiekuna: najpierw opiekun z karty w ERP XL, gdy administrator przypisał tego pracownika do konta, inaczej opiekun w aplikacji. Liczą się tylko klienci z zakładki Klienci (kupili w roku za co najmniej 3000 zł netto). Osobny wiersz pokazuje sprzedaż klientów bez opiekuna. Handlowiec widzi tylko swój cel — w kafelku „Mój cel” na Dashboardzie, gdy ma cel w bieżącym miesiącu (cel na następny miesiąc pokaże się tam od jego pierwszego dnia). Przypisanie pracownika ERP XL do konta robi administrator; podpowiedź „ten sam e-mail co konto” jest tylko propozycją do sprawdzenia, a jeden pracownik może być przypisany do jednego konta.',
+          click: 'Administracja → Użytkownicy → „Edytuj” → kolumna „Pracownik ERP XL (opiekun klientów)” → wybór z listy → „Zapisz”. Cele: Raporty → „Cele handlowców” → wybór miesiąca → „Ustaw cele” → kwoty → „Zapisz cele” (puste pole usuwa cel).',
+          tone: 'violet',
+          screen: (
+            <AppFrame nav="Administracja">
+              <Card className="max-w-xl text-xs">
+                <div className="mb-1 font-semibold">Pracownik ERP XL (opiekun klientów)</div>
+                <Mark>
+                  <div className="rounded border border-slate-300 px-2 py-1">Anna Nowak (64 klientów)</div>
+                </Mark>
+                <p className="mt-1 text-[11px] text-blue-700">propozycja — ten sam e-mail co to konto (sprawdź, zanim wybierzesz)</p>
+              </Card>
+            </AppFrame>
+          ),
+        },
+      ]}
+    />
+  )
+}
+
+/** Czego jeszcze nie ma — żeby nikt nie szukał funkcji, której nie zbudowano. */
+function NotYetCard() {
+  return (
+    <div className="space-y-2 rounded-xl bg-white p-5 text-sm text-slate-700 shadow-sm">
+      <h2 className="text-lg font-semibold text-slate-900">Czego jeszcze nie ma</h2>
+      <p>
+        <b>Zaległe płatności klienta.</b> Aplikacja ich nie pokazuje: konto, którym czyta ERP XL, nie ma prawa odczytu
+        rozrachunków. Żeby to zbudować, właściciel bazy ERP XL musi nadać temu kontu prawo odczytu (SELECT) tabeli
+        rozrachunków CDN.TraPlat. Które kolumny będą potrzebne (termin płatności, kwota pozostała do zapłaty), trzeba
+        jeszcze potwierdzić ze strukturą bazy ERP XL.
+      </p>
+      <p>
+        <b>Także nie ma jeszcze:</b> przekazania zapytania innej osobie, cen w wynikach wyszukiwania, sprzedaży kontrahentów
+        ERP XL spoza zakładki Klienci w celach handlowców, liczenia celu według opiekuna z dnia zamknięcia miesiąca (liczy się
+        dzisiejszy opiekun) i odliczania świąt w dniach roboczych.
+      </p>
+    </div>
+  )
+}
+
 export function NewFeaturesHelp() {
+  return (
+    <div className="space-y-4">
+      <Stage34Slideshow />
+      <Stage01Slideshow />
+      <NotYetCard />
+    </div>
+  )
+}
+
+/** Etapy 0–1: godzina i numer ogłoszenia, wynik przetargu, powiadomienia, „Do zrobienia dziś”, stan systemu. */
+function Stage01Slideshow() {
   const { user } = useAuth()
 
   return (
@@ -279,8 +533,8 @@ export function NewFeaturesHelp() {
         },
         {
           action: 'Do zrobienia dziś',
-          does: 'Na górze dashboardu lista Twoich pilnych spraw: terminy składania w ciągu 7 dni (z godziną i brakami oferty), zapytania czekające na odpowiedź ponad dobę, przetargi po terminie bez wpisanego wyniku i nieprzeczytane wzmianki. Liczą się tylko Twoje sprawy — przetargi, które prowadzisz albo do których Cię zaproszono. Sprawa znika, gdy zostanie zrobiona. W karcie „Przetargi” nowy kafelek „Wygrane, 90 dni” — procent części wygranych spośród części z wpisanym wynikiem.',
-          click: 'Przycisk przy sprawie („Otwórz przetarg”, „Pokaż zapytania”, „Wpisz wynik”, „Odpowiedz”) prowadzi prosto do miejsca, gdzie się ją załatwia.',
+          does: 'Na górze dashboardu lista Twoich pilnych spraw: terminy składania w ciągu 7 dni (z godziną i brakami oferty), zapytania czekające na odpowiedź ponad dobę, przetargi po terminie bez wpisanego wyniku, nieprzeczytane wzmianki i oferty z zapytań, którym kończy się ważność. Liczą się tylko Twoje sprawy — przetargi, które prowadzisz albo do których Cię zaproszono. Sprawa znika, gdy zostanie zrobiona. W karcie „Przetargi” nowy kafelek „Wygrane, 90 dni” — procent części wygranych spośród części z wpisanym wynikiem.',
+          click: 'Przycisk przy sprawie („Otwórz przetarg”, „Pokaż zapytania”, „Wpisz wynik”, „Otwórz zapytanie”, „Odpowiedz”) prowadzi prosto do miejsca, gdzie się ją załatwia.',
           tone: 'green',
           screen: (
             <LiveFrame live={false} label="Dashboard">
@@ -292,7 +546,7 @@ export function NewFeaturesHelp() {
         },
         {
           action: 'Stan systemu (dla administratora)',
-          does: 'Jeden ekran pokazuje, czy działają zadania nocne, pobieranie cen z kont dostawców, kolejka analiz zapytań i dopasowywanie produktów. Gdy zadanie nocne albo konto dostawcy przestanie działać, osoby z uprawnieniem „Stan systemu” i dostępem do Administracji dostają jeden e-mail na każdy problem; znany problem można wyciszyć. Godziny zadań są w czasie polskim. Niżej „Dane do uzupełnienia”: przetargi bez godziny składania albo numeru ogłoszenia, handlowcy bez operatora ERP XL, zamawiający bez powiązania z ERP XL i sprzedawane towary bez karty produktu — „Pokaż” rozwija listę.',
+          does: 'Jeden ekran pokazuje, czy działają zadania nocne, pobieranie cen z kont dostawców, kolejka analiz zapytań i dopasowywanie produktów. Gdy zadanie nocne albo konto dostawcy przestanie działać, osoby z uprawnieniem „Stan systemu” i dostępem do Administracji dostają jeden e-mail na każdy problem; znany problem można wyciszyć. Godziny zadań są w czasie polskim. Niżej „Dane do uzupełnienia”: przetargi bez godziny składania albo numeru ogłoszenia, handlowcy bez operatora ERP XL, zamawiający bez powiązania z ERP XL, sprzedawane towary bez karty produktu, klienci z ERP XL bez opiekuna (ich sprzedaż nie liczy się do niczyjego celu) i handlowcy bez przypisanego pracownika ERP XL — „Pokaż” rozwija listę. Wśród zadań są też: „Faktury i paragony klientów z ERP XL” (codziennie o 5:40), „Powiązania zapytań z klientami i podpowiedzi zamówień” (o 5:55) i „Przypomnienia z notatek o klientach i o ważności ofert” (co 15 minut).',
           click: '„Administracja” → kafelek „Stan systemu”. „Wycisz e-mail” przy problemie, który jest znany; „Włącz e-mail” cofa wyciszenie.',
           tone: 'amber',
           screen: (

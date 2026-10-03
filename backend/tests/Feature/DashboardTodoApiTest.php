@@ -192,6 +192,45 @@ class DashboardTodoApiTest extends TestCase
         $this->getJson('/api/dashboard')->assertOk()->assertJsonPath('todo.items', []);
     }
 
+    public function test_offers_with_ending_validity_and_no_outcome_are_listed_from_last_business_day(): void
+    {
+        $me = $this->userWith(['dashboard.view', 'inquiries.use']);
+        $other = $this->userWith(['dashboard.view', 'inquiries.use']);
+        $client = Client::query()->create(['name' => 'Szpital Miejski nr 3']);
+        // dziś sobota 3.10: oferta do poniedziałku 5.10 — od piątku 2.10 (ostatni dzień roboczy przed) jest sprawą na dziś
+        $monday = $this->offer($me, '2026-09-21 12:00', '14 dni', ['client_id' => $client->id, 'source_subject' => 'Półmaski i fartuchy']);
+        DB::table('inquiry_order_hints')->insert([
+            'client_inquiry_id' => $monday->id, 'document_type' => 2033, 'document_id' => 1, 'document_number' => 'FS-1', 'issued_at' => '2026-09-30',
+            'document_net' => 10, 'matched_net' => 10, 'offered_items' => 1, 'linked_items' => 1, 'matched_items' => 1, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // ważna do dziś — jeszcze na liście; firma ze stopki, gdy nie ma klienta
+        $today = $this->offer($me, '2026-09-19 12:00', '14 dni', ['contact' => ['company' => 'Zakłady Metalowe Sanwal']]);
+        $this->offer($me, '2026-09-18 12:00', '14 dni');                          // ważność minęła wczoraj
+        $this->offer($me, '2026-09-22 12:00', '14 dni');                          // do wtorku 6.10 — od poniedziałku
+        $this->offer($me, '2026-09-21 12:00', '14 dni', ['outcome' => 'ordered']); // wynik wpisany
+        $this->offer($me, '2026-09-21 12:00', 'do odwołania');                   // bez daty — nie zgadujemy
+        $this->offer($other, '2026-09-21 12:00', '14 dni');                       // cudza
+
+        Sanctum::actingAs($me);
+        $items = collect($this->getJson('/api/dashboard')->assertOk()->json('todo.items'))->where('kind', 'offer_validity_ending')->values();
+
+        $this->assertSame([$today->id, $monday->id], $items->pluck('inquiry_id')->all(), 'Najbliższy koniec ważności pierwszy.');
+        $this->assertSame([
+            'kind' => 'offer_validity_ending',
+            'inquiry_id' => $monday->id,
+            'client' => 'Szpital Miejski nr 3',
+            'subject' => 'Półmaski i fartuchy',
+            'valid_until' => '2026-10-05',
+            'has_hint' => true,
+            'url' => '/inquiries/'.$monday->id,
+        ], $items[1]);
+        $this->assertSame(['Zakłady Metalowe Sanwal', '2026-10-03', false], [$items[0]['client'], $items[0]['valid_until'], $items[0]['has_hint']]);
+
+        // bez inquiries.use sprawy nie ma
+        Sanctum::actingAs($this->userWith(['dashboard.view']));
+        $this->assertSame([], collect($this->getJson('/api/dashboard')->json('todo.items'))->where('kind', 'offer_validity_ending')->values()->all());
+    }
+
     public function test_unread_mentions_are_listed_newest_first(): void
     {
         $me = $this->userWith(['dashboard.view']);
@@ -300,6 +339,23 @@ class DashboardTodoApiTest extends TestCase
             'replied_at' => $repliedAt, 'duplicate_of_id' => $duplicateOf,
         ]);
         $inquiry->forceFill(['created_at' => $createdAt])->save();
+
+        return $inquiry;
+    }
+
+    /**
+     * Wysłana oferta z zapytania: odpowiedź w podanej chwili (czas polski) i tekst ważności z warunków oferty.
+     *
+     * @param  array<string, mixed>  $attrs
+     */
+    private function offer(User $user, string $repliedAt, string $validity, array $attrs = []): ClientInquiry
+    {
+        $inquiry = ClientInquiry::query()->create(['user_id' => $user->id, 'source_body' => 'Prośba o ofertę']);
+        $inquiry->forceFill([
+            'replied_at' => Carbon::parse($repliedAt, 'Europe/Warsaw')->utc(),
+            'offer_terms' => ['validity' => $validity],
+            ...$attrs,
+        ])->save();
 
         return $inquiry;
     }

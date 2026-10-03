@@ -14,6 +14,8 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Clients\InquiryClientLinker;
+use App\Services\Inquiries\OrderHintBuilder;
 use App\Services\Notifications\AppNotificationMessage;
 use App\Services\Notifications\NotificationDispatcher;
 use App\Services\Pricing\SourcePriceComparison;
@@ -28,6 +30,7 @@ use App\Support\InquirySignature;
 use App\Support\OfferPricing;
 use App\Support\OfferProductText;
 use App\Support\OfferTermText;
+use App\Support\OfferValidity;
 use App\Support\PpeAssortment;
 use App\Support\ProductSizeVariant;
 use App\Support\WithdrawnProductNote;
@@ -331,6 +334,9 @@ final class ClientInquiryService
         return ClientInquiry::query()->create([
             'user_id' => $user->id,
             'client_id' => $clientId,
+            // klient wybrany w formularzu to wybór handlowca — nocne powiązania automatyczne go nie ruszają
+            'client_link_source' => $clientId !== null ? InquiryClientLinker::SOURCE_MANUAL : null,
+            'client_linked_at' => $clientId !== null ? CarbonImmutable::now() : null,
             'tone' => $tone,
             'source_channel' => $channel,
             // temat z ekstrakcji dopisuje analiza, gdy handlowiec żadnego nie podał
@@ -1674,7 +1680,86 @@ final class ClientInquiryService
             'reply_body' => $inquiry->reply_body,
             'reply_html' => $this->replyHtmlFor($inquiry),
             'created_at' => $inquiry->created_at?->toIso8601String(),
+            // jak się skończyło: wynik, powiązanie z klientem, ważność oferty, podpowiedzi z ERP XL (can_edit — kontroler)
+            ...$this->outcomeFields($inquiry),
         ];
+    }
+
+    /**
+     * Pola wyniku zapytania (etap 4): wynik wpisany przez handlowca, pewne powiązanie z klientem (z regułą), do kiedy
+     * ważna jest oferta (OfferValidity z warunku „Ważność oferty” i dnia odpowiedzi; null, gdy tekstu nie da się
+     * jednoznacznie odczytać) i podpowiedzi z ERP XL (OrderHintBuilder — wniosek, nie fakt).
+     *
+     * @return array{outcome: array<string, mixed>, client_link: array<string, mixed>|null, offer_valid_until: string|null, validity_text: string|null, order_hints: array<string, mixed>}
+     */
+    public function outcomeFields(ClientInquiry $inquiry): array
+    {
+        $validity = $this->termsOf($inquiry)['validity'] ?? null;
+        $until = $inquiry->replied_at !== null ? OfferValidity::until($validity, CarbonImmutable::instance($inquiry->replied_at)) : null;
+
+        return [
+            'outcome' => $this->outcomeView($inquiry, false),
+            'client_link' => InquiryClientLinker::present($inquiry),
+            'offer_valid_until' => $until?->toDateString(),
+            'validity_text' => $validity,
+            'order_hints' => OrderHintBuilder::present($inquiry),
+        ];
+    }
+
+    /**
+     * Wynik zapytania do widoku: kto i kiedy wpisał, powód, dokument z ERP XL skopiowany z potwierdzonej podpowiedzi.
+     *
+     * @return array{outcome: string|null, reason: string|null, by: array{id: int, name: string}|null, at: string|null, document: array{number: string, date: string|null, net_value: string|null}|null, can_edit: bool}
+     */
+    public function outcomeView(ClientInquiry $inquiry, bool $canEdit): array
+    {
+        $by = $inquiry->outcome_by === null ? null : $inquiry->outcomeBy()->first(['id', 'name']);
+        $number = $this->nullable($inquiry->outcome_document_number);
+
+        return [
+            'outcome' => $inquiry->outcome,
+            'reason' => $inquiry->outcome_reason,
+            'by' => $by instanceof User ? ['id' => (int) $by->id, 'name' => (string) $by->name] : null,
+            'at' => $inquiry->outcome_at?->toIso8601String(),
+            'document' => $number === null ? null : [
+                'number' => $number,
+                'date' => $inquiry->outcome_document_date?->toDateString(),
+                'net_value' => $inquiry->outcome_net_value !== null ? (string) $inquiry->outcome_net_value : null,
+            ],
+            'can_edit' => $canEdit,
+        ];
+    }
+
+    /**
+     * Wyroby, które poszły do klienta w liście: wybrany (albo domyślny) wyrób każdej pozycji i zatwierdzony zamiennik
+     * wskazany przy pozycji — ta sama reguła co offerRows(). Każdy raz, w kolejności pozycji. Podstawa podpowiedzi
+     * „możliwe zamówienie z oferty” (OrderHintBuilder). Same identyfikatory — ceny nie są tu potrzebne (widok ukrywający).
+     *
+     * @return list<int>
+     */
+    public function offeredProductIds(ClientInquiry $inquiry): array
+    {
+        return $this->withPriceMask(SupplierSpecialMask::hiding(), function () use ($inquiry): array {
+            $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+            $answers = is_array($inquiry->answers) ? $inquiry->answers : [];
+            $matches = $this->matchGroups($analysis);
+            $ids = [];
+            foreach ($this->lineItemsOf($analysis) as $item) {
+                $candidates = $this->candidatesForItem($matches, $item, $analysis);
+                $product = $this->chosenProductForItem($item, $candidates, $answers);
+                if ($product === null) {
+                    continue;
+                }
+                $ids[(int) ($product['id'] ?? 0)] = true;
+                $substitute = $this->chosenSubstituteForItem($item, $this->substitutesForItem($analysis, $candidates), $answers);
+                if ($substitute !== null) {
+                    $ids[(int) ($substitute['id'] ?? 0)] = true;
+                }
+            }
+            unset($ids[0]);
+
+            return array_keys($ids);
+        });
     }
 
     /**

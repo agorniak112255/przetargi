@@ -128,7 +128,7 @@ export function DashboardHelp() {
       slides={[
         {
           action: 'Co widać po zalogowaniu',
-          does: 'Dashboard to pierwszy ekran: po jednej karcie na moduł — Przetargi, Produkty, Zapasy, Cenniki i Kampanie. Każda osoba widzi tylko karty modułów, do których ma uprawnienie; gdy jednej karty z pary brakuje, druga zajmuje całą szerokość.',
+          does: 'Dashboard to pierwszy ekran: po jednej karcie na moduł — Przetargi, Produkty, Zapasy, Cenniki i Kampanie. Każda osoba widzi tylko karty modułów, do których ma uprawnienie; gdy jednej karty z pary brakuje, druga zajmuje całą szerokość. Nad nimi „Do zrobienia dziś”, a gdy masz cel sprzedaży w bieżącym miesiącu — kafelek „Mój cel” z realizacją (sprzedaż Twoich klientów z faktur i paragonów w ERP XL, z nocnego odczytu).',
           click: 'Nic — przeczytaj karty. Odnośnik w prawym górnym rogu karty prowadzi do modułu.',
           tone: 'slate',
           screen: <Screen live={live} />,

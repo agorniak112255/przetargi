@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { canAny, type User } from '../lib/api'
@@ -8,10 +9,12 @@ import { ReportEffectiveness } from './reports/ReportEffectiveness'
 import { ReportPrices } from './reports/ReportPrices'
 import { ReportSales } from './reports/ReportSales'
 import { ReportSources } from './reports/ReportSources'
+import { ReportTargets } from './reports/ReportTargets'
 
 /**
- * Raporty (reports.view): sześć zestawień z danych aplikacji, każde w swojej zakładce (`?raport=`). Zakładkę widać
- * tylko z uprawnieniem do danych, z których raport powstaje — to samo sprawdza serwer (ReportController).
+ * Raporty (reports.view): zestawienia z danych aplikacji, każde w swojej zakładce (`?raport=`). Zakładkę widać
+ * tylko z uprawnieniem do danych, z których raport powstaje — to samo sprawdza serwer (ReportController,
+ * SalesTargetController). Zakładka z niezapisanymi zmianami (cele handlowców) pyta przed przejściem do innej.
  */
 
 const REPORTS: { key: ReportKey; label: string; lead: string; anyOf: string[] | null }[] = [
@@ -51,6 +54,12 @@ const REPORTS: { key: ReportKey; label: string; lead: string; anyOf: string[] | 
     lead: 'Ile części zamówień wygrywamy, dlaczego przegrywamy i z kim — według terminu składania ofert.',
     anyOf: ['tenders.view_own', 'tenders.view_all'],
   },
+  {
+    key: 'targets',
+    label: 'Cele handlowców',
+    lead: 'Miesięczne cele sprzedaży handlowców i ich realizacja według faktur i paragonów z ERP XL.',
+    anyOf: ['reports.targets.manage'],
+  },
 ]
 
 function visibleReports(user: User | null) {
@@ -62,6 +71,8 @@ export function Reports() {
   const [params, setParams] = useSearchParams()
   const tabs = visibleReports(user)
   const active = tabs.find((t) => t.key === params.get('raport')) ?? tabs[0]
+  // niezapisane zmiany w zakładce (cele handlowców) — pytanie przed przejściem do innej zakładki
+  const dirty = useRef(false)
 
   return (
     <div className="app-reports">
@@ -80,7 +91,12 @@ export function Reports() {
               key={t.key}
               type="button"
               aria-current={on ? 'page' : undefined}
-              onClick={() => setParams(t.key === tabs[0].key ? {} : { raport: t.key }, { replace: true })}
+              onClick={() => {
+                if (t.key === active.key) return
+                if (dirty.current && !window.confirm('Ta zakładka ma niezapisane zmiany. Przejść do innej bez zapisu? Zmiany przepadną.')) return
+                dirty.current = false
+                setParams(t.key === tabs[0].key ? {} : { raport: t.key }, { replace: true })
+              }}
               className={`app-tab -mb-px border-b-2 px-3 py-2 text-sm ${
                 on ? 'app-tab--active border-blue-600 font-semibold text-blue-700' : 'border-transparent text-slate-600 hover:text-slate-900'
               }`}
@@ -97,6 +113,13 @@ export function Reports() {
       {active.key === 'sales' && <ReportSales />}
       {active.key === 'customers' && <ReportCustomers />}
       {active.key === 'effectiveness' && <ReportEffectiveness />}
+      {active.key === 'targets' && (
+        <ReportTargets
+          onDirtyChange={(d) => {
+            dirty.current = d
+          }}
+        />
+      )}
     </div>
   )
 }

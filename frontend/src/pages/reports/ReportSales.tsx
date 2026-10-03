@@ -16,6 +16,8 @@ import {
   trimLeadingEmpty,
   useReportData,
   weekRange,
+  NBSP,
+  type SalesFunnel,
   type SalesReportData,
 } from '../../lib/reports'
 import { tenderStatusLabel } from '../../lib/tenderStatus'
@@ -119,7 +121,7 @@ function SalesBody({ d }: { d: SalesReportData }) {
   return (
     <>
       <Insights items={insightsOf(d)} />
-      {d.inquiries && <InquiriesSection q={d.inquiries} />}
+      {d.inquiries && <InquiriesSection q={d.inquiries} days={d.days} />}
       {d.tenders && <TendersSection t={d.tenders} />}
       {d.campaigns && <CampaignsSection c={d.campaigns} />}
       {!d.inquiries && !d.tenders && !d.campaigns && <SectionNote>Brak uprawnień do zapytań, przetargów i kampanii.</SectionNote>}
@@ -127,11 +129,76 @@ function SalesBody({ d }: { d: SalesReportData }) {
   )
 }
 
-function InquiriesSection({ q }: { q: NonNullable<SalesReportData['inquiries']> }) {
+/** Czas odpowiedzi dla ludzi: „40 minut”, „3 godziny”, „1 dzień 2 godziny”. */
+function replyDuration(seconds: number | null): string {
+  if (seconds == null) return '—'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}${NBSP}${plural(minutes, 'minuta', 'minuty', 'minut')}`
+  const hours = Math.round(seconds / 3600)
+  if (hours < 24) return `${hours}${NBSP}${plural(hours, 'godzina', 'godziny', 'godzin')}`
+  const days = Math.floor(hours / 24)
+  const rest = hours % 24
+  const dayText = `${days}${NBSP}${plural(days, 'dzień', 'dni', 'dni')}`
+  return rest > 0 ? `${dayText} ${rest}${NBSP}${plural(rest, 'godzina', 'godziny', 'godzin')}` : dayText
+}
+
+function FunnelRow({ label, value, whole, fill, muted }: { label: ReactNode; value: number; whole: number; fill: string; muted?: boolean }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,15rem)_minmax(0,1fr)_3.5rem] items-center gap-3 text-xs">
+      <span className={muted ? 'text-slate-500' : 'text-slate-700'}>{label}</span>
+      <span className="block h-2.5 overflow-hidden rounded-full bg-slate-100" aria-hidden>
+        <span className={`block h-full rounded-full ${fill}`} style={{ width: `${value > 0 ? Math.max(1.5, shareValue(value, whole)) : 0}%` }} />
+      </span>
+      <b className={`app-num text-right tabular-nums ${muted ? 'font-medium text-slate-500' : 'text-slate-900'}`}>{groupInt(value)}</b>
+    </div>
+  )
+}
+
+/**
+ * „Od zapytania do sprzedaży”: zakup potwierdzony przez handlowca osobno od zakupu tylko podpowiedzianego przez ERP XL
+ * (wniosek — szary i odseparowany, z opisem reguły).
+ */
+function FunnelCard({ f, days }: { f: SalesFunnel; days: number }) {
+  const value = Number(f.value_confirmed)
+  return (
+    <ReportCard
+      className="mb-4"
+      title={`Od zapytania do sprzedaży · ostatnie ${days} dni`}
+      hint="Zapytanie liczy się raz, nawet gdy ten sam mail przyszedł do kilku osób."
+    >
+      <div className="space-y-2">
+        <FunnelRow label="Przyszło zapytań" value={f.received} whole={f.received} fill="bg-slate-400" />
+        <FunnelRow label="Odpowiedzieliśmy" value={f.replied} whole={f.received} fill="bg-blue-600" />
+        <FunnelRow label="Zamówił — potwierdził handlowiec" value={f.ordered_confirmed} whole={f.received} fill="bg-emerald-600" />
+      </div>
+      <p className="mt-2 text-xs text-slate-600">
+        Wartość zamówień z dokumentów wskazanych przez handlowców: <b className="text-slate-800">{fmtBigZl(Number.isFinite(value) ? value : 0)}</b> netto
+        {f.ordered_without_document > 0 && (
+          <>
+            {' '}
+            · {groupInt(f.ordered_without_document)} {plural(f.ordered_without_document, 'zamówienie', 'zamówienia', 'zamówień')} bez wskazanego dokumentu
+            (nie ma ich w tej kwocie)
+          </>
+        )}
+      </p>
+      <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
+        <FunnelRow label="Możliwe, że zamówił (tylko podpowiedź z ERP XL)" value={f.possible} whole={f.received} fill="bg-slate-300" muted />
+        <p className="mt-2 text-[11px] text-slate-500">
+          Podpowiedź z ERP XL to wniosek, a nie fakt: klient dostał fakturę albo paragon na zaoferowany towar w ciągu 60 dni od naszej
+          odpowiedzi. Mógł kupić z innego powodu. Dlatego ta liczba jest szara i osobna — liczą się tu tylko zapytania, przy których
+          nikt nie wpisał wyniku.
+        </p>
+      </div>
+    </ReportCard>
+  )
+}
+
+function InquiriesSection({ q, days }: { q: NonNullable<SalesReportData['inquiries']>; days: number }) {
   const t = q.totals
   return (
     <>
       <SectionTitle title="Zapytania klientów" scope={q.scope} />
+      {q.funnel && <FunnelCard f={q.funnel} days={days} />}
       <KpiRow
         items={[
           { label: 'Zapytania', value: groupInt(t.received), sub: t.duplicates > 0 ? `+ ${groupInt(t.duplicates)} kopii u innych osób` : 'bez kopii' },
@@ -200,10 +267,10 @@ function InquiriesSection({ q }: { q: NonNullable<SalesReportData['inquiries']> 
         <ReportCard
           className="mb-4"
           title="Obsługa według osoby"
-          hint="Zapytania osoby, która je wkleiła lub przyjęła z Thunderbirda. Mail przejęty przez kilka osób liczy się każdej z nich."
+          hint="Zapytania osoby, która je wkleiła lub przyjęła z Thunderbirda. Mail przejęty przez kilka osób liczy się każdej z nich. „Zwykle odpowiada w” to mediana czasu od maila klienta do własnej odpowiedzi tej osoby. Zamówione i ich wartość — tylko wynik wpisany przez tę osobę (wartość z dokumentów, które wskazała)."
         >
           <div className="overflow-x-auto">
-            <table className="app-table w-full min-w-[34rem] text-left text-xs">
+            <table className="app-table w-full min-w-[52rem] text-left text-xs">
               <thead>
                 <tr className="border-b bg-slate-50 text-slate-500">
                   <th className="p-2 font-medium">Osoba</th>
@@ -211,6 +278,9 @@ function InquiriesSection({ q }: { q: NonNullable<SalesReportData['inquiries']> 
                   <th className="p-2 text-right font-medium">Odpowiedziane</th>
                   <th className="p-2 text-right font-medium">W dzień roboczy</th>
                   <th className="p-2 text-right font-medium">Czeka</th>
+                  <th className="p-2 text-right font-medium">Zwykle odpowiada w</th>
+                  <th className="p-2 text-right font-medium">Zamówione z odpowiedzianych</th>
+                  <th className="p-2 text-right font-medium">Wartość zamówień netto</th>
                 </tr>
               </thead>
               <tbody>
@@ -225,6 +295,11 @@ function InquiriesSection({ q }: { q: NonNullable<SalesReportData['inquiries']> 
                     <td className={`app-num p-2 text-right tabular-nums ${p.waiting > 0 ? 'font-semibold text-amber-800' : 'text-slate-400'}`}>
                       {groupInt(p.waiting)}
                     </td>
+                    <td className="app-num p-2 text-right whitespace-nowrap tabular-nums">{replyDuration(p.median_reply_seconds ?? null)}</td>
+                    <td className="app-num p-2 text-right whitespace-nowrap tabular-nums">
+                      {p.replied > 0 ? `${groupInt(p.ordered ?? 0)} · ${p.ordered_percent == null ? '—' : `${fmtDec(p.ordered_percent)}%`}` : '—'}
+                    </td>
+                    <td className="app-num p-2 text-right whitespace-nowrap tabular-nums">{fmtBigZl(Number(p.order_value ?? 0) || 0)}</td>
                   </tr>
                 ))}
               </tbody>

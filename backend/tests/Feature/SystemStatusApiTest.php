@@ -203,7 +203,7 @@ class SystemStatusApiTest extends TestCase
         Sanctum::actingAs($this->userWith(['admin.access', 'admin.system.view']));
         $gaps = collect($this->getJson('/api/admin/system-status')->assertOk()->json('gaps'))->keyBy('kind');
 
-        $this->assertSame(['tenders_without_time', 'tenders_without_notice', 'salespeople_without_operator', 'clients_without_xl', 'sold_items_without_card'], $gaps->keys()->all());
+        $this->assertSame(['tenders_without_time', 'tenders_without_notice', 'salespeople_without_operator', 'clients_without_xl', 'sold_items_without_card', 'clients_without_manager', 'salespeople_without_employee'], $gaps->keys()->all());
         $this->assertSame('Przetargi w toku bez godziny składania', $gaps['tenders_without_time']['label']);
         $this->assertSame(1, $gaps['tenders_without_time']['count'], 'Tylko w toku i z terminem od dziś.');
         $this->assertSame(3, $gaps['tenders_without_notice']['count'], 'W toku, złożone bez wyniku (do 60 dni po terminie); bez odrzuconych i z wynikiem.');
@@ -232,6 +232,52 @@ class SystemStatusApiTest extends TestCase
 
         config(['system_health.gap_rows_limit' => 1]);
         $this->assertCount(1, $this->getJson('/api/admin/system-status/gaps/clients_without_xl')->json('data'));
+    }
+
+    public function test_gaps_for_sales_targets_clients_without_manager_and_salespeople_without_employee(): void
+    {
+        $anna = User::factory()->withRole('handlowiec')->create(['name' => 'Anna Nowak']);
+        $anna->forceFill(['erp_employee_gid' => 501])->save();
+        $piotr = User::factory()->withRole('handlowiec')->create(['name' => 'Piotr Wiśniewski']);
+        User::factory()->withRole('kierownik')->create(); // nie handlowiec — nie jest brakiem
+
+        $xlClient = function (string $name, ?int $managerGid, ?int $ownerId, ?string $manager = null, string $sales = '0'): Client {
+            $client = Client::query()->create([
+                'name' => $name, 'xl_manager_gid' => $managerGid, 'owner_id' => $ownerId, 'account_manager' => $manager,
+                'nip' => '5260250274', 'sales_year' => 2026, 'sales_net' => $sales,
+            ]);
+            $client->forceFill(['xl_gid' => 10_000 + $client->id])->save();
+
+            return $client;
+        };
+        $xlClient('Przypisany przez pracownika XL', 501, null);
+        $xlClient('Przypisany w aplikacji', 999, $piotr->id);
+        $small = $xlClient('Pracownik bez konta', 999, null, 'Jan Kowalski', '3500.40');
+        $big = $xlClient('Bez opiekuna w XL', null, null, null, '125000');
+        Client::query()->create(['name' => 'Ręczny bez opiekuna']); // spoza ERP XL — nie jest brakiem
+
+        Sanctum::actingAs($this->userWith(['admin.access', 'admin.system.view']));
+        $gaps = collect($this->getJson('/api/admin/system-status')->assertOk()->json('gaps'))->keyBy('kind');
+        $this->assertSame(2, $gaps['clients_without_manager']['count']);
+        $this->assertSame(1, $gaps['salespeople_without_employee']['count']);
+        $this->assertStringContainsString('bez opiekuna', $gaps['clients_without_manager']['label']);
+        $this->assertStringContainsString('pracownika ERP XL', $gaps['salespeople_without_employee']['label']);
+
+        $rows = $this->getJson('/api/admin/system-status/gaps/clients_without_manager')->assertOk()->json('data');
+        $this->assertSame([$big->id, $small->id], array_column($rows, 'id'), 'Najwięcej zakupów pierwszy.');
+        $this->assertSame('/clients/'.$small->id, $rows[1]['url']);
+        $this->assertSame('NIP 5260250274 · opiekun w ERP XL: Jan Kowalski — nieprzypisany do konta · zakupy netto 2026: 3 500 zł', $rows[1]['detail']);
+        $this->assertStringContainsString('bez opiekuna w ERP XL', (string) $rows[0]['detail']);
+
+        $rows = $this->getJson('/api/admin/system-status/gaps/salespeople_without_employee')->assertOk()->json('data');
+        $this->assertSame([$piotr->id], array_column($rows, 'id'));
+        $this->assertSame('/admin', $rows[0]['url']);
+
+        // przypisanie pracownika XL do konta usuwa brak od razu
+        $piotr->forceFill(['erp_employee_gid' => 999])->save();
+        $gaps = collect($this->getJson('/api/admin/system-status')->json('gaps'))->keyBy('kind');
+        $this->assertSame(1, $gaps['clients_without_manager']['count']);
+        $this->assertSame(0, $gaps['salespeople_without_employee']['count']);
     }
 
     /** @param  list<string>  $permissions */

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { api, can, canAny } from '../lib/api'
+import { api, can, canAny, type DashTodoOfferValidityEnding } from '../lib/api'
 import { TENDER_STATUS_FLOW, tenderStatusLabel } from '../lib/tenderStatus'
 import { NavIcon, type NavIconName } from '../components/NavIcon'
 import { MyTargetCard } from '../components/dashboard/MyTargetCard'
@@ -30,6 +30,7 @@ export type DashTodo =
     }
   | { kind: 'tender_result_needed'; tender_id: number; number: string; title: string | null; client: string | null; deadline: string; url: string }
   | { kind: 'mention'; notification_id: string; title: string; body: string | null; url: string | null; created_at: string | null }
+  | DashTodoOfferValidityEnding
 
 /** Odpowiedź GET /dashboard — sekcja null, gdy użytkownik nie ma dostępu do modułu (DashboardController). */
 export type Dash = {
@@ -289,6 +290,20 @@ function dayPhrase(value: string): string {
   return `${dm}.${date.getFullYear()}`
 }
 
+/** Dzień tygodnia w dopełniaczu: „do poniedziałku”, „do środy”. */
+const WEEKDAY_UNTIL = ['do niedzieli', 'do poniedziałku', 'do wtorku', 'do środy', 'do czwartku', 'do piątku', 'do soboty']
+
+/** „do dziś 3.10”, „do jutra 4.10”, „do wtorku 6.10” — ostatni dzień ważności oferty względem dzisiejszego dnia. */
+function untilPhrase(value: string): string {
+  const days = daysFromToday(value)
+  const date = localDay(value)
+  const dm = `${date.getDate()}.${date.getMonth() + 1}`
+  if (days === 0) return `do dziś ${dm}`
+  if (days === 1) return `do jutra ${dm}`
+  if (days > 1 && days < 7) return `${WEEKDAY_UNTIL[date.getDay()]} ${dm}`
+  return `do ${dm}.${date.getFullYear()}`
+}
+
 /** Chwila (ISO) dla ludzi w strefie przeglądarki: „dziś 14:20” albo „1.10, 14:20”. */
 function momentLabel(iso: string | null): string {
   if (!iso) return ''
@@ -317,6 +332,8 @@ function TodoIcon({ kind, tone }: { kind: DashTodo['kind']; tone: keyof typeof T
       <path d="M4.5 6.5h15v9h-8l-4 3v-3h-3z" />
     ) : kind === 'tender_result_needed' ? (
       <path d="M6 20.5V4m0 .5h11l-2 4 2 4H6" />
+    ) : kind === 'offer_validity_ending' ? (
+      <path d="M5.5 4.5h3l1.5 4-2 1.2a10 10 0 0 0 6.3 6.3l1.2-2 4 1.5v3a1.5 1.5 0 0 1-1.6 1.5A15.5 15.5 0 0 1 4 6.1a1.5 1.5 0 0 1 1.5-1.6z" />
     ) : (
       <>
         <circle cx="12" cy="12" r="3.5" />
@@ -370,10 +387,12 @@ function emptyTodoText(access: TodoAccess): string {
   const kinds: string[] = []
   if (access.tenders) kinds.push('terminu składania w ciągu tygodnia')
   if (access.inquiries) kinds.push('zapytania czekającego na odpowiedź')
+  if (access.inquiries) kinds.push('oferty z kończącą się ważnością')
   if (access.tenders) kinds.push('wyniku przetargu do wpisania')
   if (kinds.length === 0) return 'Nie masz dziś pilnych spraw.'
   const list = kinds.length === 1 ? kinds[0] : `${kinds.slice(0, -1).join(', ')} ani ${kinds[kinds.length - 1]}`
-  return `Nie masz dziś pilnych spraw: żadnego ${list}.`
+  // „nie ma” + dopełniacz pasuje do każdego rodzaju („terminu”, „oferty”) — „żadnego oferty” byłoby błędem
+  return `Nie masz dziś pilnych spraw: nie ma ${list}.`
 }
 
 /** „Do zrobienia dziś” — sprawy zalogowanej osoby; każda prowadzi prosto do miejsca, gdzie się ją załatwia. */
@@ -458,6 +477,18 @@ function TodoCard({ items, access }: { items: DashTodo[]; access: TodoAccess }) 
                     {item.client && <> · {item.client}</>} <span className="text-slate-500">{item.number}</span>
                     <br />
                     <span className="text-slate-500">Termin składania minął {localDay(item.deadline).toLocaleDateString('pl-PL')}.</span>
+                  </TodoRow>
+                )
+              case 'offer_validity_ending':
+                return (
+                  <TodoRow key={`o${item.inquiry_id}`} kind={item.kind} tone="warn" action="Otwórz zapytanie" to={item.url}>
+                    <strong>Oferta ważna {untilPhrase(item.valid_until)}, klient jeszcze nie zamówił</strong>
+                    {item.client && <> · {item.client}</>}
+                    <br />
+                    <span className="text-slate-500">
+                      {item.subject ? `${item.subject}. ` : ''}Warto zadzwonić.
+                      {item.has_hint && ' ERP XL podpowiada możliwe zamówienie z tej oferty — sprawdź i wpisz wynik.'}
+                    </span>
                   </TodoRow>
                 )
               case 'mention':

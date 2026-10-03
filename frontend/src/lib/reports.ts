@@ -161,7 +161,9 @@ export type SalesTargetsReport = {
   months: { key: string; label: string }[]
   /** miesiąc zamknięty (miniony) */
   closed: boolean
-  /** dni robocze miesiąca w toku; null — miesiąc zamknięty */
+  /** miesiąc przyszły (następny) — cele ustalane z wyprzedzeniem, sprzedaży i realizacji jeszcze nie ma */
+  upcoming: boolean
+  /** dni robocze miesiąca w toku; null — miesiąc zamknięty albo przyszły */
   workdays: { total: number; elapsed: number } | null
   /** dane sprzedaży z ERP XL do dnia (ostatni nocny odczyt) */
   data_until: string | null

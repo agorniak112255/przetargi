@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Client;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class ClientController extends Controller
 {
@@ -50,6 +51,10 @@ class ClientController extends Controller
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'nip' => ['nullable', 'string', 'max:20'],
             'city' => ['nullable', 'string', 'max:100'],
+            // opiekun w aplikacji (karta klienta, cele handlowców — ClientAssignment); null = bez opiekuna
+            'owner_id' => ['sometimes', 'nullable', 'integer', Rule::exists('users', 'id')],
+        ], [
+            'owner_id.exists' => 'Wybrany opiekun nie ma konta w aplikacji.',
         ]);
 
         $client->update($data);

@@ -301,8 +301,10 @@ export function Products() {
   // lista otwarta z kreatora kampanii (?kampania=ID) — „Dodaj do K-…” i powrót do kampanii
   const campaignPick = useCampaignTarget()
   const hasActions = canEnrich || canExportPresta || canDelete
-  const [q, setQ] = useState('')
-  const [debouncedQ, setDebouncedQ] = useState('')
+  // Fraza z adresu (?q=) — „Pokaż wszystkie” z wyszukiwania globalnego otwiera listę z tą frazą.
+  const urlQ = searchParams.get('q') ?? ''
+  const [q, setQ] = useState(urlQ)
+  const [debouncedQ, setDebouncedQ] = useState(() => urlQ.trim())
   const [manufacturer, setManufacturer] = useState(() => searchParams.get('manufacturer') ?? '')
   // Karty z cennika konta B2B (link z Cenników) — dystrybutor sprzedaje cudze marki, więc nie filtr producenta.
   const b2bAccount = searchParams.get('b2b_account') ?? ''
@@ -382,6 +384,16 @@ export function Products() {
     setManufacturer(searchParams.get('manufacturer') ?? '')
     setPage(1)
   }, [searchParams])
+
+  // Ponowne „Pokaż wszystkie” przy otwartej liście zmienia tylko ?q= (bez ponownego montowania strony).
+  const lastUrlQ = useRef(urlQ)
+  useEffect(() => {
+    if (lastUrlQ.current === urlQ) return
+    lastUrlQ.current = urlQ
+    setQ(urlQ)
+    setDebouncedQ(urlQ.trim())
+    setPage(1)
+  }, [urlQ])
 
   useEffect(() => {
     lastSelectIndex.current = null

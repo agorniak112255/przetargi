@@ -311,7 +311,7 @@ function GapsCard({ gaps }: { gaps: SystemStatus['gaps'] }) {
   }
 
   return (
-    <Card title="Dane do uzupełnienia" lead="Od nich zależą raport skuteczności przetargów, pobieranie wyników z Biuletynu i podpowiedzi z ERP XL.">
+    <Card title="Dane do uzupełnienia" lead="Od nich zależą raport skuteczności przetargów, pobieranie wyników z Biuletynu, podpowiedzi z ERP XL i cele handlowców.">
       <ul>
         {gaps.map((g) => (
           <li key={g.kind} className="border-b border-slate-100 py-2 last:border-0">
