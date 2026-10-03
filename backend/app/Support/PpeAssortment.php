@@ -168,12 +168,17 @@ final class PpeAssortment
      */
     private const FAMILY_PATTERNS = [
         self::FAMILY_GLOVES => '/\b(rekawic|glove|handschuh|rukavic|mitten)\w*/u',
-        self::FAMILY_RESPIRATORY => '/\b(polmask|polomask|respirator|aparat\w*\s+oddech|drog[iy]\s+oddech|filtrow?\w*\s+oddech'
+        // „dróg oddechowych” → „drog oddechowych” po normalize() — samo drog[iy] gubiło dopełniacz
+        // („Noszaki do aparatów ochrony dróg oddechowych”, 03.10.2026). Aparat autonomiczny / SCBA to ochrona
+        // dróg oddechowych; „Full-Face Helmet Mask” (MSA 3S) to maska — „helmet” w środku nie robi z niej hełmu.
+        self::FAMILY_RESPIRATORY => '/\b(polmask|polomask|respirator|aparat\w*\s+oddech|drog\w*\s+oddech|filtrow?\w*\s+oddech'
+            .'|aparat\w*\s+(autonomiczn|powietrzn|ucieczkow)|autonomiczn\w*\s+aparat|noszak\w*\s+(do\s+)?aparat'
+            .'|scba|breathing\s+apparatus|full\s*face\s+(helmet\s+)?mask'
             .'|maska\s+(twarzow|pelnotwarz|filtruj|przeciwpyl)|czesc\s+twarzow|semi\s*mask|half\s*mask|dust\s*mask'
             .'|pochlaniacz|filtropochlaniacz|ffp[123]?)\w*/u',
         self::FAMILY_FACE => '/\b(przylbic|oslon\w{0,10}\s+\w{0,16}twarz|twarz\w{0,8}\s+\w{0,12}oslon'
-            .'|oslona\s+twarzy|face\s*shield|siatk\w*\s+(na\s+)?twarz|maska\s+spawal)\w*/u',
-        self::FAMILY_EYES => '/\b(okular|gogl|szyba\s+ochronn|spectacle|eyewear|bryl)\w*|\bglasses\b/u',
+            .'|oslona\s+twarzy|face\s*shield|siatk\w*\s+(na\s+)?twarz|maska\s+spawal|visor)\w*/u',
+        self::FAMILY_EYES => '/\b(okular|gogl|goggle|szyba\s+ochronn|spectacle|eyewear|bryl)\w*|\bglasses\b/u',
         self::FAMILY_HEARING => '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+(sluch|przeciwhal)'
             .'|stoper\w*|'.self::EARPLUG_ZATYCZKI.'|ochrona\s+sluchu|sluchawk\w*\s+ochron|ear\s*(muff|plug|defender)|earmuff|earplug'
             .'|chranic\w*\s+sluchu|sluchatk)\w*/u',
@@ -565,6 +570,14 @@ final class PpeAssortment
             $t
         );
         $maskAt = $this->firstWordOffset('/\b(polmask|maska|ffp|pelnotwarz|respirator)\w*/u', $t);
+        // Aparat kompletny ≠ jego część — też po pozycji: „Aparat … z noszakiem” to aparat,
+        // „Noszaki do aparatów ochrony dróg oddechowych” to część (03.10.2026: noszak dostał aparat ProPak z 95).
+        $apparatusAt = $this->firstWordOffset(self::BREATHING_APPARATUS, $t);
+        $partAt = $this->apparatusPart($t)['at'] ?? null;
+        $kitAt = $apparatusAt === null ? $partAt : ($partAt === null ? $apparatusAt : min($apparatusAt, $partAt));
+        if ($kitAt !== null && ($filterAt === null || $kitAt < $filterAt) && ($maskAt === null || $kitAt < $maskAt)) {
+            return $kitAt === $partAt ? 'apparatus_part' : 'apparatus';
+        }
         // Rzeczownik na początku mówi, czym wyrób jest: „Pochłaniacz … na półmaskach i maskach
         // pełnotwarzowych” to filtr, „Półmaska … z filtrami” to półmaska.
         if ($filterAt !== null && ($maskAt === null || $filterAt < $maskAt)) {
@@ -586,6 +599,56 @@ final class PpeAssortment
         }
 
         return null;
+    }
+
+    /** Kompletny aparat oddechowy (autonomiczny, powietrzny, ucieczkowy, ochrony dróg oddechowych, SCBA) — tekst po normalize(). */
+    private const BREATHING_APPARATUS = '/\b(aparat\w*\s+(autonomiczn|powietrzn|oddechow|ucieczkow)|autonomiczn\w*\s+aparat'
+        .'|aparat\w*\s+ochron\w*\s+(drog|ukladu)\w*\s+oddech|scba|breathing\s+apparatus)\w*/u';
+
+    /**
+     * Części aparatu oddechowego według rodzaju: noszak ≠ butla ≠ reduktor. Stelaż, plecak i uprząż tylko
+     * „aparatu” — sama uprząż to szelki asekuracyjne.
+     *
+     * @var array<string, string>
+     */
+    private const APPARATUS_PARTS = [
+        'carrier' => '/\b(noszak\w*|(stelaz|plecak|uprz[ae]z)\w*\s+(do\s+)?aparat\w*)/u',
+        // rzeczownik „butla”, nie przymiotnik: „Butlowy aparat powietrzny” to aparat
+        'cylinder' => '/\bbutl(?:a|e|i|y|ami|ach|om)?\b/u',
+        'reducer' => '/\breduktor\w*/u',
+        'demand_valve' => '/\bautomat\w*\s+(oddechow|plucn)\w*/u',
+        'hose' => '/\bw[ae]z\w*\s+(\w+\s+)?sredni\w*\s+cisnien\w*/u',
+    ];
+
+    /**
+     * Pierwsza w tekście część aparatu oddechowego (po normalize()).
+     *
+     * @return array{kind: string, at: int}|null
+     */
+    private function apparatusPart(string $t): ?array
+    {
+        $best = null;
+        foreach (self::APPARATUS_PARTS as $kind => $pattern) {
+            $at = $this->firstWordOffset($pattern, $t);
+            if ($at !== null && ($best === null || $at < $best['at'])) {
+                $best = ['kind' => $kind, 'at' => $at];
+            }
+        }
+
+        return $best;
+    }
+
+    /** Obie strony to części aparatu, ale różnego rodzaju (noszak ≠ butla). Nieznany rodzaj = brak wiedzy. */
+    public function apparatusPartsConflict(string $requirement, string $productText): bool
+    {
+        if ($this->knownRespiratoryType($requirement) !== 'apparatus_part'
+            || $this->knownRespiratoryType($productText) !== 'apparatus_part') {
+            return false;
+        }
+        $need = $this->apparatusPart($this->normalize($requirement))['kind'] ?? null;
+        $have = $this->apparatusPart($this->normalize($productText))['kind'] ?? null;
+
+        return $need !== null && $have !== null && $need !== $have;
     }
 
     private function gloveType(string $t): ?string
@@ -1053,11 +1116,46 @@ final class PpeAssortment
             && preg_match('/\b(helm|kask)\w*/u', $t) === 1) {
             return 'liner';
         }
+        if ($this->namesHelmetAccessory($t)) {
+            return 'accessory';
+        }
         if (preg_match('/\b(helm|kask)\w*/u', $t) === 1) {
             return 'helmet';
         }
 
         return null;
+    }
+
+    /**
+     * Akcesorium hełmu przed hełmem: „Czołówka do hełmu strażackiego”, „Pokrowiec na kask”, „Visor for 3M helmet”.
+     * „Hełm … z latarką” czy „kask z nausznikami” to hełm — rzeczownik hełmu stoi pierwszy.
+     */
+    private const HELMET_ACCESSORY_FOR = '/\b(?:(?:pokrowi|oslon\w*\s+kark|mocowani|uchwyt|adapter|latark|lamp|czolowk|szybk|wizjer'
+        .'|wysciolk|wklad(?:u|y|ow)?\b|interfejs|zestaw\w*\s+sluchawkow)\w*(?:\s+\w+){0,2}?\s+(?:do|na|dla)'
+        .'|(?:cover|neck\s*curtain|lamp|lights?\b|mount|holder|bracket|padding|visor|badge|interface|headset)\w*(?:\s+\w+){0,2}?\s+for)'
+        .'\s+(?:\w+\s+){0,2}?(?:helm|kask|hard\s*hat)/u';
+
+    /** „Helmet cover”, „helmet neck curtain” — angielski rzeczownik akcesorium tuż po „helmet” („helmet liner” to wkładka). */
+    private const HELMET_ACCESSORY_AFTER = '/\bhelmets?\s+(?:cover|neck\s*curtain|neckcurtain|lamp|lights?\b|mount|holder|bracket|padding|visor'
+        .'|badge|interface|headset|chin\s*strap)\w*/u';
+
+    /** Akcesorium bez słowa hełm w nazwie — MSA „Gallet F1XF i akcesoria – Neckcurtain…”, „Kitfix F1XF”. */
+    private const HELMET_ACCESSORY_BARE = '/\b(?:neck\s*curtain|kitfix|cradle|padding|wysciolk|pokrowi|oslon\w*\s+kark'
+        .'|pas\w*\s+(?:\w+\s+)?podbrodkow|chin\s*straps?)\w*/u';
+
+    /** Tekst po normalize() nazywa akcesorium hełmu, a nie hełm (03.10.2026: pule „Hełm strażacki” zalewały akcesoria). */
+    private function namesHelmetAccessory(string $t): bool
+    {
+        $helmAt = $this->firstWordOffset('/\b(helm|kask|hard\s*hats?\b)\w*/u', $t);
+        foreach ([self::HELMET_ACCESSORY_FOR, self::HELMET_ACCESSORY_BARE] as $pattern) {
+            $at = $this->firstWordOffset($pattern, $t);
+            if ($at !== null && ($helmAt === null || $at < $helmAt)) {
+                return true;
+            }
+        }
+        $afterAt = $this->firstWordOffset(self::HELMET_ACCESSORY_AFTER, $t);
+
+        return $afterAt !== null && $afterAt === $helmAt;
     }
 
     /** Czepek / wkładka pod hełm — nie zwykła czapka i nie kurtka ESD. */
@@ -1637,7 +1735,8 @@ final class PpeAssortment
     {
         $identity = $this->productIdentityText($product);
         $productType = $this->productRespiratoryType($product);
-        if ($this->respiratoryTypesConflict($this->knownRespiratoryType($requirement), $productType)) {
+        if ($this->respiratoryTypesConflict($this->knownRespiratoryType($requirement), $productType)
+            || $this->apparatusPartsConflict($requirement, $this->productNameText($product))) {
             return false;
         }
 
@@ -1799,7 +1898,8 @@ final class PpeAssortment
             return false;
         }
         if ($family === self::FAMILY_RESPIRATORY) {
-            return $this->respiratoryTypesConflict($this->knownRespiratoryType($requirement), $this->productRespiratoryType($product));
+            return $this->respiratoryTypesConflict($this->knownRespiratoryType($requirement), $this->productRespiratoryType($product))
+                || $this->apparatusPartsConflict($requirement, $this->productNameText($product));
         }
         $reqType = $this->articleType($requirement, $family);
         $prodType = $this->articleTypePreferIdentity(

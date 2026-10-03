@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\PpeAssortment;
 use App\Support\ProductCrossRefFilters;
 use App\Support\ProductSizeVariant;
 
@@ -43,6 +44,7 @@ final class ProductCrossRefService
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly ProductCrossRefFilters $filters,
         private readonly ProductSizeVariant $sizes,
+        private readonly PpeAssortment $assortment = new PpeAssortment,
     ) {}
 
     /**
@@ -113,6 +115,11 @@ final class ProductCrossRefService
             $attrs = $this->bhpAttributes->forProduct($product);
 
             if (! $this->isEquivalentArticle($seedAttrs, $attrs)) {
+                continue;
+            }
+            // dwie części aparatu oddechowego mają ten sam typ, a mogą być różnymi wyrobami (noszak ≠ butla)
+            if (($seedAttrs['typ_wyrobu'] ?? null) === 'apparatus_part'
+                && $this->assortment->apparatusPartsConflict((string) $seed->name, (string) $product->name)) {
                 continue;
             }
 

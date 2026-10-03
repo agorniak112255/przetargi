@@ -101,6 +101,20 @@ final class PpeAssortmentTest extends TestCase
             ['Zatyczki do uszu MAX.', PpeAssortment::FAMILY_HEARING],
             ['Wkładki z pianki, przeciwhałasowe zatyczki', PpeAssortment::FAMILY_HEARING],
             ['WKŁADKI PRZECIWHAŁASOWE 3M E-A-Rsoft ES-01-001 - KARTON 250 PAR.', PpeAssortment::FAMILY_HEARING],
+            // „dróg” → „drog” po normalizacji; aparaty i ich części to drogi oddechowe (przetarg z ogłoszenia, 03.10.2026)
+            ['Ochrona dróg oddechowych', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Noszaki do aparatów ochrony dróg oddechowych', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Noszak do aparatu ProPak', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Autonomiczny aparat powietrzny 3M Scott ProPak Sigma, 2027150', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Aparat ucieczkowy 15 min', PpeAssortment::FAMILY_RESPIRATORY],
+            ['Self-contained breathing apparatus SCBA, 300 bar', PpeAssortment::FAMILY_RESPIRATORY],
+            // MSA: maska z „Helmet” w nazwie — pierwszy wygrywa rzeczownik maski, nie hełmu
+            ['3S Full-Face Helmet Mask – 3S-H-PS-MaXX-F1 Mask', PpeAssortment::FAMILY_RESPIRATORY],
+            ['X1000 – Clear vented ballistic goggles', PpeAssortment::FAMILY_EYES],
+            ['Clear PC visor V5A', PpeAssortment::FAMILY_FACE],
+            ['Visor for 3M helmet G3000', PpeAssortment::FAMILY_HEAD],
+            ['VFR EVO firefighter helmet MD1416', PpeAssortment::FAMILY_HEAD],
+            ['Gallet F1XF helmet with visor', PpeAssortment::FAMILY_HEAD],
         ];
     }
 
@@ -1362,6 +1376,101 @@ final class PpeAssortmentTest extends TestCase
             'Rękawice nitrylowe antyprzecięciowe',
             $this->card('R-1', 'Rękawice powlekane poliuretanem')
         ), 'typy rękawic to nakładające się cechy');
+    }
+
+    /**
+     * Przetarg z ogłoszenia (03.10.2026): „Noszaki do aparatów ochrony dróg oddechowych” dostały kompletny aparat
+     * 3M Scott ProPak z 95 — rodzina nie łapała „dróg”, a część i aparat nie były różnymi podtypami.
+     */
+    #[Test]
+    public function breathing_apparatus_part_is_not_the_apparatus(): void
+    {
+        $carriers = 'Noszaki do aparatów ochrony dróg oddechowych';
+        $propak = $this->card('2027150', 'Autonomiczny aparat powietrzny 3M Scott ProPak Sigma, 2027150', ['manufacturer' => '3M']);
+        $carrier = $this->card('NOS-1', 'Noszak do aparatu ProPak');
+        $cylinder = $this->card('BUT-1', 'Butla kompozytowa 6,8 l do aparatu powietrznego');
+
+        $this->assertSame('apparatus_part', $this->assortment->articleType($carriers));
+        $this->assertSame('apparatus', $this->assortment->articleType((string) $propak->name));
+        $this->assertSame('apparatus', $this->assortment->articleType('Aparat powietrzny butlowy z noszakiem i maską pełnotwarzową'));
+        $this->assertSame('apparatus', $this->assortment->articleType('Self-contained breathing apparatus SCBA with carrier'));
+        $this->assertSame('apparatus_part', $this->assortment->articleType((string) $cylinder->name));
+        $this->assertSame('apparatus_part', $this->assortment->articleType('Butle do aparatów powietrznych'));
+        $this->assertSame('apparatus', $this->assortment->articleType('Butlowy aparat powietrzny'), 'przymiotnik „butlowy” to nie butla');
+        $this->assertSame('apparatus', $this->assortment->articleType('Aparaty ochrony dróg oddechowych z noszakiem'));
+        $this->assertSame('fullface', $this->assortment->articleType('Maska pełnotwarzowa do aparatu powietrznego'));
+        $this->assertSame('filter', $this->assortment->articleType('Pochłaniacz A2 do aparatu oddechowego'));
+
+        $this->assertFalse($this->assortment->compatibleProduct($carriers, $propak), 'noszak ≠ kompletny aparat');
+        $this->assertTrue($this->assortment->subtypesConflict($carriers, $propak));
+        $this->assertFalse($this->assortment->compatibleProduct('Autonomiczny aparat powietrzny z maską', $carrier), 'aparat ≠ sam noszak');
+        $this->assertTrue($this->assortment->compatibleProduct($carriers, $carrier));
+        $this->assertFalse($this->assortment->subtypesConflict($carriers, $carrier));
+        $this->assertFalse($this->assortment->compatibleProduct($carriers, $cylinder), 'noszak ≠ butla');
+        $this->assertTrue($this->assortment->subtypesConflict($carriers, $cylinder));
+        // wyszukiwarka odpowiedników (ProductCrossRefService) — ten sam typ apparatus_part, różne części
+        $this->assertTrue($this->assortment->apparatusPartsConflict((string) $carrier->name, (string) $cylinder->name));
+        $this->assertFalse($this->assortment->apparatusPartsConflict((string) $carrier->name, (string) $carrier->name));
+        $this->assertTrue($this->assortment->compatibleProduct('Aparat powietrzny z noszakiem i butlą 6,8 l', $propak));
+        $this->assertFalse($this->assortment->compatibleProduct('Maska pełnotwarzowa EN 136', $propak));
+    }
+
+    /**
+     * Pula „Hełm strażacki” była zalana akcesoriami MSA Gallet (pokrowiec, osłona karku, Kitfix, mocowanie lampy),
+     * a hełm VFR EVO z angielską nazwą wypadał (03.10.2026). Hełm z dodatkiem („z latarką”) dalej jest hełmem.
+     */
+    #[Test]
+    public function helmet_accessory_is_not_a_helmet(): void
+    {
+        $req = 'Hełm strażacki';
+        $cover = $this->card('GA1414', 'Gallet F1XF i akcesoria – Helmet cover F1XF with aluminiz. coat. M', [
+            'ppe_family' => PpeAssortment::FAMILY_HEAD,
+            'category' => 'Ochrona głowy',
+        ]);
+        $neck = $this->card('GA1430', 'Gallet F1XF i akcesoria – Neckcurtain, F1XF, 3 Layers, Nomex', [
+            'ppe_family' => PpeAssortment::FAMILY_HEAD,
+            'category' => 'Hełmy strażackie',
+        ]);
+        $lamp = $this->card('GA2050', 'Mocowania lampy – L2XR Czołówka do hełmu strażackiego GALLET F2XR', [
+            'ppe_family' => PpeAssortment::FAMILY_HEAD,
+        ]);
+        $kitfix = $this->card('GA1601', 'Kitfix F1XF', [
+            'ppe_family' => PpeAssortment::FAMILY_HEAD,
+            'category' => 'Hełmy',
+        ]);
+        $vfr = $this->card('MD1416', 'VFR EVO firefighter helmet MD1416', ['category' => 'Ochrona głowy']);
+        $withVisor = $this->card('GA0001', 'Gallet F1XF helmet with visor');
+        $withLamp = $this->card('H-1', 'Hełm strażacki z latarką');
+
+        foreach ([$cover, $neck, $lamp, $kitfix] as $accessory) {
+            $this->assertFalse($this->assortment->compatibleProduct($req, $accessory), (string) $accessory->name);
+            $this->assertTrue($this->assortment->subtypesConflict($req, $accessory), (string) $accessory->name);
+        }
+        foreach ([$vfr, $withVisor, $withLamp] as $helmet) {
+            $this->assertTrue($this->assortment->compatibleProduct($req, $helmet), (string) $helmet->name);
+            $this->assertFalse($this->assortment->subtypesConflict($req, $helmet), (string) $helmet->name);
+        }
+
+        $this->assertSame('helmet', $this->assortment->articleType($req));
+        $this->assertSame('accessory', $this->assortment->articleType('Pokrowiec ochronny na hełm'));
+        $this->assertSame('accessory', $this->assortment->articleType('Latarka czołowa do kasku'));
+        $this->assertSame('accessory', $this->assortment->articleType('Visor for 3M helmet G3000'));
+        $this->assertSame('helmet', $this->assortment->articleType('Kask przemysłowy z nausznikami'));
+        $this->assertSame('helmet', $this->assortment->articleType('Kask z uchwytem na latarkę'));
+        $this->assertSame('liner', $this->assortment->articleType('Helmet liner winter, fleece'));
+        // pasek podbródkowy to akcesorium (golden „Pasek podbródkowy 3 punktowy do hełmu G3000”); hełm z paskiem — hełm
+        $this->assertSame('accessory', $this->assortment->articleType('Pasek podbródkowy 3 punktowy do hełmu G3000'));
+        $this->assertSame('accessory', $this->assortment->articleType('3M GH1 3-punktowy pasek podbródkowy do hełmów G3000'));
+        $this->assertSame('accessory', $this->assortment->articleType('Helmet chin strap 4-point'));
+        $this->assertSame('helmet', $this->assortment->articleType('Hełm ochronny 3M G3000 z paskiem podbródkowym'));
+        // „lightweight” to cecha hełmu, nie lampa
+        $this->assertSame('helmet', $this->assortment->articleType('Safety helmet lightweight ABS'));
+        $this->assertSame('accessory', $this->assortment->articleType('Helmet light LED for firefighter helmet'));
+
+        // wymaganie na akcesorium nie przyjmuje hełmu
+        $lampReq = 'Latarka do hełmu strażackiego';
+        $this->assertFalse($this->assortment->compatibleProduct($lampReq, $vfr));
+        $this->assertTrue($this->assortment->compatibleProduct($lampReq, $lamp));
     }
 
     /**
