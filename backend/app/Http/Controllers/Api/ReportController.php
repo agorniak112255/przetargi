@@ -140,6 +140,28 @@ class ReportController extends Controller
     }
 
     /**
+     * Skuteczność przetargów (części wygrane / przegrane, powody, konkurenci) — okres po dacie terminu.
+     * ZAŚLEPKA kroku 0 — pełną logikę dopisuje strumień B (TenderEffectivenessReport).
+     */
+    public function effectiveness(Request $request): JsonResponse
+    {
+        $this->requireAny($request, ['tenders.view_own', 'tenders.view_all']);
+
+        return response()->json(['message' => 'Jeszcze niegotowe'], 501);
+    }
+
+    /**
+     * Skuteczność przetargów do Excela (CSV ze średnikiem i BOM, wiersz na część).
+     * ZAŚLEPKA kroku 0 — pełną logikę dopisuje strumień B.
+     */
+    public function effectivenessCsv(Request $request): JsonResponse|StreamedResponse
+    {
+        $this->requireAny($request, ['tenders.view_own', 'tenders.view_all']);
+
+        return response()->json(['message' => 'Jeszcze niegotowe'], 501);
+    }
+
+    /**
      * Raport wymaga, poza reports.view z trasy, uprawnienia do danych, z których powstaje.
      *
      * @param  list<string>  $permissions

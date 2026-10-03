@@ -19,6 +19,7 @@ import { AdminDescriptionTemplates } from './pages/AdminDescriptionTemplates'
 import { AdminDictionaries } from './pages/AdminDictionaries'
 import { AdminErpItems } from './pages/AdminErpItems'
 import { AdminSmtp } from './pages/AdminSmtp'
+import { AdminSystemStatus } from './pages/AdminSystemStatus'
 import { AdminUsers } from './pages/AdminUsers'
 import { CampaignEditor } from './pages/CampaignEditor'
 import { CampaignTemplateEditor } from './pages/CampaignTemplateEditor'
@@ -383,6 +384,14 @@ export default function App() {
                 element={
                   <PermissionGuard permission="admin.ai_stats.view">
                     <AdminAiStats />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="stan-systemu"
+                element={
+                  <PermissionGuard permission="admin.system.view">
+                    <AdminSystemStatus />
                   </PermissionGuard>
                 }
               />

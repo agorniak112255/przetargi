@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\Admin\PrestaCategoryController as AdminPrestaCatego
 use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
 use App\Http\Controllers\Api\Admin\RoleController as AdminRoleController;
 use App\Http\Controllers\Api\Admin\SessionController as AdminSessionController;
+use App\Http\Controllers\Api\Admin\SystemStatusController as AdminSystemStatusController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AuthController;
@@ -35,6 +36,7 @@ use App\Http\Controllers\Api\Chat\LiveKitWebhookController;
 use App\Http\Controllers\Api\Chat\RealtimeController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
+use App\Http\Controllers\Api\CompetitorController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\EmailSuppressionController;
 use App\Http\Controllers\Api\ExchangeRateController;
@@ -44,6 +46,7 @@ use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\InventoryRwPwController;
 use App\Http\Controllers\Api\MailingListController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\NotificationPreferenceController;
 use App\Http\Controllers\Api\OfferComposeController;
 use App\Http\Controllers\Api\PrestaExportController;
 use App\Http\Controllers\Api\PrestaShopSearchController;
@@ -65,6 +68,7 @@ use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\SearchEventActionController;
 use App\Http\Controllers\Api\TenderActivityController;
 use App\Http\Controllers\Api\TenderBattlecardController;
+use App\Http\Controllers\Api\TenderBzpController;
 use App\Http\Controllers\Api\TenderCommentController;
 use App\Http\Controllers\Api\TenderConditionController;
 use App\Http\Controllers\Api\TenderConflictsController;
@@ -76,6 +80,7 @@ use App\Http\Controllers\Api\TenderImportController;
 use App\Http\Controllers\Api\TenderInvitationController;
 use App\Http\Controllers\Api\TenderItemController;
 use App\Http\Controllers\Api\TenderMatchController;
+use App\Http\Controllers\Api\TenderResultController;
 use App\Http\Controllers\Api\UnsubscribeController;
 use App\Http\Controllers\Api\UserDirectoryController;
 use App\Http\Controllers\Api\UserMailAccountController;
@@ -154,6 +159,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::patch('/me/margin', [AuthController::class, 'updateDefaultMargin']);
     Route::post('/me/password', [AuthController::class, 'updatePassword']);
     Route::post('/me/presence', [AuthController::class, 'presence']);
+    // Moje konto › Powiadomienia: zdarzenia × dzwonek / e-mail i momenty przypomnień o terminie
+    Route::get('/me/notification-preferences', [NotificationPreferenceController::class, 'show']);
+    Route::put('/me/notification-preferences', [NotificationPreferenceController::class, 'update']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::get('/dashboard', DashboardController::class)->middleware('permission:dashboard.view');
@@ -164,6 +172,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/reports/sources', [ReportController::class, 'sources'])->middleware('permission:reports.view');
     Route::get('/reports/sales', [ReportController::class, 'sales'])->middleware('permission:reports.view');
     Route::get('/reports/customers', [ReportController::class, 'customers'])->middleware('permission:reports.view');
+    // skuteczność przetargów: poza reports.view kontroler wymaga tenders.view_own albo tenders.view_all
+    Route::get('/reports/effectiveness', [ReportController::class, 'effectiveness'])->middleware('permission:reports.view');
+    Route::get('/reports/effectiveness/csv', [ReportController::class, 'effectivenessCsv'])->middleware('permission:reports.view');
 
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
@@ -173,6 +184,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
     Route::get('/tenders', [TenderController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
     Route::post('/tenders', [TenderController::class, 'store'])->middleware('permission:tenders.create');
+    // firmy konkurencji — podpowiedzi w wyniku przetargu
+    Route::get('/competitors', [CompetitorController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
 
     Route::middleware(['permission:tenders.view_own|tenders.view_all', 'tender.access'])->group(function (): void {
         Route::get('/tenders/{tender}', [TenderController::class, 'show']);
@@ -185,6 +198,16 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/tenders/{tender}/comments', [TenderCommentController::class, 'index']);
         Route::post('/tenders/{tender}/comments', [TenderCommentController::class, 'store'])->middleware('permission:tenders.comment');
         Route::delete('/tenders/{tender}/comments/{comment}', [TenderCommentController::class, 'destroy'])->middleware('permission:tenders.comment');
+        Route::get('/tenders/{tender}/mention-candidates', [TenderCommentController::class, 'mentionCandidates'])->middleware('permission:tenders.comment');
+        // wynik przetargu per część; edycja jak oferta (tenders.edit_offer + dostęp do przetargu), bez ograniczenia statusem
+        Route::get('/tenders/{tender}/result', [TenderResultController::class, 'show']);
+        Route::put('/tenders/{tender}/result', [TenderResultController::class, 'update'])->middleware('permission:tenders.edit_offer');
+        // część innego przetargu → 404 (scopeBindings: {lot} szukane w $tender->lots())
+        Route::delete('/tenders/{tender}/result/lots/{lot}', [TenderResultController::class, 'destroyLot'])
+            ->whereNumber('lot')
+            ->scopeBindings()
+            ->middleware('permission:tenders.edit_offer');
+        Route::post('/tenders/{tender}/result/bzp-check', [TenderBzpController::class, 'check'])->middleware('permission:tenders.edit_offer');
         Route::post('/tenders/{tender}/import', [TenderImportController::class, 'store'])->middleware('permission:tenders.import');
         Route::get('/tenders/{tender}/documents', [TenderDocumentController::class, 'index']);
         Route::post('/tenders/{tender}/documents/analyze', [TenderDocumentController::class, 'analyze'])->middleware('permission:tenders.import');
@@ -540,6 +563,15 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
         Route::get('/ai-stats', [AdminAiStatsController::class, 'index'])
             ->middleware('permission:admin.ai_stats.view');
+
+        // Stan systemu: przebiegi zadań, alerty, dane do uzupełnienia
+        Route::middleware('permission:admin.system.view')->group(function (): void {
+            Route::get('/system-status', [AdminSystemStatusController::class, 'show']);
+            Route::get('/system-status/gaps/{kind}', [AdminSystemStatusController::class, 'gaps'])
+                ->whereIn('kind', AdminSystemStatusController::GAP_KINDS);
+            Route::post('/system-alerts/{alert}/mute', [AdminSystemStatusController::class, 'mute'])->whereNumber('alert');
+            Route::post('/system-alerts/{alert}/unmute', [AdminSystemStatusController::class, 'unmute'])->whereNumber('alert');
+        });
 
         // Powiązania towarów Comarch ERP XL z kartami
         Route::get('/erp-items', [ErpItemController::class, 'index'])->middleware('permission:admin.erp_links.view');

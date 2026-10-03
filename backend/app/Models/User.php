@@ -51,6 +51,8 @@ class User extends Authenticatable
             'last_login_at' => 'datetime',
             'last_seen_at' => 'datetime',
             'thunderbird_offers_seen_at' => 'datetime',
+            // tylko nadpisania wartości domyślnych z config/notifications.php (NotificationPreferences)
+            'notification_preferences' => 'array',
         ];
     }
 

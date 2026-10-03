@@ -14,7 +14,16 @@ class TenderComment extends Model
         'tender_item_id',
         'user_id',
         'body',
+        'mentioned_user_ids',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            // osoby wybrane z listy „@” (identyfikatory użytkowników) — null = komentarz bez wzmianek
+            'mentioned_user_ids' => 'array',
+        ];
+    }
 
     public function tender(): BelongsTo
     {

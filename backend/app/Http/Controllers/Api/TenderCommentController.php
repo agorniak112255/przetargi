@@ -61,6 +61,15 @@ class TenderCommentController extends Controller
         return response()->json($comment->load(['user:id,name,role', 'item:id,line_no']), 201);
     }
 
+    /**
+     * Osoby do wzmianki „@” w komentarzu: opiekun, zaproszeni i osoby z tenders.view_all, bez pytającego.
+     * ZAŚLEPKA kroku 0 — pełną logikę dopisuje strumień C.
+     */
+    public function mentionCandidates(Request $request, Tender $tender): JsonResponse
+    {
+        return response()->json(['message' => 'Jeszcze niegotowe'], 501);
+    }
+
     public function destroy(Request $request, Tender $tender, TenderComment $comment): JsonResponse
     {
         if ($comment->tender_id !== $tender->id) {

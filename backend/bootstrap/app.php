@@ -4,6 +4,7 @@ use App\Http\Middleware\EnsureTenderAccess;
 use App\Http\Middleware\LogApiActivity;
 use App\Models\B2bSyncRun;
 use App\Services\Enrichment\JinaAccountService;
+use App\Services\System\ScheduledTaskRecorder;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -92,6 +93,19 @@ return Application::configure(basePath: dirname(__DIR__))
                 Log::info('Jina usage snapshot skipped', ['error' => $e->getMessage()]);
             }
         })->hourly()->name('jina-usage-snapshot')->withoutOverlapping();
+
+        // Nowe zadania (od 03.10.2026) planowane w czasie polskim — istniejące wyżej zostają w UTC.
+        // Biuletyn Zamówień Publicznych: ogłoszenia o zamówieniu i o wyniku z ostatnich dni, łączenie z przetargami
+        $schedule->command('bzp:fetch')->dailyAt('06:30')->timezone('Europe/Warsaw')->withoutOverlapping(60);
+        // przypomnienia o terminach składania i o wpisaniu wyniku (dzienne po 7:00, „3 godziny przed” w oknie terminu)
+        $schedule->command('tenders:remind')->everyFifteenMinutes()->withoutOverlapping(10);
+        // Stan systemu: harmonogram, konta dostawców, kolejka analiz — alert e-mailem dla administratora
+        $schedule->command('system:check')->everyTenMinutes()->withoutOverlapping(10);
+        // stare przebiegi zadań, wpisy wysłanych powiadomień i treść nieprzypiętych ogłoszeń z Biuletynu
+        $schedule->command('system:prune')->dailyAt('04:35')->timezone('Europe/Warsaw');
+
+        // zapis przebiegów zadań (scheduled_task_runs) — musi być ostatni, żeby objął wszystkie zadania wyżej
+        app(ScheduledTaskRecorder::class)->attach($schedule);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(function (UnauthorizedException $e, $request) {

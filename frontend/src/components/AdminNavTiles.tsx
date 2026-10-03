@@ -73,6 +73,12 @@ export const adminTiles: AdminTile[] = [
     permission: 'admin.ai_stats.view',
   },
   {
+    to: '/admin/stan-systemu',
+    label: 'Stan systemu',
+    description: 'Zadania nocne, alerty i braki w danych',
+    permission: 'admin.system.view',
+  },
+  {
     to: '/admin/erp-xl',
     label: 'Powiązania z ERP XL',
     description: 'Towary XL ↔ karty, braki w mapowaniu',

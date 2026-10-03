@@ -102,10 +102,298 @@ export type Tender = {
   margin_percent: string | null
   target_margin_percent: string | number | null
   deadline: string | null
+  /** Godzina składania ofert w czasie polskim „HH:MM”; null = nie wpisano (formatowanie: lib/tenderDeadline). */
+  deadline_time?: string | null
+  /** Numer ogłoszenia (Biuletyn „2026/BZP 00431178/01” albo TED „606345-2026”) — osobno od wewnętrznego `number`. */
+  notice_number?: string | null
+  notice_source?: NoticeSource | null
+  /** Wynik przetargu w całości, wyliczany z części; null = bez wyniku. */
+  result_status?: TenderResultStatus | null
   last_activity_at: string | null
   items_count?: number
   client?: { id: number; name: string }
   owner?: { id: number; name: string }
+}
+
+export type NoticeSource = 'bzp' | 'ted'
+
+/* ---------- Wynik przetargu (GET/PUT /tenders/{id}/result) ---------- */
+
+/** won = wygrany, partial = częściowo wygrany, lost = przegrany, cancelled = unieważniony, not_submitted = nie złożyliśmy oferty */
+export type TenderResultStatus = 'won' | 'partial' | 'lost' | 'cancelled' | 'not_submitted'
+
+export type LotOutcome = 'won' | 'lost' | 'cancelled' | 'not_submitted'
+
+/** cena / nie spełniliśmy wymagania / termin dostawy / błąd formalny / inny */
+export type LossReason = 'price' | 'requirement' | 'delivery' | 'formal' | 'other'
+
+export type Competitor = {
+  id: number
+  name: string
+  nip: string | null
+}
+
+/** Firma z listy podpowiedzi (competitor_id) albo nowa, wpisana ręcznie (name + opcjonalny NIP). */
+export type CompetitorInput = { competitor_id: number } | { name: string; nip?: string | null }
+
+export type TenderLotOffer = {
+  id: number
+  competitor: Competitor
+  /** kwota jak w źródle, jako tekst „1234.56” */
+  price: string
+  currency: string
+  source: 'manual' | 'bzp'
+}
+
+export type TenderLot = {
+  /** null = część wirtualna (przetarg bez zapisanych części), powstaje przy pierwszym zapisie */
+  id: number | null
+  lot_no: number
+  name: string | null
+  cpv_main: string | null
+  estimated_value: string | null
+  our_net: string | null
+  our_vat_rate: string | null
+  /** brutto wyliczone jawnie z our_net i our_vat_rate */
+  our_gross: string | null
+  outcome: LotOutcome | null
+  winner: Competitor | null
+  /** NIP zwycięzcy, gdy nie przeszedł sprawdzenia sumy kontrolnej — dokładnie jak w źródle */
+  winner_national_id_raw: string | null
+  winner_price: string | null
+  currency: string
+  offers_count: number | null
+  lowest_price: string | null
+  highest_price: string | null
+  loss_reason: LossReason | null
+  note: string | null
+  /** nasza cena netto minus cena zwycięzcy (kwota jako tekst, procent od ceny zwycięzcy jako liczba) */
+  price_gap: { amount: string; percent: number } | null
+  /** pola wpisane przez człowieka — Biuletyn ich nie nadpisuje */
+  manual_fields: string[]
+  /** pola wypełnione z Biuletynu */
+  bzp_fields: string[]
+  bzp_notice_number: string | null
+  /** sprzeczność Biuletynu z wpisem człowieka (opis dla użytkownika) */
+  bzp_conflict: string | null
+  decided_by: { id: number; name: string } | null
+  decided_at: string | null
+  offers: TenderLotOffer[]
+}
+
+export type BzpNoticeRef = {
+  id: number
+  notice_number: string
+  published_at: string | null
+  url: string | null
+}
+
+export type TenderResultResponse = {
+  tender_id: number
+  result_status: TenderResultStatus | null
+  can_edit: boolean
+  notice_number: string | null
+  notice_source: NoticeSource | null
+  bzp: {
+    contract_notice: BzpNoticeRef | null
+    result_notice: BzpNoticeRef | null
+    checked_at: string | null
+  }
+  lots: TenderLot[]
+  /** tylko po „Sprawdź w Biuletynie” */
+  bzp_message?: string
+}
+
+/** Kwoty można wysłać jako liczbę albo tekst; pominięte pole = bez zmian, null = wyczyść. */
+export type TenderLotUpdate = {
+  id?: number | null
+  lot_no: number
+  name?: string | null
+  cpv_main?: string | null
+  estimated_value?: string | number | null
+  our_net?: string | number | null
+  our_vat_rate?: string | number | null
+  outcome?: LotOutcome | null
+  winner?: CompetitorInput | null
+  winner_national_id_raw?: string | null
+  winner_price?: string | number | null
+  currency?: string
+  offers_count?: number | null
+  lowest_price?: string | number | null
+  highest_price?: string | number | null
+  /** tylko przy outcome = lost */
+  loss_reason?: LossReason | null
+  note?: string | null
+  /** oferty innych firm — zastępowane w całości */
+  offers?: (CompetitorInput & { price: string | number; currency?: string })[]
+}
+
+export function fetchTenderResult(tenderId: number): Promise<TenderResultResponse> {
+  return api<TenderResultResponse>(`/tenders/${tenderId}/result`)
+}
+
+export function saveTenderResult(tenderId: number, lots: TenderLotUpdate[]): Promise<TenderResultResponse> {
+  return api<TenderResultResponse>(`/tenders/${tenderId}/result`, { method: 'PUT', body: JSON.stringify({ lots }) })
+}
+
+export function deleteTenderLot(tenderId: number, lotId: number): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/tenders/${tenderId}/result/lots/${lotId}`, { method: 'DELETE' })
+}
+
+/** Dopasowanie do ogłoszeń z Biuletynu już zapisanych w bazie (bez zapytań do Biuletynu). */
+export function checkTenderBzp(tenderId: number): Promise<TenderResultResponse> {
+  return api<TenderResultResponse>(`/tenders/${tenderId}/result/bzp-check`, { method: 'POST' })
+}
+
+/** Podpowiedzi firm konkurencji (najwyżej 20). */
+export function searchCompetitors(q: string): Promise<Competitor[]> {
+  return api<{ data: Competitor[] }>(`/competitors?q=${encodeURIComponent(q)}`).then((r) => r.data)
+}
+
+/* ---------- Wzmianki „@” w komentarzach przetargu ---------- */
+
+export type MentionCandidate = {
+  id: number
+  name: string
+  /** rola słowami (np. „Opiekun przetargu”, „Zaproszony”) */
+  role: string
+}
+
+export function fetchMentionCandidates(tenderId: number): Promise<MentionCandidate[]> {
+  return api<{ data: MentionCandidate[] }>(`/tenders/${tenderId}/mention-candidates`).then((r) => r.data)
+}
+
+/* ---------- Powiadomienia (Moje konto › Powiadomienia, dzwonek) ---------- */
+
+export type NotificationEventKey =
+  | 'tender_deadline'
+  | 'tender_result_needed'
+  | 'tender_mention'
+  | 'tender_invitation'
+  | 'inquiry_analysis_ready'
+  | 'campaign_reply'
+  | 'system_alert'
+
+/** 7 dni przed / 3 dni przed / ostatni dzień roboczy przed / w dniu terminu 3 godziny przed (wymaga godziny) */
+export type DeadlineOffset = '7d' | '3d' | 'last_workday' | '3h'
+
+export type NotificationPreferences = {
+  events: {
+    key: NotificationEventKey
+    label: string
+    description: string
+    bell: boolean
+    mail: boolean
+    default_bell: boolean
+    default_mail: boolean
+  }[]
+  deadline_offsets: DeadlineOffset[]
+  deadline_offset_options: { key: DeadlineOffset; label: string; needs_time: boolean }[]
+  /** adres, na który przychodzą e-maile */
+  email: string
+  /** false = poczta wychodząca aplikacji nie jest skonfigurowana (e-maile nie wyjdą) */
+  mail_configured: boolean
+}
+
+export type NotificationPreferencesUpdate = {
+  events: Partial<Record<NotificationEventKey, { bell: boolean; mail: boolean }>>
+  deadline_offsets: DeadlineOffset[]
+}
+
+export function fetchNotificationPreferences(): Promise<NotificationPreferences> {
+  return api<NotificationPreferences>('/me/notification-preferences')
+}
+
+export function saveNotificationPreferences(body: NotificationPreferencesUpdate): Promise<NotificationPreferences> {
+  return api<NotificationPreferences>('/me/notification-preferences', { method: 'PUT', body: JSON.stringify(body) })
+}
+
+/**
+ * notifications.data powiadomienia w dzwonku. Nowe rodzaje mają title/body/url; stare (zaproszenie, błąd
+ * kampanii) tylko message i własne pola — dzwonek pokazuje title ?? message, a link url ?? jak dotąd.
+ */
+export type AppNotificationData = {
+  type?: string
+  title?: string
+  body?: string
+  /** ścieżka w aplikacji, np. „/tenders/12?tab=wynik” */
+  url?: string
+  message?: string
+  tender_id?: number
+  tender_number?: string
+  tender_title?: string
+  campaign_id?: number
+  inquiry_id?: number
+}
+
+/* ---------- Administracja › Stan systemu ---------- */
+
+export type SystemGapKind =
+  | 'tenders_without_time'
+  | 'tenders_without_notice'
+  | 'salespeople_without_operator'
+  | 'clients_without_xl'
+  | 'sold_items_without_card'
+
+export type SystemAlertRow = {
+  id: number
+  kind: string
+  title: string
+  since: string
+  last_message: string | null
+  emailed_at: string | null
+  muted: boolean
+  url: string | null
+}
+
+export type SystemStatus = {
+  checked_at: string
+  scheduler: { last_seen_at: string | null; ok: boolean }
+  tiles: {
+    tasks: { ok: number; total: number; last_finished_at: string | null }
+    b2b: { ok: number; total: number; failing: number }
+    inquiries_queue: { waiting: number; oldest_wait_seconds: number | null }
+    model: { searches_24h: number; avg_seconds: number | null; last_at: string | null } | null
+  }
+  alerts: SystemAlertRow[]
+  tasks: {
+    task: string
+    label: string
+    /** kiedy zadanie rusza, słowami w czasie polskim */
+    schedule_pl: string
+    enabled: boolean
+    last: {
+      started_at: string | null
+      finished_at: string | null
+      duration_ms: number | null
+      status: string
+      output_tail: string | null
+    } | null
+  }[]
+  gaps: { kind: SystemGapKind; label: string; count: number }[]
+}
+
+export type SystemGapRow = {
+  id: number
+  label: string
+  detail: string | null
+  url: string | null
+}
+
+export function fetchSystemStatus(): Promise<SystemStatus> {
+  return api<SystemStatus>('/admin/system-status')
+}
+
+export function fetchSystemGaps(kind: SystemGapKind): Promise<SystemGapRow[]> {
+  return api<{ data: SystemGapRow[] }>(`/admin/system-status/gaps/${kind}`).then((r) => r.data)
+}
+
+export function muteSystemAlert(alertId: number): Promise<SystemAlertRow> {
+  return api<SystemAlertRow>(`/admin/system-alerts/${alertId}/mute`, { method: 'POST' })
+}
+
+export function unmuteSystemAlert(alertId: number): Promise<SystemAlertRow> {
+  return api<SystemAlertRow>(`/admin/system-alerts/${alertId}/unmute`, { method: 'POST' })
 }
 
 export type ProductImage = {
