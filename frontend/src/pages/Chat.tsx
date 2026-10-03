@@ -55,6 +55,7 @@ import {
   type ChatUser,
 } from '../lib/chat'
 import { useChatUnread } from '../lib/chatUnread'
+import { plural } from '../lib/plural'
 import { onRealtime, useRealtimeStatus, type ChatCallUpdatedEvent } from '../lib/realtime'
 
 /**
@@ -72,6 +73,8 @@ const USERS_POLL_MS = 60_000
 const PAGE = 50
 /** Kolejne wiadomości tej samej osoby w tym odstępie — bez powtarzania imienia. */
 const GROUP_MS = 5 * 60_000
+/** Pole pisania rośnie do ok. 5 linii (5 × 20 px + odstępy), dalej przewija się w środku. */
+const COMPOSER_MAX_PX = 124
 
 function errorText(ex: unknown, fallback: string): string {
   return ex instanceof Error && ex.message ? ex.message : fallback
@@ -108,37 +111,139 @@ type Pending = {
 
 // ——— drobne elementy ———
 
+type IconName =
+  | 'search'
+  | 'plus'
+  | 'phone'
+  | 'video'
+  | 'user-plus'
+  | 'leave'
+  | 'send'
+  | 'back'
+  | 'chat'
+  | 'document'
+  | 'mail'
+  | 'trash'
+
+const ICONS: Record<IconName, ReactNode> = {
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M20 20l-4.2-4.2" />
+    </>
+  ),
+  plus: <path d="M12 5v14M5 12h14" />,
+  phone: (
+    <path d="M5.5 4h3l1.6 4.2-2.1 1.3a11 11 0 0 0 6.5 6.5l1.3-2.1 4.2 1.6v3a1.6 1.6 0 0 1-1.7 1.6A16 16 0 0 1 3.9 5.7 1.6 1.6 0 0 1 5.5 4z" />
+  ),
+  video: (
+    <>
+      <rect x="3" y="6.5" width="12" height="11" rx="2.5" />
+      <path d="M15 10.5l6-3.5v10l-6-3.5" />
+    </>
+  ),
+  'user-plus': (
+    <>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M3 20a6 6 0 0 1 12 0M19 8v6M16 11h6" />
+    </>
+  ),
+  leave: (
+    <>
+      <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
+      <path d="M15 16l4-4-4-4M19 12H9" />
+    </>
+  ),
+  send: <path d="M21 3L3 10.5l7.2 3.3L13.5 21zM21 3l-10.8 10.8" />,
+  back: <path d="M15 18l-6-6 6-6" />,
+  chat: <path d="M4 5h16v11H9l-5 4zM8 9.5h8M8 12.5h5" />,
+  document: (
+    <>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5M9 13h6M9 17h4" />
+    </>
+  ),
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M3.5 6.5l8.5 6.5 8.5-6.5" />
+    </>
+  ),
+  trash: <path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v5M14 11v5" />,
+}
+
+function Icon({ name, className = 'h-4 w-4' }: { name: IconName; className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {ICONS[name]}
+    </svg>
+  )
+}
+
+type AvatarSize = 'sm' | 'md' | 'lg'
+
+const AVATAR_SIZE: Record<AvatarSize, string> = {
+  sm: 'h-8 w-8 text-[11px]',
+  md: 'h-10 w-10 text-[13px]',
+  lg: 'h-11 w-11 text-sm',
+}
+
+const CHANNEL_SIZE: Record<AvatarSize, string> = {
+  sm: 'h-8 w-8 rounded-lg text-sm',
+  md: 'h-10 w-10 rounded-xl text-base',
+  lg: 'h-11 w-11 rounded-xl text-lg',
+}
+
+const DOT_SIZE: Record<AvatarSize, string> = {
+  sm: 'h-2.5 w-2.5',
+  md: 'h-3 w-3',
+  lg: 'h-3.5 w-3.5',
+}
+
+/** Kółko z inicjałami; zielony znacznik tylko dla osób dostępnych (obramowanie w kolorze karty, także nocą). */
 function Avatar({
   name,
   userId,
   online,
   channel,
+  size = 'md',
 }: {
   name: string
   userId?: number | null
   online?: boolean | null
   channel?: boolean
+  size?: AvatarSize
 }) {
   if (channel) {
     return (
-      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-slate-100 text-sm text-slate-500" aria-hidden="true">
+      <span
+        className={`grid shrink-0 place-items-center bg-slate-100 font-semibold text-slate-500 ${CHANNEL_SIZE[size]}`}
+        aria-hidden="true"
+      >
         #
       </span>
     )
   }
   return (
     <span
-      className={`relative grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${avatarColor(userId)}`}
+      className={`relative grid shrink-0 place-items-center rounded-full font-semibold ${AVATAR_SIZE[size]} ${avatarColor(userId)}`}
       aria-hidden="true"
     >
       {userId ? initials(name) : '?'}
-      {online !== undefined && online !== null && (
+      {online ? (
         <span
-          className={`absolute -bottom-px -right-px h-2.5 w-2.5 rounded-full ring-2 ring-slate-50 ${
-            online ? 'bg-green-600' : 'bg-slate-400'
-          }`}
+          className={`absolute -bottom-0.5 -right-0.5 rounded-full bg-green-500 ring-2 ring-[color:var(--t-surface,#fff)] ${DOT_SIZE[size]}`}
         />
-      )}
+      ) : null}
     </span>
   )
 }
@@ -146,17 +251,22 @@ function Avatar({
 function CountBadge({ n }: { n: number }) {
   if (n <= 0) return null
   return (
-    <span className="min-w-[18px] rounded-full bg-sky-600 px-1.5 text-center text-[10.5px] font-semibold leading-[17px] text-white">
+    <span className="min-w-[20px] shrink-0 rounded-full bg-sky-600 px-1.5 text-center text-[11px] font-semibold leading-5 text-white">
       {unreadLabel(n)}
     </span>
   )
+}
+
+/** Imię do kafelka „Dostępni teraz” — pierwszy wyraz, pełne imię i nazwisko w podpowiedzi. */
+function firstName(name: string): string {
+  return name.trim().split(/\s+/)[0] || name
 }
 
 const URL_RE = /https?:\/\/[^\s<>"']+/g
 const TRAILING = /[.,;:!?)\]}»”’]+$/
 
 /** Tekst wiadomości jako tekst; adresy http/https jako odnośniki w nowej karcie. */
-function MessageText({ text }: { text: string }) {
+function MessageText({ text, own = false }: { text: string; own?: boolean }) {
   const parts: ReactNode[] = []
   let last = 0
   for (const m of text.matchAll(URL_RE)) {
@@ -174,14 +284,49 @@ function MessageText({ text }: { text: string }) {
     if (!ok) continue
     if (start > last) parts.push(text.slice(last, start))
     parts.push(
-      <a key={start} href={url} target="_blank" rel="noopener noreferrer" className="break-all text-sky-700 underline">
+      <a
+        key={start}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`break-all underline underline-offset-2 ${own ? 'font-medium text-white' : 'text-sky-700'}`}
+      >
         {url}
       </a>,
     )
     last = start + url.length
   }
   if (last < text.length) parts.push(text.slice(last))
-  return <div className="whitespace-pre-wrap break-words text-[13px] leading-snug">{parts}</div>
+  return <div className="whitespace-pre-wrap break-words text-[13px] leading-[1.45]">{parts}</div>
+}
+
+/** Kafelek wewnątrz dymka (link, mail, rozmowa) — biały, z ikoną rodzaju po lewej. */
+function CardTile({
+  icon,
+  iconClass,
+  label,
+  spaced,
+  children,
+}: {
+  icon: IconName
+  iconClass: string
+  label: string
+  spaced: boolean
+  children: ReactNode
+}) {
+  return (
+    <div
+      className={`flex gap-2.5 rounded-xl bg-white sm:min-w-[220px] p-2.5 text-xs text-slate-700 ring-1 ring-slate-200/70 ${spaced ? 'mt-2' : ''}`}
+    >
+      <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${iconClass}`}>
+        <Icon name={icon} />
+      </span>
+      <div className="grid min-w-0 flex-1 content-start gap-0.5">
+        <span className="text-[10.5px] font-medium uppercase tracking-wide text-slate-500">{label}</span>
+        {children}
+      </div>
+    </div>
+  )
 }
 
 function LinkCard({ m }: { m: ChatMessage }) {
@@ -192,22 +337,21 @@ function LinkCard({ m }: { m: ChatMessage }) {
   const kindLabel = link.type === 'inquiry' ? 'Zapytanie' : 'Przetarg'
   const openLabel = link.item ? `Otwórz pozycję ${link.item}` : link.type === 'inquiry' ? 'Otwórz zapytanie' : 'Otwórz przetarg'
   return (
-    <div className="mt-1 grid gap-0.5 border border-l-[3px] border-slate-200 border-l-sky-600 bg-slate-50 px-2.5 py-1.5 text-xs">
-      <span className="text-[10.5px] uppercase tracking-wide text-slate-500">{kindLabel}</span>
+    <CardTile icon="document" iconClass="bg-sky-50 text-sky-700" label={kindLabel} spaced={Boolean(m.body)}>
       <span className="font-semibold text-slate-800">{link.title}</span>
       {link.item ? <span className="text-slate-600">Pozycja {link.item}</span> : null}
       {path ? (
         <button
           type="button"
           onClick={() => navigate(path)}
-          className="justify-self-start font-medium text-sky-700 hover:underline"
+          className="mt-0.5 justify-self-start font-medium text-sky-700 hover:underline"
         >
-          {openLabel}
+          {openLabel} →
         </button>
       ) : (
         <span className="text-slate-500">Odnośnik niedostępny</span>
       )}
-    </div>
+    </CardTile>
   )
 }
 
@@ -216,8 +360,7 @@ function MailCard({ m }: { m: ChatMessage }) {
   if (!mail) return null
   const date = mailDateLabel(mail.date)
   return (
-    <div className="mt-1 grid gap-0.5 border border-l-[3px] border-slate-200 border-l-violet-700 bg-violet-50 px-2.5 py-1.5 text-xs">
-      <span className="text-[10.5px] uppercase tracking-wide text-slate-500">Mail z Thunderbirda</span>
+    <CardTile icon="mail" iconClass="bg-violet-50 text-violet-700" label="Mail z Thunderbirda" spaced={Boolean(m.body)}>
       <span className="font-semibold text-slate-800">{mail.subject || '(bez tematu)'}</span>
       <span className="text-slate-600">
         Od: {mail.from}
@@ -225,19 +368,19 @@ function MailCard({ m }: { m: ChatMessage }) {
       </span>
       {mail.body ? (
         <details className="mt-0.5">
-          <summary className="cursor-pointer select-none font-medium text-violet-800">Pokaż treść maila</summary>
-          <div className="mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded border border-slate-200 bg-white p-2 text-slate-700">
+          <summary className="cursor-pointer select-none font-medium text-violet-700">Pokaż treść maila</summary>
+          <div className="mt-1.5 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2 text-slate-700 ring-1 ring-slate-200/70">
             {mail.body}
           </div>
         </details>
       ) : (
         <span className="text-slate-500">Bez treści — tylko temat, nadawca i data.</span>
       )}
-    </div>
+    </CardTile>
   )
 }
 
-/** Wpis o rozmowie głosowej/wideo — zielona ramka; stan z meta.call (ta sama wiadomość zmienia się z rozmową). */
+/** Wpis o rozmowie głosowej/wideo — zielona ikona; stan z meta.call (ta sama wiadomość zmienia się z rozmową). */
 function CallCard({
   m,
   own,
@@ -263,7 +406,7 @@ function CallCard({
         type="button"
         disabled={calling}
         onClick={() => onCallBack(kind)}
-        className="justify-self-start font-medium text-sky-700 hover:underline disabled:opacity-50"
+        className="mt-0.5 justify-self-start font-medium text-sky-700 hover:underline disabled:opacity-50"
       >
         {own ? 'Zadzwoń ponownie' : 'Oddzwoń'}
       </button>
@@ -277,18 +420,22 @@ function CallCard({
       <button
         type="button"
         onClick={() => onJoin(call.id)}
-        className="justify-self-start font-medium text-sky-700 hover:underline"
+        className="mt-1 justify-self-start rounded-full bg-green-600 px-3 py-1 font-medium text-white hover:bg-green-700"
       >
         Dołącz
       </button>
     )
   }
   return (
-    <div className="mt-1 grid gap-0.5 border border-l-[3px] border-slate-200 border-l-green-600 bg-green-50 px-2.5 py-1.5 text-xs">
-      <span className="text-[10.5px] uppercase tracking-wide text-slate-500">{callKindLabel(kind)}</span>
+    <CardTile
+      icon={kind === 'video' ? 'video' : 'phone'}
+      iconClass={call.status === 'missed' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}
+      label={callKindLabel(kind)}
+      spaced={Boolean(m.body)}
+    >
       <span className="font-semibold text-slate-800">{text}</span>
       {action}
-    </div>
+    </CardTile>
   )
 }
 
@@ -319,78 +466,97 @@ function MessageItem({
 }) {
   if (m.kind === 'system') {
     return (
-      <p className="self-center px-2 text-center text-[11.5px] text-slate-500">
+      <p className="my-2 self-center px-2 text-center text-[11.5px] text-slate-500">
         {m.body} · {timeOf(m.created_at)}
       </p>
     )
   }
 
-  const content = m.deleted ? (
-    <p className="text-[13px] italic text-slate-500">wiadomość usunięta</p>
-  ) : (
-    <>
-      {m.body ? <MessageText text={m.body} /> : null}
-      {m.kind === 'link' && <LinkCard m={m} />}
-      {m.kind === 'mail' && <MailCard m={m} />}
-      {m.kind === 'call' && (
-        <CallCard m={m} own={own} calling={calling} onJoin={onJoinCall} onCallBack={onCallBack} />
-      )}
-    </>
+  // Tekst w dymku, karta (link, mail, rozmowa) pod nim jako osobny kafelek — karta w niebieskim dymku
+  // wyglądała jak gruba niebieska ramka.
+  const text = m.deleted ? (
+    <p className="text-[13px] italic">wiadomość usunięta</p>
+  ) : m.body ? (
+    <MessageText text={m.body} own={own} />
+  ) : null
+  const card = m.deleted ? null : m.kind === 'link' ? (
+    <LinkCard m={m} />
+  ) : m.kind === 'mail' ? (
+    <MailCard m={m} />
+  ) : m.kind === 'call' ? (
+    <CallCard m={m} own={own} calling={calling} onJoin={onJoinCall} onCallBack={onCallBack} />
+  ) : null
+  const bubble = m.deleted
+    ? `rounded-2xl px-3 py-1.5 text-slate-500 ring-1 ring-slate-200 ${own ? 'rounded-tr-md' : 'rounded-tl-md'}`
+    : own
+      ? 'min-w-0 rounded-2xl rounded-tr-md bg-sky-600 px-3 py-2 text-white'
+      : 'min-w-0 rounded-2xl rounded-tl-md bg-slate-100 px-3 py-2 text-slate-900'
+  const content = (
+    <div className={`flex min-w-0 flex-col gap-1 ${own ? 'items-end' : 'items-start'}`}>
+      {text && <div className={bubble}>{text}</div>}
+      {card}
+    </div>
+  )
+  const time = (
+    <span className="shrink-0 pb-1 text-[10.5px] tabular-nums text-slate-400" title={new Date(m.created_at).toLocaleString('pl-PL')}>
+      {timeOf(m.created_at)}
+    </span>
   )
 
-  // Wpisu o rozmowie nie da się usunąć (serwer odpowiada 422) — bez przycisku „Usuń”.
-  const deleteControls =
-    own && !m.deleted && m.kind !== 'call' ? (
-      confirming ? (
-        <span className="flex items-center justify-end gap-2 text-[11px]">
-          <span className="text-slate-600">Usunąć tę wiadomość?</span>
-          <button
-            type="button"
-            disabled={deleting}
-            onClick={onDelete}
-            className="rounded bg-red-600 px-2 py-0.5 font-medium text-white hover:bg-red-700 disabled:opacity-50"
-          >
-            Usuń
-          </button>
-          <button type="button" onClick={onCancelDelete} className="text-slate-600 hover:underline">
-            Anuluj
-          </button>
-        </span>
-      ) : (
-        <button
-          type="button"
-          onClick={onAskDelete}
-          className="text-[11px] text-slate-500 opacity-0 hover:text-red-700 hover:underline focus:opacity-100 group-hover:opacity-100"
-        >
-          Usuń
-        </button>
-      )
-    ) : null
-
   if (own) {
+    // Wpisu o rozmowie nie da się usunąć (serwer odpowiada 422) — bez przycisku „Usuń”.
+    const canDelete = !m.deleted && m.kind !== 'call'
     return (
-      <div className="group grid max-w-[78%] gap-0.5 self-end">
-        <div className="flex items-center justify-end gap-2 text-[11.5px] text-slate-500">
-          {deleteControls}
-          <span>{timeOf(m.created_at)}</span>
+      <div className={`group flex flex-col items-end ${showHeader ? 'mt-3' : 'mt-0.5'}`}>
+        <div className="flex max-w-[78%] items-end gap-1.5">
+          {canDelete && !confirming && (
+            <button
+              type="button"
+              onClick={onAskDelete}
+              title="Usuń wiadomość"
+              aria-label="Usuń wiadomość"
+              className="mb-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-slate-400 opacity-0 hover:bg-red-50 hover:text-red-700 focus:opacity-100 group-hover:opacity-100"
+            >
+              <Icon name="trash" className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {time}
+          {content}
         </div>
-        <div className="rounded-lg border border-sky-100 bg-sky-50 px-2.5 py-1.5 text-slate-900">{content}</div>
+        {canDelete && confirming && (
+          <span className="mt-1 flex items-center gap-2 text-[11px]">
+            <span className="text-slate-600">Usunąć tę wiadomość?</span>
+            <button
+              type="button"
+              disabled={deleting}
+              onClick={onDelete}
+              className="rounded-full bg-red-600 px-2.5 py-0.5 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              Usuń
+            </button>
+            <button type="button" onClick={onCancelDelete} className="text-slate-600 hover:underline">
+              Anuluj
+            </button>
+          </span>
+        )}
       </div>
     )
   }
 
   const name = m.user ? m.user.name : 'Konto usunięte'
   return (
-    <div className={`grid max-w-[78%] grid-cols-[28px_1fr] gap-2 ${showHeader ? '' : '-mt-1.5'}`}>
-      {showHeader ? <Avatar name={name} userId={m.user?.id ?? null} /> : <span />}
-      <div className="min-w-0">
+    <div className={`flex max-w-[78%] items-start gap-2 ${showHeader ? 'mt-3' : 'mt-0.5'}`}>
+      {showHeader ? <Avatar name={name} userId={m.user?.id ?? null} size="sm" /> : <span className="w-8 shrink-0" />}
+      <div className="flex min-w-0 flex-col items-start">
         {showHeader && (
-          <div className="text-[11.5px] text-slate-500">
-            <span className={`mr-1.5 font-semibold ${m.user ? 'text-slate-900' : 'italic text-slate-500'}`}>{name}</span>
-            {timeOf(m.created_at)}
-          </div>
+          <span className={`mb-0.5 px-1 text-[11.5px] font-semibold ${m.user ? 'text-slate-700' : 'italic text-slate-500'}`}>
+            {name}
+          </span>
         )}
-        <div className="text-slate-900">{content}</div>
+        <div className="flex min-w-0 max-w-full items-end gap-1.5">
+          {content}
+          {time}
+        </div>
       </div>
     </div>
   )
@@ -485,7 +651,7 @@ function PeopleModal({
               {users.map((u) => (
                 <label key={u.id} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-slate-50">
                   <input type="checkbox" checked={picked.has(u.id)} onChange={() => toggle(u.id)} />
-                  <Avatar name={u.name} userId={u.id} online={u.online} />
+                  <Avatar name={u.name} userId={u.id} online={u.online} size="sm" />
                   <span className="text-xs text-slate-800">{u.name}</span>
                 </label>
               ))}
@@ -896,100 +1062,137 @@ function Thread({
   const canManage = isChannel && !conversation.everyone
   const candidates = users.filter((u) => !u.is_me && !participantIds.has(u.id))
   const length = text.length
+  const participantNames = conversation.participants.map((p) => p.name).join(', ')
+  const participantCount = conversation.participants.length
+
+  // Pole pisania rośnie z treścią do ok. 5 linii, dalej przewija się w środku.
+  const composer = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const el = composer.current
+    if (!el) return
+    el.style.height = '0px'
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_PX)}px`
+  }, [text])
+
+  const roundBtn =
+    'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50 sm:h-9 sm:w-9'
 
   return (
-    <div className="grid min-h-0 min-w-0 grid-rows-[auto_1fr_auto]">
-      <div className="border-b border-slate-200 px-3.5 py-2">
-        <div className="flex items-center gap-2.5">
+    <section
+      className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr_auto] overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/70"
+      aria-label={`Rozmowa: ${other || isChannel ? conversation.name : 'Konto usunięte'}`}
+    >
+      <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4">
+        <div className="flex items-center gap-2 sm:gap-3">
           <button
             type="button"
             onClick={onBack}
-            className="rounded px-1.5 py-0.5 text-xs text-sky-700 hover:bg-slate-100 md:hidden"
+            title="Wróć do listy rozmów"
+            aria-label="Wróć do listy rozmów"
+            className="-ml-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-sky-700 hover:bg-slate-100 md:hidden"
           >
-            ← Rozmowy
+            <Icon name="back" className="h-5 w-5" />
           </button>
-          {isChannel ? (
-            <Avatar name={conversation.name} channel />
-          ) : (
-            <Avatar name={conversation.name} userId={other?.id ?? null} online={otherOnline} />
-          )}
+          {/* Na wąskim ekranie bez kółka — miejsce na nazwę i przyciski. */}
+          <span className="hidden shrink-0 sm:block">
+            {isChannel ? (
+              <Avatar name={conversation.name} channel />
+            ) : (
+              <Avatar name={conversation.name} userId={other?.id ?? null} online={otherOnline} />
+            )}
+          </span>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[13.5px] font-semibold text-slate-900">
+            <p className={`truncate text-[14.5px] font-semibold ${other || isChannel ? 'text-slate-900' : 'italic text-slate-500'}`}>
               {other || isChannel ? conversation.name : 'Konto usunięte'}
             </p>
             {isChannel ? (
-              <p
-                className="truncate text-[11.5px] text-slate-500"
-                title={conversation.participants.map((p) => p.name).join(', ')}
-              >
+              <p className="truncate text-[12px] text-slate-500" title={participantNames}>
                 {conversation.everyone
                   ? 'Wszyscy pracownicy z dostępem do czatu'
-                  : `Osoby (${conversation.participants.length}): ${conversation.participants.map((p) => p.name).join(', ')}`}
+                  : `${participantCount} ${plural(participantCount, 'osoba', 'osoby', 'osób')} · ${participantNames}`}
               </p>
             ) : other ? (
-              <p className={`text-[11.5px] ${otherOnline ? 'text-green-700' : 'text-slate-500'}`}>
-                {otherOnline ? 'w pracy' : 'niedostępny'}
+              <p className={`flex items-center gap-1.5 text-[12px] ${otherOnline ? 'text-green-700' : 'text-slate-500'}`}>
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full ${otherOnline ? 'bg-green-500' : 'bg-slate-300'}`}
+                  aria-hidden="true"
+                />
+                {otherOnline ? 'Dostępny teraz' : 'Niedostępny'}
               </p>
             ) : null}
           </div>
-          {callsEnabled && (isChannel || other) && !confirmLeave && (
-            <>
-              <button
-                type="button"
-                disabled={calling}
-                onClick={() => void placeCall('audio')}
-                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                Zadzwoń
-              </button>
-              <button
-                type="button"
-                disabled={calling}
-                onClick={() => void placeCall('video')}
-                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                Wideo
-              </button>
-            </>
+          {!confirmLeave && (
+            <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+              {callsEnabled && (isChannel || other) && (
+                <>
+                  <button
+                    type="button"
+                    disabled={calling}
+                    onClick={() => void placeCall('audio')}
+                    title="Zadzwoń"
+                    aria-label="Zadzwoń"
+                    className={roundBtn}
+                  >
+                    <Icon name="phone" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={calling}
+                    onClick={() => void placeCall('video')}
+                    title="Rozmowa wideo"
+                    aria-label="Rozmowa wideo"
+                    className={roundBtn}
+                  >
+                    <Icon name="video" />
+                  </button>
+                </>
+              )}
+              {canManage && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setAddOpen(true)}
+                    title="Dodaj osoby do kanału"
+                    aria-label="Dodaj osoby do kanału"
+                    className={roundBtn}
+                  >
+                    <Icon name="user-plus" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmLeave(true)}
+                    title="Wyjdź z kanału"
+                    aria-label="Wyjdź z kanału"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-700 hover:bg-red-50 hover:text-red-700 sm:h-9 sm:w-9"
+                  >
+                    <Icon name="leave" />
+                  </button>
+                </>
+              )}
+            </div>
           )}
-          {canManage && !confirmLeave && (
-            <>
-              <button
-                type="button"
-                onClick={() => setAddOpen(true)}
-                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Dodaj osoby
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmLeave(true)}
-                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Wyjdź z kanału
-              </button>
-            </>
-          )}
-          {canManage && confirmLeave && (
-            <span className="flex items-center gap-2 text-xs">
-              <span className="text-slate-700">Wyjść z kanału? Wiadomości przestaną do Ciebie przychodzić.</span>
+        </div>
+        {canManage && confirmLeave && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs ring-1 ring-slate-200/70">
+            <span className="text-slate-700">Wyjść z kanału? Wiadomości przestaną do Ciebie przychodzić.</span>
+            <span className="ml-auto flex items-center gap-2">
               <button
                 type="button"
                 disabled={leaving}
                 onClick={() => void leave()}
-                className="rounded bg-red-600 px-2.5 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                className="rounded-full bg-red-600 px-3 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
               >
                 Wyjdź
               </button>
-              <button type="button" onClick={() => setConfirmLeave(false)} className="text-slate-600 hover:underline">
+              <button type="button" onClick={() => setConfirmLeave(false)} className="px-1 text-slate-600 hover:underline">
                 Anuluj
               </button>
             </span>
-          )}
-        </div>
-        {actionErr && <p className="mt-1.5 rounded bg-red-50 px-2 py-1 text-xs text-red-700">{actionErr}</p>}
+          </div>
+        )}
+        {actionErr && <p className="mt-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{actionErr}</p>}
         {blockedCallUrl && (
-          <p className="mt-1.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+          <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
             Przeglądarka zablokowała nową kartę.{' '}
             <a href={blockedCallUrl} target="_blank" rel="noreferrer" className="font-medium underline">
               Otwórz rozmowę
@@ -1001,7 +1204,7 @@ function Thread({
       <div
         ref={scroller}
         onScroll={onScroll}
-        className="flex min-h-0 flex-col gap-2.5 overflow-y-auto bg-white px-4 py-2.5"
+        className="flex min-h-0 flex-col overflow-y-auto px-3 pb-3 pt-2 sm:px-4"
         role="log"
         aria-label="Wiadomości"
       >
@@ -1012,7 +1215,7 @@ function Thread({
                 type="button"
                 disabled={loadingOlder}
                 onClick={() => void loadOlder()}
-                className="text-sky-700 hover:underline disabled:opacity-50"
+                className="rounded-full px-2.5 py-0.5 text-sky-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 {loadingOlder ? 'Wczytuję starsze…' : 'Wcześniejsze wiadomości'}
               </button>
@@ -1023,7 +1226,7 @@ function Thread({
         )}
         {!loaded && !loadErr && <p className="text-xs text-slate-500">Ładowanie…</p>}
         {loadErr && (
-          <p className="rounded bg-red-50 px-2 py-1.5 text-xs text-red-700">
+          <p className="rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">
             {loadErr}{' '}
             <button type="button" onClick={() => void loadInitial()} className="font-medium underline">
               Spróbuj ponownie
@@ -1031,7 +1234,12 @@ function Thread({
           </p>
         )}
         {loaded && messages.length === 0 && pending.length === 0 && (
-          <p className="self-center text-xs text-slate-500">Nie ma jeszcze wiadomości. Napisz pierwszą.</p>
+          <div className="m-auto grid justify-items-center gap-2 py-6 text-center">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-sky-50 text-sky-700">
+              <Icon name="chat" className="h-6 w-6" />
+            </span>
+            <p className="text-xs text-slate-500">Nie ma jeszcze wiadomości. Napisz pierwszą.</p>
+          </div>
         )}
         {messages.map((m, i) => {
           const prev = i > 0 ? messages[i - 1] : null
@@ -1045,7 +1253,7 @@ function Thread({
           return (
             <div key={m.id} className="contents">
               {newDay && (
-                <span className="self-center rounded-full bg-slate-100 px-2.5 text-[11px] text-slate-500">
+                <span className="mb-1 mt-4 self-center rounded-full bg-slate-100 px-3 py-0.5 text-[11px] font-medium text-slate-500">
                   {dayLabel(m.created_at)}
                 </span>
               )}
@@ -1066,16 +1274,18 @@ function Thread({
           )
         })}
         {pending.map((p) => (
-          <div key={p.client_uuid} className="grid max-w-[78%] gap-0.5 self-end">
-            <div className="text-right text-[11.5px] text-slate-500">
-              {p.status === 'sending' ? 'Wysyłam…' : <span className="text-red-700">Nie wysłano</span>}
-            </div>
-            <div
-              className={`rounded-lg border px-2.5 py-1.5 text-slate-900 ${
-                p.status === 'failed' ? 'border-red-200 bg-red-50' : 'border-sky-100 bg-sky-50 opacity-70'
-              }`}
-            >
-              <MessageText text={p.body} />
+          <div key={p.client_uuid} className="mt-1 flex flex-col items-end gap-0.5">
+            <div className="flex max-w-[78%] items-end gap-1.5">
+              <span className="shrink-0 pb-1 text-[10.5px] text-slate-400">
+                {p.status === 'sending' ? 'Wysyłam…' : <span className="text-red-700">Nie wysłano</span>}
+              </span>
+              <div
+                className={`min-w-0 rounded-2xl rounded-tr-md px-3 py-2 ${
+                  p.status === 'failed' ? 'bg-red-50 text-slate-900 ring-1 ring-red-200' : 'bg-sky-600 text-white opacity-70'
+                }`}
+              >
+                <MessageText text={p.body} own={p.status !== 'failed'} />
+              </div>
             </div>
             {p.status === 'failed' && (
               <div className="flex items-center justify-end gap-2 text-[11px]">
@@ -1097,26 +1307,32 @@ function Thread({
           e.preventDefault()
           send()
         }}
-        className="grid grid-cols-[1fr_auto] items-end gap-2 border-t border-slate-200 px-3 py-2"
+        className="px-3 pb-3 pt-1 sm:px-4"
       >
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown}
-          maxLength={CHAT_MAX_LENGTH}
-          rows={Math.min(6, Math.max(1, text.split('\n').length))}
-          placeholder="Napisz wiadomość…"
-          aria-label="Treść wiadomości"
-          className="max-h-40 min-h-[34px] w-full resize-none rounded border border-slate-300 px-2 py-1.5 text-[13px]"
-        />
-        <button
-          type="submit"
-          disabled={!text.trim()}
-          className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
-        >
-          Wyślij
-        </button>
-        <small className="col-span-2 flex justify-between gap-2 text-[10.5px] text-slate-500">
+        <div className="flex items-end gap-2 rounded-2xl bg-slate-100 py-1.5 pl-3.5 pr-1.5 focus-within:ring-2 focus-within:ring-sky-300">
+          <textarea
+            ref={composer}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            maxLength={CHAT_MAX_LENGTH}
+            rows={1}
+            placeholder="Napisz wiadomość…"
+            aria-label="Treść wiadomości"
+            title="Enter wysyła, Shift+Enter to nowa linia"
+            className="max-h-[124px] min-h-9 w-full flex-1 resize-none overflow-y-auto border-0 bg-transparent py-2 text-[13px] leading-5 text-slate-900 placeholder:text-slate-400 focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={!text.trim()}
+            title="Wyślij (Enter)"
+            aria-label="Wyślij"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-40"
+          >
+            <Icon name="send" className="h-[18px] w-[18px]" />
+          </button>
+        </div>
+        <small className="mt-1 flex justify-between gap-2 px-2 text-[10.5px] text-slate-400">
           <span>Enter wysyła, Shift+Enter to nowa linia</span>
           {length > CHAT_COUNTER_FROM && (
             <span className={length >= CHAT_MAX_LENGTH ? 'font-semibold text-red-700' : 'text-amber-700'}>
@@ -1141,7 +1357,7 @@ function Thread({
           }}
         />
       )}
-    </div>
+    </section>
   )
 }
 
@@ -1158,31 +1374,114 @@ function ConversationRow({
 }: {
   active: boolean
   title: ReactNode
-  preview: string
+  preview: ReactNode
   time: string
   unread: number
   avatar: ReactNode
   onClick: () => void
 }) {
+  const hasUnread = unread > 0
   return (
     <button
       type="button"
       onClick={onClick}
       aria-current={active ? 'true' : undefined}
-      className={`grid w-full grid-cols-[28px_1fr_auto] items-center gap-2 border-l-[3px] px-3 py-1.5 text-left ${
-        active ? 'border-l-sky-600 bg-sky-50' : 'border-l-transparent hover:bg-slate-50'
+      className={`grid w-full grid-cols-[40px_minmax(0,1fr)] items-center gap-2.5 rounded-xl px-2.5 py-2 text-left ${
+        active ? 'bg-sky-50 ring-1 ring-sky-200' : 'hover:bg-slate-50'
       }`}
     >
       {avatar}
       <span className="min-w-0">
-        <span className="block truncate text-[12.5px] font-semibold text-slate-900">{title}</span>
-        {preview && <span className="block truncate text-[11.5px] text-slate-500">{preview}</span>}
-      </span>
-      <span className="flex flex-col items-end gap-0.5">
-        {time && <span className="text-[10.5px] text-slate-400">{time}</span>}
-        <CountBadge n={unread} />
+        <span className="flex items-baseline gap-2">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900">{title}</span>
+          {time && (
+            <span className={`shrink-0 text-[11px] tabular-nums ${hasUnread ? 'font-semibold text-sky-700' : 'text-slate-400'}`}>
+              {time}
+            </span>
+          )}
+        </span>
+        <span className="mt-0.5 flex items-center gap-2">
+          <span
+            className={`min-w-0 flex-1 truncate text-[12px] ${hasUnread ? 'font-semibold text-slate-800' : 'text-slate-500'}`}
+          >
+            {preview}
+          </span>
+          <CountBadge n={unread} />
+        </span>
       </span>
     </button>
+  )
+}
+
+function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between px-2.5 pb-1 pt-3">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{children}</span>
+      {action}
+    </div>
+  )
+}
+
+type PersonRow = { key: string; user: ChatUser | null; conv: ChatConversation | null; name: string; online: boolean }
+
+function lastMessageAt(r: PersonRow): number | null {
+  const m = r.conv?.last_message
+  if (!m) return null
+  const t = Date.parse(m.created_at)
+  return Number.isNaN(t) ? 0 : t
+}
+
+/**
+ * Kolejność osób w grupie (dostępni / pozostali): najpierw z nieprzeczytanymi, potem wg ostatniej
+ * wiadomości (najnowsze wyżej), osoby bez rozmowy na końcu alfabetycznie; konto usunięte na samym końcu.
+ */
+function comparePeople(a: PersonRow, b: PersonRow): number {
+  if (!a.user !== !b.user) return a.user ? -1 : 1
+  const ua = (a.conv?.unread ?? 0) > 0
+  const ub = (b.conv?.unread ?? 0) > 0
+  if (ua !== ub) return ua ? -1 : 1
+  const ta = lastMessageAt(a)
+  const tb = lastMessageAt(b)
+  if (ta !== null && tb !== null) {
+    return tb - ta || (b.conv?.last_message?.id ?? 0) - (a.conv?.last_message?.id ?? 0)
+  }
+  if (ta !== null) return -1
+  if (tb !== null) return 1
+  return a.name.localeCompare(b.name, 'pl')
+}
+
+/** Poziomy rząd kafelków z osobami dostępnymi teraz (pasek nad listą i skrót w pustym widoku). */
+function AvailableStrip({ rows, onOpen }: { rows: PersonRow[]; onOpen: (r: PersonRow) => void }) {
+  // Bez paska przewijania (zabierał miejsce i straszył strzałkami); kółko myszy przewija w bok, dotyk i gładzik — jak zwykle.
+  return (
+    <div
+      className="flex min-w-0 gap-0.5 overflow-x-auto pb-1 [scrollbar-width:none]"
+      onWheel={(e) => {
+        const el = e.currentTarget
+        if (el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY
+      }}
+    >
+      {rows.map((r) => (
+        <button
+          key={r.key}
+          type="button"
+          onClick={() => onOpen(r)}
+          title={`Napisz do: ${r.name}`}
+          aria-label={`Napisz do: ${r.name}`}
+          className="grid w-[54px] shrink-0 justify-items-center gap-1 rounded-xl px-0.5 py-1.5 hover:bg-slate-50"
+        >
+          <span className="relative">
+            <Avatar name={r.name} userId={r.user?.id ?? null} online size="lg" />
+            {(r.conv?.unread ?? 0) > 0 && (
+              <span className="absolute -right-1.5 -top-1">
+                <CountBadge n={r.conv?.unread ?? 0} />
+              </span>
+            )}
+          </span>
+          <span className="w-full truncate text-center text-[11px] text-slate-600">{firstName(r.name)}</span>
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -1385,109 +1684,162 @@ export function Chat() {
     setParams({ c: String(id) })
   }
 
-  // ——— lista: kanały, potem osoby (z rozmową — wg ostatniej wiadomości, reszta alfabetycznie) ———
+  // ——— lista: kanały, potem osoby — najpierw dostępne, potem pozostałe (kolejność w comparePeople) ———
   const q = foldText(search.trim())
   const match = (name: string) => !q || foldText(name).includes(q)
 
-  const { channels, people } = useMemo(() => {
+  const { channels, onlinePeople, otherPeople } = useMemo(() => {
     const list = conversations ?? []
     const chans = list.filter((c) => c.type === 'channel')
     const directs = list.filter((c) => c.type === 'direct')
     const byUser = new Map<number, ChatConversation>()
     for (const c of directs) if (c.other_user) byUser.set(c.other_user.id, c)
-    type Row = { key: string; user: ChatUser | null; conv: ChatConversation | null; name: string }
-    const withMessages: Row[] = directs
+    const withMessages: PersonRow[] = directs
       .filter((c) => c.last_message)
-      .map((c) => ({
-        key: `c${c.id}`,
-        user: c.other_user ? (users.find((u) => u.id === c.other_user?.id) ?? c.other_user) : null,
-        conv: c,
-        name: c.other_user ? c.name : 'Konto usunięte',
-      }))
+      .map((c) => {
+        const user = c.other_user ? (users.find((u) => u.id === c.other_user?.id) ?? c.other_user) : null
+        return { key: `c${c.id}`, user, conv: c, name: c.other_user ? c.name : 'Konto usunięte', online: user?.online === true }
+      })
     const shown = new Set(withMessages.map((r) => r.user?.id).filter((x): x is number => typeof x === 'number'))
-    const rest: Row[] = users
+    const rest: PersonRow[] = users
       .filter((u) => !u.is_me && !shown.has(u.id))
-      .map((u) => ({ key: `u${u.id}`, user: u, conv: byUser.get(u.id) ?? null, name: u.name }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'pl'))
-    return { channels: chans, people: [...withMessages, ...rest] }
+      .map((u) => ({ key: `u${u.id}`, user: u, conv: byUser.get(u.id) ?? null, name: u.name, online: u.online === true }))
+    const all = [...withMessages, ...rest]
+    return {
+      channels: chans,
+      onlinePeople: all.filter((r) => r.online).sort(comparePeople),
+      otherPeople: all.filter((r) => !r.online).sort(comparePeople),
+    }
   }, [conversations, users])
 
   const shownChannels = channels.filter((c) => match(c.name))
-  const shownPeople = people.filter((r) => match(r.name))
+  const shownOnline = onlinePeople.filter((r) => match(r.name))
+  const shownOther = otherPeople.filter((r) => match(r.name))
+
+  function openPerson(r: PersonRow) {
+    if (r.conv) openConversation(r.conv.id)
+    else if (r.user) {
+      setPageErr('')
+      setParams({ u: String(r.user.id) })
+    }
+  }
+
+  function personRow(r: PersonRow) {
+    return (
+      <ConversationRow
+        key={r.key}
+        active={r.conv !== null && r.conv.id === activeId}
+        title={r.user ? r.name : <span className="italic text-slate-500">Konto usunięte</span>}
+        preview={
+          r.conv?.last_message ? (
+            previewFor(r.conv, me)
+          ) : (
+            <span className="font-normal text-slate-400">{r.online ? 'Dostępny teraz' : 'Napisz pierwszą wiadomość'}</span>
+          )
+        }
+        time={r.conv?.last_message ? listTime(r.conv.last_message.created_at) : ''}
+        unread={r.conv?.unread ?? 0}
+        avatar={<Avatar name={r.name} userId={r.user?.id ?? null} online={r.online} />}
+        onClick={() => openPerson(r)}
+      />
+    )
+  }
+
+  const panel = 'rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/70'
 
   return (
     <div className="app-chat flex h-[calc(100vh-2.5rem)] min-h-[480px] flex-col">
       <h1 className="mb-3 text-xl font-semibold">Czat</h1>
-      {pageErr && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{pageErr}</p>}
-      <div className="grid min-h-0 flex-1 overflow-hidden rounded-md border border-slate-200 bg-white md:grid-cols-[250px_1fr]">
-        <div className={`min-h-0 min-w-0 flex-col border-r border-slate-200 ${active ? 'hidden md:flex' : 'flex'}`}>
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Szukaj osoby lub rozmowy"
-            aria-label="Szukaj osoby lub rozmowy"
-            className="m-2.5 rounded border border-slate-300 px-2 py-1 text-xs"
-          />
-          <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+      {pageErr && <p className="mb-2 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700">{pageErr}</p>}
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-3 md:grid-cols-[300px_minmax(0,1fr)]">
+        <aside
+          className={`min-h-0 min-w-0 flex-col overflow-hidden ${panel} ${active ? 'hidden md:flex' : 'flex'}`}
+          aria-label="Rozmowy i osoby"
+        >
+          {onlinePeople.length > 0 && (
+            <div className="border-b border-slate-100 px-2.5 pt-3">
+              <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Dostępni teraz</p>
+              <AvailableStrip rows={onlinePeople} onOpen={openPerson} />
+            </div>
+          )}
+          <div className="px-3 pb-1 pt-3">
+            <div className="relative">
+              <Icon
+                name="search"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Szukaj osoby lub rozmowy"
+                aria-label="Szukaj osoby lub rozmowy"
+                className="w-full rounded-xl border-0 bg-slate-100 py-2 pl-9 pr-3 text-[13px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+              />
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
             {listErr && (
-              <p className="mx-2.5 mb-2 rounded bg-red-50 px-2 py-1.5 text-xs text-red-700">
+              <p className="mx-1 mt-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">
                 {listErr}{' '}
                 <button type="button" onClick={() => void loadList()} className="font-medium underline">
                   Spróbuj ponownie
                 </button>
               </p>
             )}
-            {conversations === null && !listErr && <p className="px-3 text-xs text-slate-500">Ładowanie…</p>}
-            <div className="flex items-center justify-between px-3 pb-1 pt-2">
-              <span className="text-[10.5px] uppercase tracking-wide text-slate-500">Kanały</span>
-              <button
-                type="button"
-                onClick={() => setNewChannelOpen(true)}
-                className="text-[11px] font-medium text-sky-700 hover:underline"
-              >
-                + Nowy kanał
-              </button>
+            {conversations === null && !listErr && <p className="px-2.5 pt-3 text-xs text-slate-500">Ładowanie…</p>}
+            <SectionTitle
+              action={
+                <button
+                  type="button"
+                  onClick={() => setNewChannelOpen(true)}
+                  title="Nowy kanał"
+                  aria-label="Nowy kanał"
+                  className="grid h-6 w-6 place-items-center rounded-full text-slate-500 hover:bg-slate-100 hover:text-sky-700"
+                >
+                  <Icon name="plus" className="h-4 w-4" />
+                </button>
+              }
+            >
+              Kanały
+            </SectionTitle>
+            <div className="space-y-0.5">
+              {shownChannels.map((c) => (
+                <ConversationRow
+                  key={c.id}
+                  active={c.id === activeId}
+                  title={c.name}
+                  preview={previewFor(c, me)}
+                  time={c.last_message ? listTime(c.last_message.created_at) : ''}
+                  unread={c.unread}
+                  avatar={<Avatar name={c.name} channel />}
+                  onClick={() => openConversation(c.id)}
+                />
+              ))}
             </div>
-            {shownChannels.map((c) => (
-              <ConversationRow
-                key={c.id}
-                active={c.id === activeId}
-                title={c.name}
-                preview={previewFor(c, me)}
-                time={c.last_message ? listTime(c.last_message.created_at) : ''}
-                unread={c.unread}
-                avatar={<Avatar name={c.name} channel />}
-                onClick={() => openConversation(c.id)}
-              />
-            ))}
             {conversations !== null && shownChannels.length === 0 && (
-              <p className="px-3 py-1 text-[11.5px] text-slate-500">{q ? 'Brak pasujących kanałów.' : 'Brak kanałów.'}</p>
+              <p className="px-2.5 py-1 text-[12px] text-slate-500">{q ? 'Brak pasujących kanałów.' : 'Brak kanałów.'}</p>
             )}
-            <div className="px-3 pb-1 pt-3 text-[10.5px] uppercase tracking-wide text-slate-500">Osoby</div>
-            {shownPeople.map((r) => (
-              <ConversationRow
-                key={r.key}
-                active={r.conv !== null && r.conv.id === activeId}
-                title={r.user ? r.name : <span className="italic text-slate-500">Konto usunięte</span>}
-                preview={r.conv ? previewFor(r.conv, me) : ''}
-                time={r.conv?.last_message ? listTime(r.conv.last_message.created_at) : ''}
-                unread={r.conv?.unread ?? 0}
-                avatar={<Avatar name={r.name} userId={r.user?.id ?? null} online={r.user ? r.user.online : null} />}
-                onClick={() => {
-                  if (r.conv) openConversation(r.conv.id)
-                  else if (r.user) {
-                    setPageErr('')
-                    setParams({ u: String(r.user.id) })
-                  }
-                }}
-              />
-            ))}
-            {users.length > 0 && shownPeople.length === 0 && (
-              <p className="px-3 py-1 text-[11.5px] text-slate-500">{q ? 'Nikogo takiego nie ma.' : 'Brak innych osób.'}</p>
+            {shownOnline.length > 0 && (
+              <>
+                <SectionTitle>Dostępni ({shownOnline.length})</SectionTitle>
+                <div className="space-y-0.5">{shownOnline.map(personRow)}</div>
+              </>
+            )}
+            {shownOther.length > 0 && (
+              <>
+                <SectionTitle>{onlinePeople.length > 0 ? 'Pozostali' : 'Osoby'}</SectionTitle>
+                <div className="space-y-0.5">{shownOther.map(personRow)}</div>
+              </>
+            )}
+            {users.length > 0 && shownOnline.length === 0 && shownOther.length === 0 && (
+              <>
+                <SectionTitle>Osoby</SectionTitle>
+                <p className="px-2.5 py-1 text-[12px] text-slate-500">{q ? 'Nikogo takiego nie ma.' : 'Brak innych osób.'}</p>
+              </>
             )}
           </div>
-        </div>
+        </aside>
 
         {active ? (
           <Thread
@@ -1504,9 +1856,33 @@ export function Chat() {
             callsEnabled={callsEnabled}
           />
         ) : (
-          <div className="hidden min-h-0 items-center justify-center p-6 text-center text-sm text-slate-500 md:flex">
-            {activeId || directUser ? 'Otwieram rozmowę…' : 'Wybierz rozmowę z listy albo osobę, do której chcesz napisać.'}
-          </div>
+          <section className={`hidden min-h-0 items-center justify-center p-6 md:flex ${panel}`}>
+            {activeId || directUser ? (
+              <p className="text-sm text-slate-500">Otwieram rozmowę…</p>
+            ) : (
+              <div className="grid max-w-md justify-items-center gap-3 text-center">
+                <span className="grid h-16 w-16 place-items-center rounded-2xl bg-sky-50 text-sky-700">
+                  <Icon name="chat" className="h-8 w-8" />
+                </span>
+                <div>
+                  <p className="text-[15px] font-semibold text-slate-900">Wybierz rozmowę albo osobę z listy</p>
+                  <p className="mt-1 text-[13px] text-slate-500">
+                    Kanały są dla zespołów, a rozmowę z jedną osobą otworzysz, klikając jej imię.
+                  </p>
+                </div>
+                {onlinePeople.length > 0 && (
+                  <div className="mt-2 w-full rounded-2xl bg-slate-50 p-3 ring-1 ring-slate-200/70">
+                    <p className="pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Dostępni teraz ({onlinePeople.length})
+                    </p>
+                    <div className="flex justify-center">
+                      <AvailableStrip rows={onlinePeople} onOpen={openPerson} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
         )}
       </div>
 
