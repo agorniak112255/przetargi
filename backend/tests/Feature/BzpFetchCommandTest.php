@@ -120,6 +120,49 @@ final class BzpFetchCommandTest extends TestCase
         $this->assertSame(['2026/BZP 00453849/01'], ProcurementNotice::query()->pluck('notice_number')->all());
     }
 
+    /**
+     * Produkcja 03.10.2026: przy serii zapytań Biuletyn chwilowo odpowiadał 403, a to samo zapytanie chwilę później
+     * przechodziło. Chwilowe ograniczenie (403/429) jest ponawiane po dłuższej przerwie, a nie liczone jako błąd.
+     */
+    public function test_temporary_throttling_is_retried_after_a_longer_pause(): void
+    {
+        $calls = [];
+        Http::fake(static function (Request $request) use (&$calls) {
+            $key = $request['NoticeType'].' '.$request['CpvCode'];
+            $calls[$key] = ($calls[$key] ?? 0) + 1;
+            if ($request['CpvCode'] === '18141000-9' && $request['NoticeType'] === 'TenderResultNotice' && $calls[$key] === 1) {
+                return Http::response('', 403);
+            }
+
+            return Http::response($request['NoticeType'] === 'TenderResultNotice' && $request['CpvCode'] === '18141000-9'
+                ? [self::fixture('result-single-awarded.json')]
+                : []);
+        });
+
+        $this->artisan('bzp:fetch')
+            ->expectsOutputToContain('zapisanych 1')
+            ->assertSuccessful();
+
+        $this->assertSame(2, $calls['TenderResultNotice 18141000-9']);
+        Sleep::assertSlept(static fn ($duration): bool => (int) $duration->totalMilliseconds === 20000, 1);
+        Http::assertSent(static fn (Request $request): bool => str_starts_with($request->header('User-Agent')[0] ?? '', 'PrzetargiSupon/'));
+    }
+
+    public function test_throttling_that_does_not_stop_ends_as_a_failed_request(): void
+    {
+        Http::fake(static function (Request $request) {
+            if ($request['CpvCode'] === '18141000-9') {
+                return Http::response('', 429);
+            }
+
+            return Http::response([]);
+        });
+
+        $this->artisan('bzp:fetch')
+            ->expectsOutputToContain('Nieudane zapytania: 2')
+            ->assertFailed();
+    }
+
     public function test_date_options(): void
     {
         Http::fake(static fn () => Http::response([]));

@@ -96,15 +96,20 @@ final class BzpClient
         }
         $this->requests++;
 
+        $throttleMs = max(0, (int) config('bzp.throttle_backoff_ms', 20000));
         try {
             $response = Http::acceptJson()
+                ->withUserAgent((string) config('bzp.user_agent'))
                 ->timeout((int) config('bzp.timeout', 30))
                 ->retry(
                     max(0, (int) config('bzp.retries', 2)) + 1,
-                    max(0, $pause) * 2,
-                    // ponawiamy tylko zerwane połączenie i błąd serwera — zły parametr (4xx) nie naprawi się sam
+                    // po ograniczeniu liczby zapytań (403/429) czekamy dłużej i coraz dłużej; po innych błędach krótko
+                    static fn (int $attempt, Throwable $e): int => self::throttled($e) ? $throttleMs * $attempt : max(0, $pause) * 2,
+                    // ponawiamy zerwane połączenie, błąd serwera i chwilowe ograniczenie liczby zapytań;
+                    // zły parametr (400, 404) nie naprawi się sam
                     static fn (Throwable $e): bool => $e instanceof ConnectionException
-                        || ($e instanceof RequestException && $e->response->serverError()),
+                        || ($e instanceof RequestException && $e->response->serverError())
+                        || self::throttled($e),
                 )
                 ->get((string) config('bzp.base_url'), $query);
         } catch (RequestException $e) {
@@ -120,6 +125,15 @@ final class BzpClient
         }
 
         return $data;
+    }
+
+    /**
+     * Serwer Biuletynu przy serii zapytań odpowiada chwilowo 403 (sprawdzone 03.10.2026 na produkcji: 20 z 76
+     * zapytań pierwszego przebiegu, to samo zapytanie chwilę później — 200), a ogólnie przyjętym sygnałem jest 429.
+     */
+    private static function throttled(Throwable $e): bool
+    {
+        return $e instanceof RequestException && in_array($e->response->status(), [403, 429], true);
     }
 
     private function date(CarbonInterface|string $value): string

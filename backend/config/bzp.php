@@ -104,6 +104,13 @@ return [
     'retries' => 2,
     'timeout' => 30,
 
+    /**
+     * Przerwa po chwilowym ograniczeniu liczby zapytań (HTTP 403/429): × numer próby (20 s, potem 40 s).
+     * Przedstawiamy się nazwą aplikacji — anonimowy klient HTTP łatwiej trafia na ograniczenia.
+     */
+    'throttle_backoff_ms' => 20000,
+    'user_agent' => 'PrzetargiSupon/1.0 (+'.rtrim((string) env('APP_URL', 'https://przetargi.supon.rzeszow.pl'), '/').')',
+
     /** Pełny HTML ogłoszeń niepowiązanych z przetargiem jest czyszczony po tylu dniach (system:prune). */
     'html_retention_days' => 30,
 
