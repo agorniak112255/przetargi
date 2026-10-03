@@ -165,13 +165,38 @@ function NoticesSketch() {
               </Td>
               <Td>
                 <Mark>
-                  <Btn label="Załóż przetarg" />
+                  <Btn label="Szczegóły" color="border" />
                 </Mark>{' '}
-                <Btn label="Pomiń" color="border" />
+                <Btn label="Załóż przetarg" /> <Btn label="Pomiń" color="border" />
               </Td>
             </Row>
           </tbody>
         </table>
+      </Card>
+    </AppFrame>
+  )
+}
+
+/** Szkic panelu szczegółów ogłoszenia (przykładowe dane). */
+function NoticeDetailsSketch() {
+  return (
+    <AppFrame nav="Ogłoszenia">
+      <Card className="max-w-xl space-y-2 text-xs">
+        <div className="font-semibold">Zarząd Dróg Powiatowych w Dolinie</div>
+        <div>Dostawa odzieży roboczej i obuwia dla pracowników drogowych</div>
+        <div className="text-slate-500">Termin składania ofert: 13.10.2026, 10:00 (czas polski)</div>
+        <div className="rounded border border-slate-200 px-2 py-1">
+          <b>Część 1: Odzież robocza</b>
+          <div className="text-slate-600">Kurtka ostrzegawcza zgodna z normą EN ISO 20471, klasa 2 — 120 sztuk…</div>
+        </div>
+        <div className="rounded border border-slate-200 px-2 py-1">▾ Wadium · ▸ Warunki udziału w postępowaniu</div>
+        <div className="font-semibold">Dokumenty postępowania</div>
+        <div>☑ Załącznik nr 2 — Opis przedmiotu zamówienia</div>
+        <div>☑ Załącznik nr 1 — Formularz ofertowy</div>
+        <div>☐ Specyfikacja warunków zamówienia</div>
+        <Mark>
+          <Btn label="Załóż przetarg z pozycjami" />
+        </Mark>
       </Card>
     </AppFrame>
   )
@@ -185,10 +210,17 @@ function Stage34Slideshow() {
       slides={[
         {
           action: 'Ogłoszenia przetargowe',
-          does: 'Nowa pozycja menu „Ogłoszenia” (zaraz pod „Przetargi”, dla osób, które mogą zakładać przetargi albo widzą wszystkie przetargi). Lista pokazuje ogłoszenia o zamówieniu z Biuletynu Zamówień Publicznych z kodami rodzaju zamówienia (CPV) na odzież, obuwie i środki ochrony: zamawiającego, przedmiot, termin składania ofert w czasie polskim, czego dotyczy, wartość (gdy ogłoszenie ją podaje) i odnośniki do strony postępowania i do ogłoszenia w Biuletynie. Aplikacja sprawdza Biuletyn codziennie o 6:30, więc ogłoszenie opublikowane w ciągu dnia pojawi się następnego ranka. Dziennik Urzędowy Unii Europejskiej (TED) nie jest pobierany, a zamówienia poniżej 130 000 zł nie mają wspólnego źródła, więc ich tu nie ma. Ogłoszenie nie zawiera listy pozycji — jest w dokumentach na stronie postępowania. Zakładki: „Nowe” (bez decyzji, domyślnie tylko z terminem składania w przyszłości albo bez podanego terminu), „Założone jako przetarg” (z odnośnikiem do przetargu, gdy masz do niego dostęp) i „Pominięte” (kto i kiedy pominął). „Pominięte” jest wspólne dla zespołu i dotyczy całego postępowania: ogłoszenie pominięte przez jedną osobę znika z „Nowe” u wszystkich i nie wraca, gdy Biuletyn opublikuje jego nową wersję (np. ze zmienionym terminem); „Przywróć” je cofa. „Załóż przetarg” pokazuje najpierw, co zostanie wypełnione: tytuł z przedmiotu zamówienia, termin składania z godziną, numer ogłoszenia i zamawiający. Zamawiającego aplikacja dobiera tak: najpierw po NIP-ie (gdy w zakładce Klienci jest dokładnie jeden klient z tym NIP-em; gdy jest ich kilku — ten z tą samą nazwą), potem po nazwie (gdy dokładnie jeden pasuje). Gdy pasuje kilku klientów, aplikacja nie zgaduje i nie dopisuje nowego — w oknie wybierasz klienta z listy, a dopiero potem „Załóż przetarg” staje się aktywne. Gdy żaden nie pasuje — dopisuje nowego klienta z nazwą, NIP-em i miastem z ogłoszenia. Przetarg dostaje dane z najnowszej wersji ogłoszenia postępowania. Powstaje jako szkic, Ty jesteś opiekunem i otwiera się kreator. Gdy ktoś już założył przetarg z tym postępowaniem, drugi nie powstaje — okno pokazuje numer istniejącego przetargu i przycisk przejścia do niego, jeśli masz do niego dostęp.',
-          click: 'Menu „Ogłoszenia” → wybór rodzaju zamówienia, województwa albo wpisanie szukanego słowa → „Załóż przetarg” → sprawdzenie, co zostanie wypełnione → „Załóż przetarg” w oknie. Dokumenty pobierasz przez „strona postępowania ↗” i dodajesz w kreatorze. Ogłoszenie, które Was nie interesuje — „Pomiń”.',
+          does: 'Nowa pozycja menu „Ogłoszenia” (zaraz pod „Przetargi”, dla osób, które mogą zakładać przetargi albo widzą wszystkie przetargi). Lista pokazuje ogłoszenia o zamówieniu z Biuletynu Zamówień Publicznych z kodami rodzaju zamówienia (CPV) na odzież, obuwie i środki ochrony: zamawiającego, przedmiot, termin składania ofert w czasie polskim, czego dotyczy, wartość (gdy ogłoszenie ją podaje) i odnośniki do strony postępowania i do ogłoszenia w Biuletynie. Aplikacja sprawdza Biuletyn codziennie o 6:30, więc ogłoszenie opublikowane w ciągu dnia pojawi się następnego ranka. Dziennik Urzędowy Unii Europejskiej (TED) nie jest pobierany, a zamówienia poniżej 130 000 zł nie mają wspólnego źródła, więc ich tu nie ma. Ogłoszenie nie zawiera listy pozycji — jest w dokumentach postępowania (zobacz następny slajd: „Szczegóły ogłoszenia i przetarg z pozycjami”). Zakładki: „Nowe” (bez decyzji, domyślnie tylko z terminem składania w przyszłości albo bez podanego terminu), „Założone jako przetarg” (z odnośnikiem do przetargu, gdy masz do niego dostęp) i „Pominięte” (kto i kiedy pominął). „Pominięte” jest wspólne dla zespołu i dotyczy całego postępowania: ogłoszenie pominięte przez jedną osobę znika z „Nowe” u wszystkich i nie wraca, gdy Biuletyn opublikuje jego nową wersję (np. ze zmienionym terminem); „Przywróć” je cofa. „Załóż przetarg” pokazuje najpierw, co zostanie wypełnione: tytuł z przedmiotu zamówienia, termin składania z godziną, numer ogłoszenia i zamawiający. Zamawiającego aplikacja dobiera tak: najpierw po NIP-ie (gdy w zakładce Klienci jest dokładnie jeden klient z tym NIP-em; gdy jest ich kilku — ten z tą samą nazwą), potem po nazwie (gdy dokładnie jeden pasuje). Gdy pasuje kilku klientów, aplikacja nie zgaduje i nie dopisuje nowego — w oknie wybierasz klienta z listy, a dopiero potem „Załóż przetarg” staje się aktywne. Gdy żaden nie pasuje — dopisuje nowego klienta z nazwą, NIP-em i miastem z ogłoszenia. Przetarg dostaje dane z najnowszej wersji ogłoszenia postępowania. Powstaje jako szkic, Ty jesteś opiekunem i otwiera się kreator. Gdy ktoś już założył przetarg z tym postępowaniem, drugi nie powstaje — okno pokazuje numer istniejącego przetargu i przycisk przejścia do niego, jeśli masz do niego dostęp.',
+          click: 'Menu „Ogłoszenia” → wybór rodzaju zamówienia, województwa albo wpisanie szukanego słowa → „Szczegóły” (albo kliknięcie przedmiotu zamówienia), żeby przeczytać ogłoszenie i wybrać dokumenty → „Załóż przetarg” → sprawdzenie, co zostanie wypełnione → „Załóż przetarg” w oknie. Ogłoszenie, które Was nie interesuje — „Pomiń”.',
           tone: 'blue',
           screen: <NoticesSketch />,
+        },
+        {
+          action: 'Szczegóły ogłoszenia i przetarg z pozycjami',
+          does: '„Szczegóły” przy ogłoszeniu (albo kliknięcie przedmiotu zamówienia) otwiera panel z prawej. U góry: zamawiający, przedmiot, termin składania ofert, wartość z ogłoszenia, czego dotyczy i odnośniki. Niżej części zamówienia z opisami i kodami rodzaju zamówienia (CPV) oraz sekcje ogłoszenia (przedmiot zamówienia, terminy, wadium, warunki udziału, kryteria oceny ofert, kontakt) — tekst słowo w słowo z Biuletynu, bez skracania i bez wniosków aplikacji; przedmiot, terminy i wadium są rozwinięte, resztę rozwijasz kliknięciem. Pełną treść ogłoszenia, z którego nie założono przetargu, aplikacja przechowuje 30 dni — potem panel pokazuje tylko części i ich opisy i mówi o tym wprost. Dokumenty: gdy postępowanie jest na platformie e-Zamówień, panel pokazuje listę dokumentów z polami wyboru. Na start zaznaczone są te, które z nazwy wyglądają na opis przedmiotu zamówienia albo formularz cenowy lub ofertowy — rodzaj to tylko podpowiedź z nazwy pliku, sprawdź ją; specyfikację warunków zamówienia (SWZ) zaznaczasz sam, gdy to w niej jest lista pozycji. Wybór dokumentów wymaga uprawnienia do zakładania przetargów i do dodawania dokumentów. Dlaczego z innych platform trzeba pobrać dokumenty ręcznie: aplikacja pobiera je sama tylko z e-Zamówień, które publikują listę dokumentów publicznie; inne platformy (na przykład platformazakupowa.pl) zabraniają pobierania plików przez automat. Wtedy pobierz dokumenty przez „strona postępowania ↗” i przeciągnij je do panelu (PDF, Excel, CSV albo Word, do 50 MB na plik; archiwum ZIP najpierw rozpakuj). „Załóż przetarg z pozycjami” zakłada przetarg tak samo jak „Załóż przetarg” (to samo okno z zamawiającym) i otwiera kreator w kroku „Dokumenty” z ramką „Dokumenty z ogłoszenia … czekające na odczyt”. Kreator sam pobiera i odczytuje pierwszy dokument (najpierw te z e-Zamówień, potem pliki z komputera); kolejne odczytujesz przyciskiem przy dokumencie („Pobierz i odczytaj” albo „Odczytaj”), gdy skończysz z poprzednim podglądem. Każdy odczytany plik zostaje w archiwum dokumentów przetargu (przy dokumentach z e-Zamówień — z informacją, skąd pochodzą), a historia przetargu notuje, skąd dodano plik. Gdy pobranie z e-Zamówień się nie uda, przy dokumencie jest powód i „Spróbuj ponownie” — możesz też pobrać plik ze strony postępowania i przeciągnąć go w kreatorze. Nic nie trafia do przetargu samo — pozycje i warunki dodaje dopiero Twoje „Dodaj do przetargu” pod podglądem. Pliki przeciągnięte z komputera są tylko w pamięci karty przeglądarki: zamknięcie panelu z wybranymi plikami pyta o potwierdzenie, a po odświeżeniu strony kreatora pliki jeszcze nieodczytane trzeba przeciągnąć ponownie.',
+          click: 'Menu „Ogłoszenia” → „Szczegóły” → przeczytaj części i sekcje → zaznacz dokumenty z e-Zamówień albo przeciągnij pliki pobrane ze strony postępowania → „Załóż przetarg z pozycjami” → „Załóż przetarg” w oknie → w kreatorze sprawdź podgląd i kliknij „Dodaj do przetargu”. Escape albo „Zamknij” zamyka panel.',
+          tone: 'blue',
+          screen: <NoticeDetailsSketch />,
         },
         {
           action: 'Kalendarz terminów',

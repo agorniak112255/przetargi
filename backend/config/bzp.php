@@ -140,6 +140,28 @@ return [
     'html_retention_days' => 30,
 
     /**
+     * Dokumenty postępowań prowadzonych na platformie e-Zamówienia (App\Services\Bzp\EzamowieniaDocuments), bez logowania.
+     * Lista: to samo zapytanie, którym strona postępowania pokazuje „Dokumenty zamówienia” ({tenderId} = ocds_id).
+     * Plik: adres z aplikacji klienta e-Zamówień (mp-client, fragment 8-es2015.*.js: downloadTenderDocumentQuery =
+     * apiUrlQuery + "/Tender/DownloadDocument" + "/{tenderId}/{objectId}"), sprawdzony 03.10.2026 na
+     * ocds-148610-80ea708c-f1af-464b-a908-c2da5441f5de_8: HTTP 200, plik DOCX w treści, nazwa w Content-Disposition,
+     * bez Content-Length (chunked) — limit rozmiaru liczony w trakcie pobierania.
+     * Pliki z innych platform nie są pobierane automatycznie (np. platformazakupowa.pl zabrania tego w robots.txt).
+     */
+    'ezamowienia' => [
+        'host' => 'ezamowienia.gov.pl',
+        'documents_url' => 'https://ezamowienia.gov.pl/mp-readmodels/api/Search/GetTenderDocuments',
+        'download_url' => 'https://ezamowienia.gov.pl/mp-readmodels/api/Tender/DownloadDocument/{tenderId}/{objectId}',
+        /** lista dokumentów w pamięci podręcznej (s); po błędzie krótsza przerwa, żeby nie odpytywać w kółko */
+        'cache_seconds' => 3600,
+        'error_cache_seconds' => 120,
+        'timeout' => 15,
+        'download_timeout' => 90,
+        /** największy plik pobierany do przetargu (MB) */
+        'max_file_mb' => 25,
+    ],
+
+    /**
      * Nasza firma — rozpoznanie „wygraliśmy” w ogłoszeniu o wyniku: najpierw NIP, potem nazwa (porównanie
      * kluczem App\Support\CompanyName::key). BZP_OUR_NAMES: kilka nazw rozdzielonych przecinkiem.
      */

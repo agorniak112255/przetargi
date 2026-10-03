@@ -249,6 +249,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/tenders/{tender}/documents', [TenderDocumentController::class, 'index']);
         Route::post('/tenders/{tender}/documents/analyze', [TenderDocumentController::class, 'analyze'])->middleware('permission:tenders.import');
         Route::post('/tenders/{tender}/documents/commit', [TenderDocumentController::class, 'commit'])->middleware('permission:tenders.import');
+        // plik z platformy e-Zamówienia (dokument postępowania z ogłoszenia) → ta sama ścieżka co analyze, podgląd do zatwierdzenia
+        Route::post('/tenders/{tender}/documents/from-notice', [TenderDocumentController::class, 'fromNotice'])->middleware('permission:tenders.import');
         Route::get('/tenders/{tender}/documents/{document}', [TenderDocumentController::class, 'show']);
         Route::get('/tenders/{tender}/documents/{document}/download', [TenderDocumentController::class, 'download']);
         Route::post('/tenders/{tender}/documents/{document}/reanalyze', [TenderDocumentController::class, 'reanalyze'])->middleware('permission:tenders.import');
@@ -281,6 +283,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     // zakładka Ogłoszenia: ogłoszenia o zamówieniu z Biuletynu, wspólne „pominięte”, przetarg z ogłoszenia
     Route::middleware('permission:tenders.create|tenders.view_all')->group(function (): void {
         Route::get('/notices', [NoticeController::class, 'index']);
+        Route::get('/notices/{notice}', [NoticeController::class, 'show'])->whereNumber('notice');
         Route::post('/notices/{notice}/skip', [NoticeController::class, 'skip']);
         Route::delete('/notices/{notice}/skip', [NoticeController::class, 'unskip']);
     });

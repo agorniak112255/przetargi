@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { NoticeDetailsPanel, type NoticeDocumentSelection } from '../components/notice/NoticeDetailsPanel'
 import {
   ApiError,
   can,
@@ -8,6 +9,7 @@ import {
   fetchNotices,
   skipNotice,
   unskipNotice,
+  type CreateTenderFromNoticeResult,
   type NoticeClientCandidate,
   type NoticeListSource,
   type NoticeRow,
@@ -16,7 +18,7 @@ import {
 } from '../lib/api'
 import { errorText, fmtDate, fmtDateTime } from '../lib/campaignFormat'
 import { plural } from '../lib/plural'
-import { setTenderWizardActive } from '../lib/tenderWizard'
+import { setTenderWizardActive, setTenderWizardHandoff } from '../lib/tenderWizard'
 
 const TABS: { key: NoticeTab; label: string }[] = [
   { key: 'new', label: 'Nowe' },
@@ -68,7 +70,9 @@ export function Notices() {
   const [rowBusy, setRowBusy] = useState<number | null>(null)
   const [actionErr, setActionErr] = useState('')
   const [flash, setFlash] = useState<{ text: string; undo: NoticeRow | null } | null>(null)
-  const [confirmRow, setConfirmRow] = useState<NoticeRow | null>(null)
+  /** okno „Załóż przetarg”; selection — dokumenty wybrane w szczegółach ogłoszenia (null — z listy, bez dokumentów) */
+  const [confirm, setConfirm] = useState<{ row: NoticeRow; selection: NoticeDocumentSelection | null } | null>(null)
+  const [detailsRow, setDetailsRow] = useState<NoticeRow | null>(null)
 
   const setFilters = useCallback(
     (patch: Record<string, string | null>) => {
@@ -140,7 +144,7 @@ export function Notices() {
     }
   }, [list, page, setFilters])
 
-  async function toggleSkip(row: NoticeRow, skip: boolean) {
+  async function toggleSkip(row: NoticeRow, skip: boolean): Promise<boolean> {
     setRowBusy(row.id)
     setActionErr('')
     setFlash(null)
@@ -152,8 +156,10 @@ export function Notices() {
           : { text: `Przywrócono ogłoszenie ${row.notice_number}.`, undo: null },
       )
       setReloadKey((k) => k + 1)
+      return true
     } catch (ex) {
       setActionErr(errorText(ex, skip ? 'Nie udało się pominąć ogłoszenia.' : 'Nie udało się przywrócić ogłoszenia.'))
+      return false
     } finally {
       setRowBusy(null)
     }
@@ -356,7 +362,8 @@ export function Notices() {
                     tab={tab}
                     canCreate={canCreate}
                     busy={rowBusy === row.id}
-                    onCreate={() => setConfirmRow(row)}
+                    onCreate={() => setConfirm({ row, selection: null })}
+                    onDetails={() => setDetailsRow(row)}
                     onSkip={(skip) => void toggleSkip(row, skip)}
                   />
                 ))}
@@ -392,17 +399,46 @@ export function Notices() {
         </div>
 
         <p className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
-          „Załóż przetarg” otwiera kreator z wypełnionym tytułem, zamawiającym, terminem składania z godziną i numerem
-          ogłoszenia. Ogłoszenie nie zawiera listy pozycji — dokumenty pobierasz ze strony postępowania i dodajesz w
-          kreatorze. „Pomiń” chowa ogłoszenie z zakładki „Nowe” u całego zespołu.
+          „Szczegóły” (albo kliknięcie przedmiotu zamówienia) pokazuje treść ogłoszenia, części z opisami i dokumenty
+          postępowania. „Załóż przetarg” otwiera kreator z wypełnionym tytułem, zamawiającym, terminem składania z
+          godziną i numerem ogłoszenia. Ogłoszenie nie zawiera listy pozycji — są w dokumentach: w szczegółach wybierz
+          je z listy e-Zamówień albo dodaj pliki pobrane ze strony postępowania, a kreator pokaże odczytane pozycje do
+          sprawdzenia. „Pomiń” chowa ogłoszenie z zakładki „Nowe” u całego zespołu.
         </p>
       </div>
 
-      {confirmRow && (
+      {detailsRow && (
+        <NoticeDetailsPanel
+          row={detailsRow}
+          canCreate={canCreate}
+          canImport={can(user, 'tenders.import')}
+          inactive={confirm !== null}
+          busy={rowBusy === detailsRow.id}
+          onClose={() => setDetailsRow(null)}
+          onCreate={(row, selection) => setConfirm({ row, selection })}
+          onSkip={(row, skip) => {
+            void toggleSkip(row, skip).then((ok) => {
+              if (ok) setDetailsRow(null)
+            })
+          }}
+        />
+      )}
+
+      {confirm && (
         <CreateTenderDialog
-          row={confirmRow}
-          onClose={() => setConfirmRow(null)}
-          onCreated={(id) => {
+          row={confirm.row}
+          selection={confirm.selection}
+          onClose={() => setConfirm(null)}
+          onCreated={(id, res) => {
+            const chosen = confirm.selection?.documents ?? []
+            // serwer zwraca dokumenty potwierdzone jako należące do postępowania — kreator pobierze tylko te
+            const confirmed = res.document_ids ? chosen.filter((d) => res.document_ids?.includes(d.id)) : chosen
+            setTenderWizardHandoff(id, {
+              noticeNumber: confirm.row.notice_number,
+              procedureUrl: confirm.row.procedure_url,
+              noticeDocuments: confirmed,
+              files: confirm.selection?.files ?? [],
+            })
             setTenderWizardActive(id, true)
             navigate(`/tenders/${id}`)
           }}
@@ -420,6 +456,7 @@ function NoticeTableRow({
   canCreate,
   busy,
   onCreate,
+  onDetails,
   onSkip,
 }: {
   row: NoticeRow
@@ -427,6 +464,7 @@ function NoticeTableRow({
   canCreate: boolean
   busy: boolean
   onCreate: () => void
+  onDetails: () => void
   onSkip: (skip: boolean) => void
 }) {
   const org = row.organization
@@ -436,7 +474,14 @@ function NoticeTableRow({
       <td className="max-w-[30rem] p-2">
         <div className="font-semibold text-slate-900">{org.name ?? 'Zamawiający nie podany'}</div>
         {place && <div className="text-[11px] text-slate-500">{place}</div>}
-        <div className="mt-1 text-slate-800">{row.order_object ?? 'Przedmiot zamówienia nie podany'}</div>
+        <button
+          type="button"
+          onClick={onDetails}
+          className="mt-1 block text-left text-slate-800 hover:text-blue-700 hover:underline"
+          title="Pokaż szczegóły ogłoszenia"
+        >
+          {row.order_object ?? 'Przedmiot zamówienia nie podany'}
+        </button>
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
           <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-slate-600">{SOURCE_LABEL[row.source] ?? row.source}</span>
           <span className="app-code">{row.notice_number}</span>
@@ -498,6 +543,13 @@ function NoticeTableRow({
             </span>
           )}
           <div className="flex flex-wrap justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={onDetails}
+              className="whitespace-nowrap rounded border border-slate-300 bg-white px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Szczegóły
+            </button>
             {canCreate && !row.tender && tab === 'new' && (
               <button
                 type="button"
@@ -558,14 +610,16 @@ function candidatesFrom(body: Record<string, unknown>): NoticeClientCandidate[] 
  */
 function CreateTenderDialog({
   row,
+  selection,
   onClose,
   onCreated,
   onConflict,
   onOpenExisting,
 }: {
   row: NoticeRow
+  selection: NoticeDocumentSelection | null
   onClose: () => void
-  onCreated: (tenderId: number) => void
+  onCreated: (tenderId: number, result: CreateTenderFromNoticeResult) => void
   onConflict: () => void
   onOpenExisting: (tenderId: number) => void
 }) {
@@ -621,8 +675,11 @@ function CreateTenderDialog({
     setBusy(true)
     setErr('')
     try {
-      const res = await createTenderFromNotice(row.id, chosenId ?? undefined)
-      onCreated(res.tender_id)
+      const res = await createTenderFromNotice(row.id, {
+        clientId: chosenId ?? undefined,
+        documentIds: selection?.documents.map((d) => d.id),
+      })
+      onCreated(res.tender_id, res)
     } catch (ex) {
       if (ex instanceof ApiError && ex.status === 409 && Number.isInteger(Number(ex.body.tender_id)) && Number(ex.body.tender_id) > 0) {
         setExisting({
@@ -768,9 +825,33 @@ function CreateTenderDialog({
                   zakładaniu aplikacja sprawdza go ponownie tą samą regułą.
                 </p>
               </div>
-              <p className="text-slate-600">
-                Ogłoszenie nie zawiera listy pozycji. Dokumenty pobierz ze strony postępowania i dodaj w kreatorze.
-              </p>
+              {selection && (selection.documents.length > 0 || selection.files.length > 0) ? (
+                <div className="rounded bg-slate-50 px-3 py-2 text-slate-700">
+                  <p className="font-medium text-slate-900">Dokumenty do odczytu</p>
+                  {selection.documents.length > 0 && (
+                    <p className="mt-1">
+                      Z e-Zamówień ({selection.documents.length}): {selection.documents.map((d) => d.name).join('; ')}.
+                      Kreator pobierze je po otwarciu, po jednym, i zapisze w archiwum dokumentów przetargu.
+                    </p>
+                  )}
+                  {selection.files.length > 0 && (
+                    <p className="mt-1">
+                      Z komputera ({selection.files.length}): {selection.files.map((f) => f.name).join('; ')}. Kreator
+                      odczyta je w kroku „Dokumenty” i zapisze w archiwum dokumentów przetargu.
+                    </p>
+                  )}
+                  <p className="mt-1 text-slate-500">
+                    Pierwszy dokument kreator odczyta sam, kolejne — przyciskiem przy dokumencie, gdy skończysz z
+                    poprzednim podglądem. Odczytane pozycje i warunki są tylko podglądem — do przetargu trafią dopiero po
+                    Twoim „Dodaj do przetargu”.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-slate-600">
+                  Ogłoszenie nie zawiera listy pozycji. Dokumenty dodasz w kreatorze (krok „Dokumenty”) albo wybierzesz
+                  je wcześniej w szczegółach ogłoszenia.
+                </p>
+              )}
             </>
           )}
           {err && (

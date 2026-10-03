@@ -28,6 +28,7 @@ final class TenderDocumentImportService
 
     /**
      * @param  list<string>  $targets
+     * @param  array{source: string, source_ref: ?string, source_url: ?string}|null  $origin  pochodzenie pliku pobranego automatycznie
      * @return array{
      *     document: ?TenderDocument,
      *     mode: string,
@@ -44,6 +45,7 @@ final class TenderDocumentImportService
         string $mode,
         array $targets,
         User $user,
+        ?array $origin = null,
     ): array {
         $mode = in_array($mode, ['simple', 'ai', 'full'], true) ? $mode : 'simple';
         $targets = array_values(array_intersect($targets, ['items', 'conditions']));
@@ -62,8 +64,9 @@ final class TenderDocumentImportService
 
         $document = null;
         $diskPath = null;
-        // DOCX zawsze zapisuj (szablon oferty); full = archiwum każdego formatu
-        $persistFile = $mode === 'full' || in_array($ext, ['docx', 'doc'], true);
+        // DOCX zawsze zapisuj (szablon oferty); full = archiwum każdego formatu; plik ze źródła zewnętrznego — zawsze
+        // (pochodzenie, ponowny odczyt i pobranie bez ponownego odpytywania źródła)
+        $persistFile = $mode === 'full' || in_array($ext, ['docx', 'doc'], true) || $origin !== null;
         if ($persistFile) {
             $diskPath = $file->store("tender-documents/{$tender->id}", 'local');
         }
@@ -110,6 +113,9 @@ final class TenderDocumentImportService
                 'disk_path' => $diskPath,
                 'mime' => $file->getMimeType(),
                 'extension' => $ext,
+                'source' => $origin['source'] ?? null,
+                'source_ref' => isset($origin['source_ref']) ? mb_substr((string) $origin['source_ref'], 0, 191) : null,
+                'source_url' => isset($origin['source_url']) ? mb_substr((string) $origin['source_url'], 0, 500) : null,
                 'size_bytes' => (int) $file->getSize(),
                 'mode' => $mode,
                 'targets' => $targets,

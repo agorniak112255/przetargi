@@ -8,8 +8,10 @@ use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\ProcurementNotice;
 use App\Models\ProcurementNoticeSkip;
+use App\Services\Bzp\EzamowieniaDocuments;
 use App\Services\Bzp\NoticeClientAmbiguousException;
 use App\Services\Bzp\NoticeListQuery;
+use App\Services\Bzp\NoticeSections;
 use App\Services\Bzp\NoticeTenderCreator;
 use App\Services\TenderAccessService;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -30,7 +32,52 @@ class NoticeController extends Controller
         private readonly NoticeListQuery $list,
         private readonly NoticeTenderCreator $creator,
         private readonly TenderAccessService $access,
+        private readonly NoticeSections $sections,
+        private readonly EzamowieniaDocuments $documents,
     ) {}
+
+    /**
+     * Szczegóły ogłoszenia (okno w zakładce Ogłoszenia): wiersz listy, fragmenty treści słowo w słowo (NoticeSections),
+     * części z odczytu ogłoszenia (parsed.lots) i dokumenty postępowania (EzamowieniaDocuments). Pełna treść ogłoszeń
+     * bez przetargu jest kasowana po bzp.html_retention_days dniach — wtedy sections = [], html_available = false
+     * i zostają części zapisane przy pobraniu.
+     */
+    public function show(Request $request, ProcurementNotice $notice): JsonResponse
+    {
+        $this->ensureContractNotice($notice);
+        $html = $notice->getRawOriginal('html_body');
+        $htmlAvailable = is_string($html) && trim($html) !== '';
+        $parsed = is_array($notice->parsed) ? $notice->parsed : [];
+
+        $lots = [];
+        foreach (is_array($parsed['lots'] ?? null) ? $parsed['lots'] : [] as $lot) {
+            if (! is_array($lot)) {
+                continue;
+            }
+            $lots[] = [
+                'lot_no' => (int) ($lot['lot_no'] ?? 0),
+                'name' => is_string($lot['name'] ?? null) ? $lot['name'] : null,
+                'description' => is_string($lot['description'] ?? null) ? $lot['description'] : null,
+                'cpv_main' => is_string($lot['cpv_main'] ?? null) ? $lot['cpv_main'] : null,
+                'cpv_main_name' => is_string($lot['cpv_main_name'] ?? null) ? $lot['cpv_main_name'] : null,
+                // jak total_value wiersza: „126 019,26 PLN”, bez waluty w ogłoszeniu — sama liczba
+                'estimated_value' => NoticeListQuery::formatAmount($lot['estimated_value'] ?? null),
+            ];
+        }
+
+        return response()->json([
+            'row' => $this->list->row($notice, $request->user()),
+            'sections' => $htmlAvailable ? $this->sections->extract($html) : [],
+            'lots' => $lots,
+            'documents' => $this->documents->forNotice($notice),
+            'html_available' => $htmlAvailable,
+            // „Załóż przetarg z pozycjami” / strefa plików: zakładanie (tenders.create) i odczyt dokumentów (tenders.import)
+            'can_import_documents' => $request->user()->can('tenders.create') && $request->user()->can('tenders.import'),
+            'html_note' => $htmlAvailable ? null : 'Pełnej treści tego ogłoszenia już nie przechowujemy (usuwana po '
+                .(int) config('bzp.html_retention_days', 30).' dniach, gdy z ogłoszenia nie założono przetargu). '
+                .'Poniżej części zamówienia odczytane przy pobraniu ogłoszenia; całość jest na stronie ogłoszenia w Biuletynie.',
+        ]);
+    }
 
     public function index(Request $request): JsonResponse
     {
@@ -86,13 +133,31 @@ class NoticeController extends Controller
     /**
      * Body: client_id (opcjonalnie) — zamawiający wybrany przez człowieka, dowolny istniejący klient. Bez niego przy
      * kilku pasujących klientach — 422 z listą client_candidates (nic nie powstaje).
+     * document_ids (opcjonalnie) — dokumenty postępowania z platformy e-Zamówienia wybrane w oknie szczegółów
+     * (id z documents.items). Serwer sprawdza tylko, że należą do tego postępowania, i oddaje je w odpowiedzi 201;
+     * pobranie i odczyt robi kreator przetargu po jednym pliku przez POST /tenders/{tender}/documents/from-notice
+     * (odczyt z modelem trwa jak przy wgraniu pliku — kilka plików w jednym żądaniu przekroczyłoby limit czasu).
      */
     public function createTender(Request $request, ProcurementNotice $notice): JsonResponse
     {
         $this->ensureContractNotice($notice);
         $data = $request->validate([
             'client_id' => ['nullable', 'integer', 'exists:clients,id'],
+            'document_ids' => ['sometimes', 'array', 'max:30'],
+            'document_ids.*' => ['string', 'max:191', 'regex:/^ocds-[A-Za-z0-9-]+_\d+$/'],
         ]);
+        $documentIds = array_values(array_unique(array_map('strval', $data['document_ids'] ?? [])));
+        if ($documentIds !== []) {
+            // odczyt dokumentów w kreatorze (analyze, from-notice) wymaga tenders.import — bez niego nic nie powstaje
+            abort_unless($request->user()->can('tenders.import'), 403, 'Dodawanie dokumentów do przetargu wymaga uprawnienia „Dodawanie dokumentów”.');
+            $ocds = (string) $notice->ocds_id;
+            $foreign = array_filter($documentIds, static fn (string $id): bool => ! str_starts_with($id, $ocds.'_'));
+            if (! EzamowieniaDocuments::isEzamowienia($notice) || $foreign !== []) {
+                $message = 'Dokumenty można pobrać automatycznie tylko z listy dokumentów tego postępowania na platformie e-Zamówienia.';
+
+                return response()->json(['message' => $message, 'errors' => ['document_ids' => [$message]]], 422);
+            }
+        }
         $chosen = isset($data['client_id']) ? Client::query()->findOrFail((int) $data['client_id']) : null;
 
         try {
@@ -118,7 +183,11 @@ class NoticeController extends Controller
             ], 409);
         }
 
-        return response()->json(['tender_id' => (int) $result['tender']->id], 201);
+        return response()->json([
+            'tender_id' => (int) $result['tender']->id,
+            // do pobrania w kreatorze (from-notice), po jednym; [] = bez dokumentów z e-Zamówień
+            'document_ids' => $documentIds,
+        ], 201);
     }
 
     /** Lista i akcje dotyczą tylko ogłoszeń o zamówieniu (ogłoszenie o wyniku → 404). */

@@ -30,7 +30,14 @@ import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { TENDER_STATUS_LABEL } from '../lib/tenderStatus'
 import { ShareToChatButton } from '../components/ShareToChatButton'
 import { StatusFlow } from '../components/StatusFlow'
-import { isTenderWizardActive, setTenderWizardActive } from '../lib/tenderWizard'
+import {
+  getTenderWizardHandoff,
+  isEmptyHandoff,
+  isTenderWizardActive,
+  setTenderWizardActive,
+  setTenderWizardHandoff,
+  type TenderWizardHandoff,
+} from '../lib/tenderWizard'
 import { TenderResultSection } from '../components/tender/TenderResultSection'
 import { MentionTextarea } from '../components/tender/MentionTextarea'
 import { deadlineTimeLabel, formatDeadline } from '../lib/tenderDeadline'
@@ -714,6 +721,7 @@ function itemMatchesQuery(item: Item, query: string): boolean {
 
 const actionLabel: Record<string, string> = {
   created: 'Utworzono przetarg',
+  document_added: 'Dodano dokument',
   updated: 'Zmieniono dane przetargu',
   status_changed: 'Zmiana statusu',
   item_updated: 'Zmiana pozycji',
@@ -946,6 +954,11 @@ function TenderDetailView() {
   const [newCondition, setNewCondition] = useState('')
   const [newConditionCategory, setNewConditionCategory] = useState('inne')
   const [docStatus, setDocStatus] = useState('')
+  // Dokumenty przekazane z okna szczegółów ogłoszenia (lib/tenderWizard) — tylko w pamięci tej karty przeglądarki.
+  const [handoff, setHandoffState] = useState<TenderWizardHandoff | null>(() => (id ? getTenderWizardHandoff(id) : null))
+  /** błąd ostatniej próby odczytu dokumentu z ogłoszenia (klucz: id dokumentu z e-Zamówień albo nazwa pliku) */
+  const [handoffErrors, setHandoffErrors] = useState<Record<string, string>>({})
+  const handoffStartedRef = useRef(false)
   const itemDraftsRef = useRef<Map<number, ItemDraft>>(new Map())
   const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>(null)
   const [itemQuery, setItemQuery] = useState('')
@@ -1078,6 +1091,18 @@ function TenderDetailView() {
     const withoutProduct = data.coverage?.without_product ?? items.filter((i) => !i.main_product).length
     setWizardStep(items.length === 0 ? 0 : withoutProduct > 0 ? 1 : 3)
   }, [wizardMode, wizardActive, data, id])
+
+  // Dokumenty z ogłoszenia: raz po wejściu w krok „Dokumenty” kreatora otwórz podgląd pierwszego dokumentu z
+  // e-Zamówień albo odczytaj pierwszy plik z komputera. Tylko podgląd — do przetargu trafia po „Dodaj do przetargu”.
+  useEffect(() => {
+    if (handoffStartedRef.current || !handoff || handoff.started || !data || !wizardMode || wizardStep !== 0) return
+    if (!data.can_edit || !can(user, 'tenders.import') || data.tender.items.length > 0) return
+    handoffStartedRef.current = true
+    updateHandoff({ ...handoff, started: true })
+    const firstDocument = handoff.noticeDocuments[0]
+    if (firstDocument) void readNoticeDocument(firstDocument)
+    else if (handoff.files[0]) void readHandoffFile(handoff.files[0])
+  })
 
   const load = useCallback(async () => {
     const d = await api<Detail>(`/tenders/${id}`)
@@ -1340,35 +1365,48 @@ function TenderDetailView() {
     }
   }
 
-  async function analyzeDocument(file: File) {
+  type DocumentAnalysis = {
+    document_id: number | null
+    extracted_text: string
+    mapping_notes?: string | null
+    items: PreviewItem[]
+    conditions: PreviewCondition[]
+    items_count: number
+    conditions_count: number
+  }
+
+  function analysisTargets(): string[] {
+    const targets: string[] = []
+    if (docTargets.items) targets.push('items')
+    if (docTargets.conditions) targets.push('conditions')
+    if (targets.length === 0) throw new Error('Zaznacz, co odczytać z pliku: pozycje, warunki albo jedno i drugie.')
+    return targets
+  }
+
+  /**
+   * Wspólny przebieg odczytu pliku do podglądu (plik z komputera albo dokument z e-Zamówień): status, podgląd „Co
+   * zostanie dodane do przetargu”, nic nie trafia do przetargu bez „Dodaj do przetargu”. Zwraca null po udanym odczycie
+   * albo treść błędu. savesFile — plik trafił do archiwum dokumentów (wtedy lista dokumentów jest odświeżana).
+   */
+  async function runDocumentAnalysis(
+    fileName: string,
+    mode: 'simple' | 'ai' | 'full',
+    request: () => Promise<DocumentAnalysis>,
+    savesFile: boolean,
+    origin = '',
+  ): Promise<string | null> {
     setErr('')
     setMsg('')
     setBusy(true)
     const modeLabel =
-      docMode === 'simple'
+      mode === 'simple'
         ? 'odczyt samego tekstu'
-        : docMode === 'ai'
+        : mode === 'ai'
           ? 'odczyt z podglądem'
           : 'odczyt z podglądem i zapis pliku'
-    setDocStatus(`Wybrano: ${file.name} — trwa ${modeLabel}…`)
+    setDocStatus(`Wybrano: ${fileName}${origin} — trwa ${modeLabel}…`)
     try {
-      const targets: string[] = []
-      if (docTargets.items) targets.push('items')
-      if (docTargets.conditions) targets.push('conditions')
-      if (targets.length === 0) throw new Error('Zaznacz, co odczytać z pliku: pozycje, warunki albo jedno i drugie.')
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('mode', docMode)
-      targets.forEach((t) => fd.append('targets[]', t))
-      const res = await api<{
-        document_id: number | null
-        extracted_text: string
-        mapping_notes?: string | null
-        items: PreviewItem[]
-        conditions: PreviewCondition[]
-        items_count: number
-        conditions_count: number
-      }>(`/tenders/${id}/documents/analyze`, { method: 'POST', body: fd })
+      const res = await request()
       setDocPreview({
         document_id: res.document_id,
         extracted_text: res.extracted_text ?? '',
@@ -1377,21 +1415,111 @@ function TenderDetailView() {
         conditions: (res.conditions ?? []).map((c) => ({ ...c, selected: c.selected !== false })),
       })
       setDocStatus(
-        `Gotowe: ${file.name} — ${res.items_count} pozycji, ${res.conditions_count} warunków. Sprawdź numer, nazwę i cenę, potem kliknij „Dodaj do przetargu”.`,
+        `Gotowe: ${fileName} — ${res.items_count} pozycji, ${res.conditions_count} warunków. Sprawdź numer, nazwę i cenę, potem kliknij „Dodaj do przetargu”.`,
       )
       setMsg('Podgląd gotowy — nic nie zostało jeszcze dodane do przetargu. Sprawdź listę poniżej.')
-      // nie przeładowuj listy w trakcie podglądu — chyba że plik trafił do archiwum: tryb pełny albo Word
-      // (backend zapisuje Word jako formularz ofertowy także w trybie AI)
-      if (docMode === 'full' || /\.docx?$/i.test(file.name)) await load()
+      // nie przeładowuj listy w trakcie podglądu — chyba że plik trafił do archiwum: tryb pełny, Word
+      // (backend zapisuje Word jako formularz ofertowy także w trybie AI) albo dokument z e-Zamówień
+      if (savesFile) await load()
       requestAnimationFrame(() => {
         document.getElementById('doc-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       })
+      return null
     } catch (e) {
-      setDocStatus(`Błąd przy pliku ${file.name}.`)
-      setErr(e instanceof Error ? e.message : 'Nie udało się odczytać pliku')
+      const message = e instanceof Error && e.message ? e.message : 'Nie udało się odczytać pliku'
+      setDocStatus(`Błąd przy pliku ${fileName}.`)
+      setErr(message)
+      return message
     } finally {
       setBusy(false)
     }
+  }
+
+  /** mode — domyślnie ustawienie odczytu; pliki z ogłoszenia czyta z zapisem pliku (patrz readHandoffFile). */
+  async function analyzeDocument(file: File, mode: 'simple' | 'ai' | 'full' = docMode): Promise<string | null> {
+    return runDocumentAnalysis(
+      file.name,
+      mode,
+      () => {
+        const targets = analysisTargets()
+        const fd = new FormData()
+        fd.append('file', file)
+        fd.append('mode', mode)
+        targets.forEach((t) => fd.append('targets[]', t))
+        return api<DocumentAnalysis>(`/tenders/${id}/documents/analyze`, { method: 'POST', body: fd })
+      },
+      mode === 'full' || /\.docx?$/i.test(file.name),
+    )
+  }
+
+  function updateHandoff(next: TenderWizardHandoff) {
+    setHandoffState(isEmptyHandoff(next) ? null : next)
+    if (id) setTenderWizardHandoff(id, next)
+  }
+
+  /** Usuwa z kolejki dokument już odczytany (stan z pamięci strony, bo w trakcie odczytu mógł się zmienić). */
+  function dropFromHandoff(change: (h: TenderWizardHandoff) => TenderWizardHandoff) {
+    const current = id ? getTenderWizardHandoff(id) : null
+    if (current) updateHandoff(change(current))
+  }
+
+  /**
+   * Tryb odczytu dokumentów z ogłoszenia: z zapisem pliku w archiwum (źródło zostaje przy przetargu). Przy ustawieniu
+   * „tylko tekst” — tym trybem, bo od trybu zależy zatwierdzenie podglądu („Dodaj do przetargu”).
+   */
+  function handoffMode(): 'simple' | 'full' {
+    return docMode === 'simple' ? 'simple' : 'full'
+  }
+
+  /** Plik z komputera przekazany z ogłoszenia: ta sama ścieżka co plik przeciągnięty w kreatorze. */
+  async function readHandoffFile(file: File) {
+    const key = `plik:${file.name}:${file.size}`
+    const error = await analyzeDocument(file, handoffMode())
+    setHandoffErrors((prev) => {
+      const next = { ...prev }
+      if (error) next[key] = error
+      else delete next[key]
+      return next
+    })
+    if (!error) dropFromHandoff((h) => ({ ...h, files: h.files.filter((f) => f !== file) }))
+  }
+
+  /**
+   * Dokument z e-Zamówień: serwer pobiera plik (POST /tenders/{id}/documents/from-notice), zapisuje go z pochodzeniem
+   * i zwraca podgląd jak przy wgraniu pliku. 409 — ten dokument jest już w przetargu: pokazujemy podgląd zapisanego.
+   */
+  async function readNoticeDocument(doc: { id: string; name: string }) {
+    const mode = handoffMode()
+    let existingId: number | null = null
+    const error = await runDocumentAnalysis(
+      doc.name,
+      mode,
+      async () => {
+        const targets = analysisTargets()
+        try {
+          return await api<DocumentAnalysis>(`/tenders/${id}/documents/from-notice`, {
+            method: 'POST',
+            body: JSON.stringify({ notice_document_id: doc.id, mode, targets }),
+          })
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 409 && Number(e.body.document_id) > 0) existingId = Number(e.body.document_id)
+          throw e
+        }
+      },
+      true,
+      ' (pobieram z e-Zamówień)',
+    )
+    if (error && existingId === null) {
+      setHandoffErrors((prev) => ({ ...prev, [doc.id]: error }))
+      return
+    }
+    setHandoffErrors((prev) => {
+      const next = { ...prev }
+      delete next[doc.id]
+      return next
+    })
+    dropFromHandoff((h) => ({ ...h, noticeDocuments: h.noticeDocuments.filter((d) => d.id !== doc.id) }))
+    if (existingId !== null) await openDocumentPreview(existingId)
   }
 
   async function openDocumentPreview(docId: number) {
@@ -2678,6 +2806,91 @@ function TenderDetailView() {
 
   const documentsSection = (
     <div className="space-y-4">
+      {handoff && (
+        <div className="rounded-xl border border-blue-200 bg-white p-4 text-xs shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <h2 className="text-sm font-semibold">
+              Dokumenty z ogłoszenia <span className="app-code">{handoff.noticeNumber}</span> czekające na odczyt
+            </h2>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                if (!window.confirm('Ukryć dokumenty z ogłoszenia, które nie zostały jeszcze odczytane?')) return
+                updateHandoff({ ...handoff, noticeDocuments: [], files: [] })
+              }}
+              className="rounded border border-slate-300 px-2 py-0.5 text-slate-700 hover:bg-slate-50"
+            >
+              Ukryj
+            </button>
+          </div>
+          <p className="mb-2 text-slate-500">
+            Odczyt pokazuje podgląd pozycji i warunków — do przetargu trafiają dopiero po „Dodaj do przetargu”. Naraz
+            widać jeden podgląd: dodaj go albo anuluj, potem odczytaj następny dokument. Odczytany plik zostaje w
+            archiwum dokumentów niżej.
+          </p>
+          <ul className="space-y-1">
+            {handoff.noticeDocuments.map((d) => (
+              <li key={d.id}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>
+                    {d.name} <span className="text-slate-500">· z e-Zamówień</span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={busy || docPreview !== null || !can_edit || !canImport}
+                    onClick={() => void readNoticeDocument(d)}
+                    className="rounded bg-blue-600 px-2 py-0.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {handoffErrors[d.id] ? 'Spróbuj ponownie' : 'Pobierz i odczytaj'}
+                  </button>
+                </div>
+                {handoffErrors[d.id] && (
+                  <p className="mt-0.5 text-red-700">
+                    {handoffErrors[d.id]}
+                    {handoff.procedureUrl && (
+                      <>
+                        {' '}Możesz też pobrać plik ze{' '}
+                        <a href={handoff.procedureUrl} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline">
+                          strony postępowania ↗
+                        </a>{' '}
+                        i przeciągnąć go niżej.
+                      </>
+                    )}
+                  </p>
+                )}
+              </li>
+            ))}
+            {handoff.files.map((f) => {
+              const key = `plik:${f.name}:${f.size}`
+              return (
+                <li key={key}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="break-all">
+                      {f.name} <span className="text-slate-500">· z komputera</span>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={busy || docPreview !== null || !can_edit || !canImport}
+                      onClick={() => void readHandoffFile(f)}
+                      className="rounded bg-blue-600 px-2 py-0.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {handoffErrors[key] ? 'Spróbuj ponownie' : 'Odczytaj'}
+                    </button>
+                  </div>
+                  {handoffErrors[key] && <p className="mt-0.5 text-red-700">{handoffErrors[key]}</p>}
+                </li>
+              )
+            })}
+          </ul>
+          {handoff.files.length > 0 && (
+            <p className="mt-2 text-slate-500">
+              Pliki z komputera są tylko w pamięci tej karty przeglądarki — po odświeżeniu strony trzeba je przeciągnąć
+              ponownie.
+            </p>
+          )}
+        </div>
+      )}
       <div className="rounded-xl bg-white p-4 shadow-sm">
         <h2 className="mb-1 text-sm font-semibold">Dokumenty od zamawiającego</h2>
         <p className="text-xs text-slate-500">

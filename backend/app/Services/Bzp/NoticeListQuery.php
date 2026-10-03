@@ -529,7 +529,7 @@ final class NoticeListQuery
      * Kwota z ogłoszenia ({amount: „1365178.85”, currency}) dla ludzi: „1 365 178,85 PLN”; bez waluty w ogłoszeniu —
      * sama liczba (bez zgadywania waluty).
      */
-    private static function formatAmount(mixed $value): ?string
+    public static function formatAmount(mixed $value): ?string
     {
         if (! is_array($value) || ! is_string($value['amount'] ?? null) || preg_match('/^(\d+)\.(\d{2})$/', $value['amount'], $m) !== 1) {
             return null;

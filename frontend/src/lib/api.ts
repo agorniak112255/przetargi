@@ -2614,14 +2614,87 @@ export type NoticeTenderClientChoice = {
 }
 
 /**
- * Zakłada przetarg (szkic) z ogłoszenia; dane bierze z najnowszej wersji ogłoszenia postępowania. clientId — zamawiający
- * wybrany przez człowieka (dowolny istniejący klient). Błędy (ApiError): 409 — przetarg z tym postępowaniem już jest
- * (ciało NoticeTenderConflict, drugi nie powstaje); 422 z `client_candidates` — kilku pasujących klientów, trzeba
- * wybrać (NoticeTenderClientChoice); 423 — ktoś inny zakłada w tej chwili przetarg z ogłoszenia.
+ * Rodzaj dokumentu z e-Zamówień rozpoznany po nazwie (heurystyka serwera — podpowiedź, nie fakt): description — opis
+ * przedmiotu zamówienia, form — formularz cenowy albo ofertowy, swz — specyfikacja warunków zamówienia, other — inny.
  */
-export function createTenderFromNotice(noticeId: number, clientId?: number): Promise<{ tender_id: number }> {
-  return api<{ tender_id: number }>(`/notices/${noticeId}/tender`, {
+export type NoticeDocumentKind = 'description' | 'form' | 'swz' | 'other'
+
+/** Dokument postępowania z publicznej listy e-Zamówień; id — objectId z e-Zamówień („{ocds}_8”). */
+export type NoticeDocument = {
+  id: string
+  name: string
+  file_name: string
+  published_at: string | null
+  kind: NoticeDocumentKind
+  /** plik w formacie, który odczyta import dokumentów przetargu (PDF, Word, Excel, CSV) */
+  importable?: boolean
+  /** podpowiedź zaznaczenia: opis przedmiotu zamówienia albo formularz cenowy/ofertowy, w formacie do odczytu */
+  suggested?: boolean
+}
+
+/** Sekcja ogłoszenia z Biuletynu — tekst słowo w słowo z ogłoszenia (bez znaczników HTML, z akapitami). */
+export type NoticeSection = { key: string; title: string; text: string }
+
+/** Część zamówienia zapisana przy pobraniu ogłoszenia (zostaje także po skasowaniu treści HTML ogłoszenia). */
+export type NoticeLot = {
+  lot_no: number | null
+  name: string | null
+  description: string | null
+  cpv_main: string | null
+  cpv_main_name: string | null
+  /** tekst wartości z ogłoszenia, bez przeliczania; null — nie podano */
+  estimated_value: string | null
+}
+
+/** GET /notices/{id} — te same uprawnienia co lista. */
+export type NoticeDetails = {
+  row: NoticeRow
+  /** w kolejności z ogłoszenia; puste i nieznane serwer pomija; pusta lista, gdy treść HTML jest już skasowana */
+  sections: NoticeSection[]
+  lots: NoticeLot[]
+  documents: {
+    /** true — lista dokumentów pobrana z e-Zamówień; false — dokumenty są na innej platformie albo lista nie odpowiada */
+    available: boolean
+    source: 'ezamowienia' | null
+    items: NoticeDocument[]
+    /** wyjaśnienie dla człowieka (np. „Dokumenty są na platformie … — pobierz je ze strony postępowania i dodaj tutaj”) */
+    note: string
+  }
+  /** false — treść HTML ogłoszenia skasowana (po 30 dniach bez przetargu); sekcji brak, zostają części z opisami */
+  html_available: boolean
+  /** wyjaśnienie serwera, gdy treści HTML już nie ma */
+  html_note?: string | null
+  /** zakładanie przetargów i dodawanie dokumentów (tenders.create i tenders.import) — wybór dokumentów ma sens */
+  can_import_documents?: boolean
+}
+
+export function fetchNoticeDetails(noticeId: number, signal?: AbortSignal): Promise<NoticeDetails> {
+  return api<NoticeDetails>(`/notices/${noticeId}`, { signal })
+}
+
+/**
+ * document_ids — dokumenty z e-Zamówień potwierdzone przez serwer jako należące do postępowania; serwer ich nie pobiera
+ * — kreator pobiera i odczytuje je po jednym przez POST /tenders/{id}/documents/from-notice (TenderDetail).
+ */
+export type CreateTenderFromNoticeResult = { tender_id: number; document_ids?: string[] }
+
+/**
+ * Zakłada przetarg (szkic) z ogłoszenia; dane bierze z najnowszej wersji ogłoszenia postępowania. clientId — zamawiający
+ * wybrany przez człowieka (dowolny istniejący klient). documentIds — dokumenty z listy e-Zamówień (NoticeDocument.id) do
+ * odczytu w kreatorze (wymaga też tenders.import). Błędy (ApiError): 409 — przetarg z tym postępowaniem już jest (ciało
+ * NoticeTenderConflict, drugi nie powstaje); 422 z `client_candidates` — kilku pasujących klientów, trzeba wybrać
+ * (NoticeTenderClientChoice); 422 z `errors.document_ids` — dokumenty spoza tego postępowania albo nie z e-Zamówień;
+ * 423 — ktoś inny zakłada w tej chwili przetarg z ogłoszenia.
+ */
+export function createTenderFromNotice(
+  noticeId: number,
+  options: { clientId?: number; documentIds?: string[] } = {},
+): Promise<CreateTenderFromNoticeResult> {
+  const body: { client_id?: number; document_ids?: string[] } = {}
+  if (options.clientId) body.client_id = options.clientId
+  if (options.documentIds && options.documentIds.length > 0) body.document_ids = options.documentIds
+  return api<CreateTenderFromNoticeResult>(`/notices/${noticeId}/tender`, {
     method: 'POST',
-    body: JSON.stringify(clientId ? { client_id: clientId } : {}),
+    body: JSON.stringify(body),
   })
 }

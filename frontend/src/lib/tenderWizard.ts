@@ -26,3 +26,34 @@ export function setTenderWizardActive(tenderId: number | string, active: boolean
     // brak dostępu do localStorage — kreator działa do odświeżenia strony
   }
 }
+
+/**
+ * Dokumenty przekazane kreatorowi z okna szczegółów ogłoszenia (Ogłoszenia → „Załóż przetarg z pozycjami”), do odczytu
+ * po jednym ścieżką dokumentów kreatora (podgląd przed dodaniem): noticeDocuments — dokumenty z e-Zamówień (kreator
+ * pobiera je przez serwer: POST /tenders/{id}/documents/from-notice), files — pliki przeciągnięte przez człowieka.
+ * Trzymane tylko w pamięci tej karty przeglądarki — po odświeżeniu strony pliki trzeba dodać ponownie (kreator to mówi).
+ */
+export type TenderWizardHandoff = {
+  noticeNumber: string
+  procedureUrl: string | null
+  noticeDocuments: { id: string; name: string }[]
+  files: File[]
+  /** kreator zaczął już sam odczyt pierwszego dokumentu — po powrocie na stronę przetargu nie robi tego drugi raz */
+  started?: boolean
+}
+
+const handoffs = new Map<string, TenderWizardHandoff>()
+
+export function isEmptyHandoff(handoff: TenderWizardHandoff): boolean {
+  return handoff.files.length === 0 && handoff.noticeDocuments.length === 0
+}
+
+export function setTenderWizardHandoff(tenderId: number | string, handoff: TenderWizardHandoff): void {
+  if (isEmptyHandoff(handoff)) handoffs.delete(String(tenderId))
+  else handoffs.set(String(tenderId), handoff)
+}
+
+/** Odczyt bez usuwania (inicjalizator stanu Reacta w trybie ścisłym wołany jest dwa razy). */
+export function getTenderWizardHandoff(tenderId: number | string): TenderWizardHandoff | null {
+  return handoffs.get(String(tenderId)) ?? null
+}
