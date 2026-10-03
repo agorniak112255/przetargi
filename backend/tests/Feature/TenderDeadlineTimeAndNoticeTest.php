@@ -217,6 +217,7 @@ final class TenderDeadlineTimeAndNoticeTest extends TestCase
         $auto = TenderLot::query()->create([
             'tender_id' => $tender->id, 'lot_no' => 1, 'name' => 'Rękawice', 'outcome' => TenderLot::OUTCOME_CANCELLED,
             'lowest_price' => '1000.00', 'currency' => 'PLN', 'bzp_notice_id' => $notice->id, 'decided_at' => now(),
+            'created_by_bzp' => true,
         ]);
         // część 2: zwycięzca i ceny z Biuletynu, wynik i nasza cena wpisane ręcznie — zostają tylko wpisy ręczne
         $mixed = TenderLot::query()->create([
@@ -259,6 +260,39 @@ final class TenderDeadlineTimeAndNoticeTest extends TestCase
             ['lot_no' => 1, 'deleted' => true, 'fields' => [], 'offers_changed' => false],
             ['lot_no' => 2, 'fields' => ['name', 'winner', 'winner_price', 'offers_count'], 'offers_changed' => true],
         ], $activity->meta['lots']);
+    }
+
+    /**
+     * Część założona ręcznie (np. potwierdzona „startowaliśmy w części 1”, potem uzupełniona z Biuletynu) zostaje po
+     * zmianie postępowania — traci tylko dane z Biuletynu. Usuwane są wyłącznie części założone przez Biuletyn.
+     */
+    public function test_changing_procedure_keeps_manually_created_lot_filled_from_bulletin(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $notice = ProcurementNotice::query()->create([
+            'notice_type' => ProcurementNotice::TYPE_RESULT,
+            'notice_number' => '2026/BZP 00461230/01',
+            'bzp_number' => '2026/BZP 00461230',
+            'published_at' => now(),
+            'order_object' => 'Dostawa rękawic',
+            'cpv_codes' => ['18141000-9'],
+            'organization_name' => 'Szpital',
+            'parser_version' => 1,
+            'fetched_at' => now(),
+        ]);
+        $tender = $this->tender(['notice_number' => '2026/BZP 00431178/01', 'result_notice_id' => $notice->id]);
+        $lot = TenderLot::query()->create([
+            'tender_id' => $tender->id, 'lot_no' => 1, 'name' => 'Rękawice', 'offers_count' => 4, 'currency' => 'PLN',
+            'manual_fields' => [TenderLot::LOT_NO_CONFIRMED], 'bzp_notice_id' => $notice->id, 'bzp_applied_at' => now(),
+        ]);
+
+        $this->patchJson("/api/tenders/{$tender->id}", ['notice_number' => '2026/BZP 00431179/01'])->assertOk();
+
+        $lot->refresh();
+        $this->assertNull($lot->bzp_notice_id);
+        $this->assertNull($lot->name);
+        $this->assertNull($lot->offers_count);
+        $this->assertNull($lot->manual_fields);
     }
 
     public function test_list_filters_for_missing_result_time_and_notice(): void

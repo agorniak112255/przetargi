@@ -344,7 +344,8 @@ final class TenderResultService
                 $withoutConfirmation = array_values(array_filter($manual, static fn (mixed $field): bool => $field !== TenderLot::LOT_NO_CONFIRMED));
                 $manualOffers = $lot->offers->filter(static fn (TenderLotOffer $offer): bool => $offer->source === TenderLotOffer::SOURCE_MANUAL)->count();
 
-                if ($lot->bzp_notice_id !== null && $withoutConfirmation === [] && $manualOffers === 0) {
+                // usuwamy tylko część, którą założył Biuletyn — część założona ręcznie zostaje, nawet pusta
+                if ($lot->created_by_bzp && $lot->bzp_notice_id !== null && $withoutConfirmation === [] && $manualOffers === 0) {
                     $lot->delete();
                     $log[] = ['lot_no' => $lotNo, 'deleted' => true, 'fields' => [], 'offers_changed' => false];
 
