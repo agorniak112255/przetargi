@@ -22,7 +22,7 @@ final class TenderDocxItemExtractor
 
     /**
      * @return array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, quantity_missing: bool, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
@@ -209,7 +209,7 @@ final class TenderDocxItemExtractor
 
     /**
      * @param  array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, quantity_missing: bool, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
@@ -236,14 +236,14 @@ final class TenderDocxItemExtractor
 
     /**
      * @param  array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, quantity_missing: bool, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
      * }  $pack
      * @param  list<array{sku: ?string, name: string, description: string}>  $descs
      * @return array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, quantity_missing: bool, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
@@ -286,7 +286,7 @@ final class TenderDocxItemExtractor
     /**
      * @param  list<array{sku: ?string, name: string, description: string}>  $descs
      * @return array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, quantity_missing: bool, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
@@ -306,6 +306,8 @@ final class TenderDocxItemExtractor
                     $body !== '' ? $body : null,
                 ]))),
                 'quantity' => 1,
+                // tabela opisów nie podaje ilości
+                'quantity_missing' => true,
                 'offer_price' => null,
                 'currency' => null,
                 'norms' => null,

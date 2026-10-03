@@ -23,7 +23,7 @@ final class TenderSpreadsheetItemExtractor
 
     /**
      * @return array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, quantity_missing: bool, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
@@ -84,7 +84,7 @@ final class TenderSpreadsheetItemExtractor
      *
      * @param  list<list<string>>  $rows
      * @return array{
-     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
+     *     items: list<array{sku: ?string, name: string, requirement: string, quantity: int, quantity_missing: bool, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>,
      *     column_map: array<string, int|null>,
      *     header_row: int,
      *     notes: string
@@ -408,7 +408,7 @@ final class TenderSpreadsheetItemExtractor
     /**
      * @param  list<list<string>>  $rows
      * @param  array<string, int|null>  $cols
-     * @return list<array{sku: ?string, name: string, requirement: string, quantity: int, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>
+     * @return list<array{sku: ?string, name: string, requirement: string, quantity: int, quantity_missing: bool, offer_price: ?float, currency: ?string, norms: ?string, description: ?string}>
      */
     private function rowsToItems(array $rows, int $headerRow, array $cols): array
     {
@@ -450,10 +450,13 @@ final class TenderSpreadsheetItemExtractor
             $priceRaw = $cols['offer_price'] !== null ? ($row[$cols['offer_price']] ?? null) : null;
             $price = $this->toFloat($priceRaw);
             $qty = 1;
+            // brak kolumny ilości albo pusta komórka: 1 do uzupełnienia, oznaczone (pozycja z ogłoszenia zachowa swoją ilość)
+            $qtyMissing = true;
             if ($cols['quantity'] !== null) {
                 $q = $this->toFloat($row[$cols['quantity']] ?? null);
                 if ($q !== null && $q >= 1) {
                     $qty = (int) round($q);
+                    $qtyMissing = false;
                 }
             }
 
@@ -489,6 +492,7 @@ final class TenderSpreadsheetItemExtractor
                 'name' => $name,
                 'requirement' => implode(' · ', $reqParts),
                 'quantity' => max(1, $qty),
+                'quantity_missing' => $qtyMissing,
                 'offer_price' => $price,
                 'currency' => $currency,
                 'norms' => $norms !== '' ? $norms : null,

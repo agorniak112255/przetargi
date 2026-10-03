@@ -25,7 +25,7 @@ final class TenderDocumentAiAnalyzer
 
     /**
      * @param  list<string>  $targets  items|conditions
-     * @return array{items: list<array{requirement: string, quantity: int}>, conditions: list<array{category: ?string, content: string}>}
+     * @return array{items: list<array{requirement: string, quantity: int, quantity_missing: bool}>, conditions: list<array{category: ?string, content: string}>}
      */
     public function analyze(string $text, array $targets): array
     {
@@ -64,6 +64,7 @@ final class TenderDocumentAiAnalyzer
                     .($wantItems ? "- pozycje (items): sku, name, requirement, quantity, offer_price, currency\n" : '')
                     .($wantConditions ? "- warunki (conditions): category + content\n" : '')
                     ."Nie sklejaj całego wiersza w jedno pole — rozdziel numer, nazwę i cenę.\n"
+                    .($wantItems ? "quantity: ilość z dokumentu; null, gdy dokument nie podaje ilości tej pozycji (nie wpisuj 1 z domysłu).\n" : '')
                     ."Nie duplikuj. Pomijaj nagłówki, spisy treści, dane kontaktowe.\n"
                     ."Wartości w schemacie opisują pola — nie przepisuj ich. Czego nie ma w dokumencie, tego nie wpisuj (pusta lista).\n"
                     .($wantConditions ? "category: dokładnie jedno słowo z listy: termin, dostawa, gwarancja, certyfikat, platnosc, it, inne.\n" : '')
@@ -84,7 +85,7 @@ final class TenderDocumentAiAnalyzer
     }
 
     /**
-     * @return array{items: list<array{requirement: string, quantity: int}>, conditions: list<array{category: ?string, content: string}>}
+     * @return array{items: list<array{requirement: string, quantity: int, quantity_missing: bool}>, conditions: list<array{category: ?string, content: string}>}
      */
     public function heuristic(string $text, array $targets): array
     {
@@ -119,13 +120,14 @@ final class TenderDocumentAiAnalyzer
             }
 
             if ($wantItems && (preg_match('/^\d+[\.\)]\s+/u', $line) || preg_match('/\t|\s{2,}/u', $line))) {
-                $qty = 1;
-                if (preg_match('/(\d+)\s*(szt|kpl|par|op|opak)/iu', $line, $m)) {
-                    $qty = max(1, (int) $m[1]);
+                $qty = null;
+                if (preg_match('/(\d+)\s*(szt|kpl|par|op|opak)/iu', $line, $m) && (int) $m[1] >= 1) {
+                    $qty = (int) $m[1];
                 }
                 $items[] = [
                     'requirement' => preg_replace('/^\d+[\.\)]\s+/u', '', $line) ?? $line,
-                    'quantity' => $qty,
+                    'quantity' => $qty ?? 1,
+                    'quantity_missing' => $qty === null,
                 ];
             }
         }
@@ -134,7 +136,7 @@ final class TenderDocumentAiAnalyzer
             foreach ($lines as $line) {
                 $line = trim($line);
                 if (mb_strlen($line) >= 15 && mb_strlen($line) <= 400) {
-                    $items[] = ['requirement' => $line, 'quantity' => 1];
+                    $items[] = ['requirement' => $line, 'quantity' => 1, 'quantity_missing' => true];
                 }
                 if (count($items) >= 80) {
                     break;
@@ -149,7 +151,7 @@ final class TenderDocumentAiAnalyzer
     }
 
     /**
-     * @return list<array{requirement: string, quantity: int}>
+     * @return list<array{requirement: string, quantity: int, quantity_missing: bool}>
      */
     private function normalizeItems(mixed $raw): array
     {
@@ -177,13 +179,17 @@ final class TenderDocumentAiAnalyzer
             if ($req === '' && $name === '' && $sku === '') {
                 continue;
             }
-            $qty = $row['quantity'] ?? $row['ilosc'] ?? 1;
+            $qty = $row['quantity'] ?? $row['ilosc'] ?? null;
+            // brak ilości w odpowiedzi modelu: 1 do uzupełnienia, ale oznaczone — przy uzupełnianiu pozycji z ogłoszenia
+            // zostaje ilość z ogłoszenia, a nie ta jedynka
+            $qtyMissing = ! is_numeric($qty) || (int) $qty < 1;
             $price = $row['offer_price'] ?? $row['price'] ?? $row['cena'] ?? null;
             $out[] = [
                 'sku' => $sku !== '' ? mb_substr($sku, 0, 128) : null,
                 'name' => mb_substr($name !== '' ? $name : $req, 0, 5000),
                 'requirement' => mb_substr($req !== '' ? $req : $name, 0, 5000),
-                'quantity' => max(1, is_numeric($qty) ? (int) $qty : 1),
+                'quantity' => $qtyMissing ? 1 : (int) $qty,
+                'quantity_missing' => $qtyMissing,
                 'offer_price' => is_numeric($price) ? round((float) $price, 2) : null,
                 'currency' => isset($row['currency']) && ! str_contains((string) $row['currency'], '|')
                     ? (string) $row['currency']

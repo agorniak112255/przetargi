@@ -2680,6 +2680,57 @@ export function fetchNoticeDetails(noticeId: number, signal?: AbortSignal): Prom
 }
 
 /**
+ * Towar odczytany modelem z treści ogłoszenia (NoticeItemsReader). Fakty sprawdzone w tekście ogłoszenia: quote_found
+ * (cytat jest w ogłoszeniu), quantity (liczba stoi w cytacie, inaczej null), spec (wycinki z ogłoszenia w okolicy tej
+ * pozycji, nie sformułowanie modelu). bhp — ocena modelu, nie fakt z ogłoszenia.
+ */
+export type NoticeItem = {
+  lot_no: number | null
+  /** sam rodzaj towaru (bez norm i cech) */
+  name: string
+  /** cechy przepisane z ogłoszenia, złączone „; ”; null — ogłoszenie ich nie podaje albo nie znaleziono cytatu */
+  spec: string | null
+  spec_fragments: string[]
+  quantity: number | null
+  unit: string | null
+  quote: string
+  quote_found: boolean
+  bhp: boolean
+}
+
+/**
+ * GET /notices/{id}/items — te same uprawnienia co szczegóły. items: null — wynik nie jest zapamiętany, a użytkownik
+ * bez uprawnienia do zakładania przetargów nie uruchamia modelu (wyjaśnienie w note). Błędy (ApiError): 422 — ogłoszenie
+ * bez opisu przedmiotu albo model nie odpowiedział; 503 — model zajęty.
+ */
+export type NoticeItemsResponse = {
+  items: NoticeItem[] | null
+  /** części ogłoszenia z oceną „towary BHP” (wnioskowanie z kodów CPV i opisu) */
+  lots: { lot_no: number; name: string | null; bhp: boolean }[]
+  /** 'subject' — sekcja „Przedmiot zamówienia”; 'lots' — skrócone opisy części (pełnej treści już nie ma) */
+  source: 'subject' | 'lots' | null
+  /** chwila odczytu modelem (ISO) */
+  read_at: string | null
+  /** true — wynik zapamiętany z wcześniejszego odczytu */
+  cached: boolean
+  /** wyjaśnienie dla osoby bez uprawnienia do zakładania przetargów, gdy wyniku nie ma w pamięci */
+  note: string | null
+}
+
+/**
+ * refresh — „Odczytaj ponownie” (model jeszcze raz; tylko z uprawnieniem do zakładania przetargów). cachedOnly — tylko
+ * wynik zapamiętany (bez modelu i bez zajmowania miejsca na odczyt; items: null, gdy go nie ma). Błąd 422 z
+ * `reason: 'no_description'` (ApiError.body) — ogłoszenie bez opisu przedmiotu, stan trwały.
+ */
+export function fetchNoticeItems(
+  noticeId: number,
+  options: { signal?: AbortSignal; refresh?: boolean; cachedOnly?: boolean } = {},
+): Promise<NoticeItemsResponse> {
+  const query = options.refresh ? '?refresh=1' : options.cachedOnly ? '?cached_only=1' : ''
+  return api<NoticeItemsResponse>(`/notices/${noticeId}/items${query}`, { signal: options.signal })
+}
+
+/**
  * document_ids — dokumenty z e-Zamówień potwierdzone przez serwer jako należące do postępowania; serwer ich nie pobiera
  * — kreator pobiera i odczytuje je po jednym przez POST /tenders/{id}/documents/from-notice (TenderDetail).
  */

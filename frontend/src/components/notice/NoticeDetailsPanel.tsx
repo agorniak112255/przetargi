@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
+  ApiError,
   fetchNoticeDetails,
+  fetchNoticeItems,
   type NoticeDetails,
   type NoticeDocument,
   type NoticeDocumentKind,
+  type NoticeItem,
+  type NoticeItemsResponse,
   type NoticeRow,
 } from '../../lib/api'
 import { errorText, fmtDate } from '../../lib/campaignFormat'
@@ -69,6 +73,283 @@ function externalLink(href: string, label: string) {
   )
 }
 
+/** Ilość tylko z cytatu ogłoszenia (fakt); bez niej — „ilość nie podana”. Różnych jednostek nie sumujemy. */
+function quantityLabel(item: NoticeItem): string {
+  if (item.quantity == null) return 'ilość nie podana'
+  return `${item.quantity.toLocaleString('pl-PL')}${item.unit ? ` ${item.unit}` : ''}`
+}
+
+/** „04.10, 14:35” — chwila odczytu modelem. */
+function readAtLabel(iso: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+type ItemGroup = { lotNo: number | null; name: string | null; bhp: boolean | null; items: NoticeItem[] }
+
+/** Towary w częściach ogłoszenia (kolejność części rosnąco, towary bez części na końcu). */
+function groupByLot(res: NoticeItemsResponse, items: NoticeItem[]): ItemGroup[] {
+  const groups = new Map<number | null, ItemGroup>()
+  for (const item of items) {
+    let group = groups.get(item.lot_no)
+    if (!group) {
+      const lot = item.lot_no == null ? undefined : res.lots.find((l) => l.lot_no === item.lot_no)
+      group = { lotNo: item.lot_no, name: lot?.name ?? null, bhp: lot?.bhp ?? null, items: [] }
+      groups.set(item.lot_no, group)
+    }
+    group.items.push(item)
+  }
+  return [...groups.values()].sort((a, b) => (a.lotNo ?? Number.MAX_SAFE_INTEGER) - (b.lotNo ?? Number.MAX_SAFE_INTEGER))
+}
+
+function AssortmentRow({ item }: { item: NoticeItem }) {
+  return (
+    <li
+      className={`rounded border border-slate-200 px-2 py-1.5 ${item.quote_found ? '' : 'opacity-60'}`}
+      title={`Z ogłoszenia: „${item.quote}”`}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="font-medium text-slate-900">{item.name}</span>
+        <span className={item.quantity == null ? 'text-slate-500' : 'text-slate-900'}>· {quantityLabel(item)}</span>
+        <span
+          className={`inline-block rounded px-1.5 text-[11px] ${
+            item.bhp ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+          }`}
+        >
+          {item.bhp ? 'możliwe BHP (ocena modelu)' : 'poza BHP (ocena modelu)'}
+        </span>
+        {!item.quote_found && (
+          <span className="text-[11px] text-amber-800">
+            nie znaleziono w treści ogłoszenia — tylko propozycja modelu
+          </span>
+        )}
+      </div>
+      {item.spec && (
+        <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-500" title={item.spec}>
+          {item.spec}
+        </p>
+      )}
+    </li>
+  )
+}
+
+/** Model rusza dopiero, gdy panel zostaje otwarty tyle czasu — przeglądanie listy nie zajmuje miejsc na odczyt. */
+const MODEL_DELAY_MS = 1000
+
+/** Zajęty model (503) — jedno ponowienie po tym czasie, potem komunikat. */
+const BUSY_RETRY_MS = 5000
+
+type AssortmentPhase = 'cache' | 'wait' | 'model' | 'busy-retry' | 'done'
+
+/**
+ * Podsumowanie asortymentu z treści ogłoszenia (GET /notices/{id}/items): towary z ilościami i cechami przepisanymi
+ * z ogłoszenia. Najpierw wynik zapamiętany (cached_only — od razu, bez modelu); gdy go nie ma, a użytkownik może
+ * uruchomić model — odczyt modelem po MODEL_DELAY_MS otwartego panelu (do pół minuty; metadane i dokumenty są od razu).
+ * Komponent zakładany z key = id ogłoszenia: zmiana ogłoszenia zaczyna od zera, zamknięcie przerywa zapytanie i timery.
+ */
+function NoticeAssortment({ noticeId, canRefresh }: { noticeId: number; canRefresh: boolean }) {
+  const [data, setData] = useState<NoticeItemsResponse | null>(null)
+  const [err, setErr] = useState<{ text: string; permanent: boolean } | null>(null)
+  const [phase, setPhase] = useState<AssortmentPhase>('cache')
+  const [seconds, setSeconds] = useState(0)
+  const [request, setRequest] = useState({ key: 0, refresh: false })
+  const headingRef = useRef<HTMLHeadingElement | null>(null)
+  /** po „Spróbuj ponownie” / „Odczytaj ponownie” przycisk znika — fokus wraca na nagłówek sekcji */
+  const focusAfterRef = useRef(false)
+  const loading = phase !== 'done'
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const { signal } = controller
+    const openedAt = Date.now()
+    let timer: number | undefined
+    let tick: number | undefined
+    setErr(null)
+
+    const fail = (ex: unknown) => {
+      if (signal.aborted) return
+      // ogłoszenie bez opisu przedmiotu — stan trwały, ponowienie nic nie zmieni
+      const permanent = ex instanceof ApiError && ex.status === 422 && ex.body.reason === 'no_description'
+      setErr({ text: errorText(ex, 'Nie udało się odczytać asortymentu z ogłoszenia.'), permanent })
+      setPhase('done')
+    }
+    const runModel = (attempt: number) => {
+      const started = Date.now()
+      setPhase('model')
+      setSeconds(0)
+      tick = window.setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000)
+      fetchNoticeItems(noticeId, { signal, refresh: request.refresh })
+        .then((res) => {
+          if (signal.aborted) return
+          setData(res)
+          setPhase('done')
+        })
+        .catch((ex: unknown) => {
+          if (signal.aborted) return
+          if (ex instanceof ApiError && ex.status === 503 && attempt === 0) {
+            setPhase('busy-retry')
+            timer = window.setTimeout(() => runModel(1), BUSY_RETRY_MS)
+            return
+          }
+          fail(ex)
+        })
+        .finally(() => window.clearInterval(tick))
+    }
+
+    if (request.refresh) {
+      runModel(0)
+    } else {
+      setPhase('cache')
+      fetchNoticeItems(noticeId, { signal, cachedOnly: true })
+        .then((res) => {
+          if (signal.aborted) return
+          if (res.items !== null || !canRefresh) {
+            setData(res)
+            setPhase('done')
+            return
+          }
+          setPhase('wait')
+          timer = window.setTimeout(() => runModel(0), Math.max(0, MODEL_DELAY_MS - (Date.now() - openedAt)))
+        })
+        .catch(fail)
+    }
+    return () => {
+      controller.abort()
+      window.clearTimeout(timer)
+      window.clearInterval(tick)
+    }
+  }, [noticeId, request, canRefresh])
+
+  useEffect(() => {
+    if (phase === 'done' && focusAfterRef.current) {
+      focusAfterRef.current = false
+      headingRef.current?.focus()
+    }
+  }, [phase])
+
+  function again(refresh: boolean) {
+    focusAfterRef.current = true
+    setRequest((r) => ({ key: r.key + 1, refresh }))
+  }
+
+  const items = data?.items ?? null
+  const groups = data && items ? groupByLot(data, items) : []
+  const grouped = groups.length > 1 || (data?.lots.length ?? 0) > 1
+  const bhpCount = items?.filter((i) => i.bhp).length ?? 0
+  const readAt = readAtLabel(data?.read_at ?? null)
+  const statusText =
+    phase === 'busy-retry'
+      ? 'Model zajęty — ponowię odczyt za kilka sekund…'
+      : phase === 'model'
+        ? request.refresh
+          ? 'Odczytuję asortyment ponownie…'
+          : 'Odczytuję asortyment z treści ogłoszenia…'
+        : 'Wczytuję asortyment…'
+
+  return (
+    <section aria-labelledby="notice-assortment-title" aria-busy={loading}>
+      <h3
+        id="notice-assortment-title"
+        ref={headingRef}
+        tabIndex={-1}
+        className="mb-1 text-sm font-semibold text-slate-900 focus:outline-none"
+      >
+        Asortyment z ogłoszenia
+      </h3>
+      {loading ? (
+        <p className="text-slate-500">
+          {/* czytnik ekranu dostaje stały tekst, nie licznik co sekundę */}
+          <span role="status">{statusText}</span>
+          {phase === 'model' && <span aria-hidden="true"> {seconds} s (zwykle do 30 s)</span>}
+        </p>
+      ) : err?.permanent ? (
+        <p className="text-slate-600">{err.text}</p>
+      ) : err ? (
+        <p className="rounded bg-red-50 px-3 py-2 text-red-700" role="alert">
+          {err.text}{' '}
+          <button type="button" className="font-medium underline" onClick={() => again(false)}>
+            Spróbuj ponownie
+          </button>
+        </p>
+      ) : items === null ? (
+        <p className="text-slate-600">{data?.note ?? 'Asortymentu z tego ogłoszenia nikt jeszcze nie odczytał.'}</p>
+      ) : items.length === 0 ? (
+        <p className="text-slate-600">Ogłoszenie nie wymienia towarów z ilościami — są w dokumentach postępowania.</p>
+      ) : (
+        <>
+          <p className="mb-1 text-slate-600">
+            {items.length} {plural(items.length, 'towar', 'towary', 'towarów')}
+            {bhpCount > 0 && `, w tym ${bhpCount} możliwe BHP (ocena modelu)`}. Ilości, jednostki i cechy tylko
+            przepisane z ogłoszenia — gdy nie stoją przy towarze w treści ogłoszenia, ich nie podajemy.
+          </p>
+          {grouped ? (
+            <div className="space-y-1">
+              {groups.map((g) => (
+                <details
+                  key={g.lotNo ?? 'none'}
+                  open={g.bhp !== false || g.items.some((i) => i.bhp)}
+                  className="rounded border border-slate-200 px-2 py-1"
+                >
+                  <summary className="cursor-pointer font-medium text-slate-900">
+                    {g.lotNo != null ? `Część ${g.lotNo}` : 'Bez wskazanej części'}
+                    {g.name ? <span className="font-normal text-slate-600"> · {g.name}</span> : null}
+                    {g.bhp !== null && (
+                      <span
+                        title="ocena aplikacji z kodów rodzaju zamówienia (CPV) i opisu części"
+                        className={`ml-2 inline-block rounded px-1.5 text-[11px] font-normal ${
+                          g.bhp ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {g.bhp ? 'możliwe towary BHP (ocena aplikacji)' : 'bez towarów BHP (ocena aplikacji)'}
+                      </span>
+                    )}
+                    <span className="ml-2 font-normal text-slate-500">
+                      {g.items.length} {plural(g.items.length, 'towar', 'towary', 'towarów')}
+                    </span>
+                  </summary>
+                  <ul className="mt-1 space-y-1 pb-1">
+                    {g.items.map((item, i) => (
+                      <AssortmentRow key={`${item.name}-${i}`} item={item} />
+                    ))}
+                  </ul>
+                </details>
+              ))}
+            </div>
+          ) : (
+            <ul className="space-y-1">
+              {items.map((item, i) => (
+                <AssortmentRow key={`${item.name}-${i}`} item={item} />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+      {!loading && !err && data !== null && (readAt || items !== null || canRefresh) && (
+        <p className="mt-1 flex flex-wrap items-baseline gap-x-2 text-[11px] text-slate-500">
+          {readAt && <span>odczytano {readAt}</span>}
+          {data.source === 'lots' && items && items.length > 0 && (
+            <span>odczyt z opisów części (skróconych) — lista może być niepełna</span>
+          )}
+          {items !== null && (
+            <span>Odczyt robi model; cechy są tylko przepisane z ogłoszenia, ocena BHP to wniosek modelu.</span>
+          )}
+          {canRefresh && (
+            <button
+              type="button"
+              className="font-medium text-blue-700 hover:underline"
+              onClick={() => again(true)}
+            >
+              Odczytaj ponownie
+            </button>
+          )}
+        </p>
+      )}
+    </section>
+  )
+}
+
 export type NoticeDocumentSelection = {
   /** zaznaczone dokumenty z listy e-Zamówień (id i nazwa do potwierdzenia) */
   documents: { id: string; name: string }[]
@@ -77,7 +358,8 @@ export type NoticeDocumentSelection = {
 }
 
 /**
- * Szczegóły ogłoszenia (panel z prawej): nagłówek, części z opisami, sekcje ogłoszenia słowo w słowo, dokumenty
+ * Szczegóły ogłoszenia (panel z prawej): nagłówek, podsumowanie asortymentu (NoticeAssortment), pod przyciskiem
+ * „Pokaż pełną treść ogłoszenia” części z opisami i sekcje ogłoszenia słowo w słowo, dokumenty
  * (lista z e-Zamówień z polami wyboru albo strefa plików pobranych ręcznie z innej platformy) i akcje. Wybrane pliki
  * są chronione przed przypadkowym zamknięciem (pytanie przy zamknięciu i przy wyjściu ze strony). Escape zamyka panel,
  * chyba że nad nim jest otwarte okno zakładania przetargu (`inactive`).
@@ -113,6 +395,8 @@ export function NoticeDetailsPanel({
   const [rejected, setRejected] = useState<SkippedDocument[]>([])
   const [unpacking, setUnpacking] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  /** części z opisami i sekcje treści ogłoszenia — zwinięte, na górze podsumowanie asortymentu */
+  const [showFull, setShowFull] = useState(false)
   const closeRef = useRef<HTMLButtonElement | null>(null)
 
   const row = details?.row ?? listRow
@@ -299,6 +583,8 @@ export function NoticeDetailsPanel({
             )}
           </div>
 
+          <NoticeAssortment key={listRow.id} noticeId={listRow.id} canRefresh={canCreate} />
+
           {err && (
             <p className="rounded bg-red-50 px-3 py-2 text-red-700" role="alert">
               {err}{' '}
@@ -311,78 +597,94 @@ export function NoticeDetailsPanel({
 
           {details && (
             <>
-              {!details.html_available && (
-                <p className="rounded bg-amber-50 px-3 py-2 text-amber-900">
-                  {details.html_note ||
-                    'Pełna treść tego ogłoszenia nie jest już zapisana w aplikacji (aplikacja przechowuje ją 30 dni, gdy z ogłoszenia nie założono przetargu). Poniżej są tylko dane zapisane przy pobraniu: części zamówienia i ich opisy. Całe ogłoszenie przeczytasz w Biuletynie.'}
-                </p>
+              {(details.lots.length > 0 || details.sections.length > 0 || !details.html_available) && (
+                <button
+                  type="button"
+                  aria-expanded={showFull}
+                  aria-controls="notice-full-content"
+                  onClick={() => setShowFull((v) => !v)}
+                  className="rounded border border-slate-300 bg-white px-2.5 py-1 text-slate-700 hover:bg-slate-50"
+                >
+                  {showFull ? 'Zwiń pełną treść ogłoszenia' : 'Pokaż pełną treść ogłoszenia'}
+                </button>
               )}
 
-              {details.lots.length > 0 && (
-                <section aria-labelledby="notice-lots-title">
-                  <h3 id="notice-lots-title" className="mb-1 text-sm font-semibold text-slate-900">
-                    {details.lots.length > 1
-                      ? `Części zamówienia (${details.lots.length})`
-                      : 'Przedmiot zamówienia z ogłoszenia'}
-                  </h3>
-                  <ul className="space-y-2">
-                    {details.lots.map((lot, i) => (
-                      <li key={`${lot.lot_no ?? 'x'}-${i}`} className="rounded border border-slate-200 px-3 py-2">
-                        <div className="font-medium text-slate-900">
-                          {lot.lot_no !== null && details.lots.length > 1 ? `Część ${lot.lot_no}: ` : ''}
-                          {lot.name ?? <span className="text-slate-500">nazwa nie podana</span>}
-                          {details.lots.length > 1 && lot.bhp !== undefined && (
-                            <span
-                              title={lot.bhp_reason ?? 'brak kodów CPV z listy BHP i środków ochrony w opisie części'}
-                              className={`ml-2 inline-block rounded px-1.5 text-[11px] font-normal ${
-                                lot.bhp ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
-                              }`}
-                            >
-                              {lot.bhp ? 'towary BHP' : 'bez towarów BHP'}
-                            </span>
-                          )}
-                        </div>
-                        {lot.description ? (
-                          <p className="mt-1 whitespace-pre-line text-slate-800">{lot.description}</p>
-                        ) : (
-                          <p className="mt-1 text-slate-500">Ogłoszenie nie podaje opisu tej części.</p>
-                        )}
-                        <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-slate-500">
-                          {lot.cpv_main && (
-                            <span>
-                              kod rodzaju zamówienia (CPV): {lot.cpv_main}
-                              {lot.cpv_main_name ? ` — ${lot.cpv_main_name}` : ''}
-                            </span>
-                          )}
-                          <span>wartość z ogłoszenia: {lot.estimated_value ?? 'nie podano'}</span>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
+              {showFull && (
+                <div id="notice-full-content" className="space-y-4">
+                  {!details.html_available && (
+                    <p className="rounded bg-amber-50 px-3 py-2 text-amber-900">
+                      {details.html_note ||
+                        'Pełna treść tego ogłoszenia nie jest już zapisana w aplikacji (aplikacja przechowuje ją 30 dni, gdy z ogłoszenia nie założono przetargu). Poniżej są tylko dane zapisane przy pobraniu: części zamówienia i ich opisy. Całe ogłoszenie przeczytasz w Biuletynie.'}
+                    </p>
+                  )}
 
-              {details.sections.length > 0 && (
-                <section aria-labelledby="notice-sections-title">
-                  <h3 id="notice-sections-title" className="text-sm font-semibold text-slate-900">
-                    Treść ogłoszenia
-                  </h3>
-                  <p className="mb-1 text-[11px] text-slate-500">
-                    Tekst słowo w słowo z ogłoszenia w Biuletynie Zamówień Publicznych, w kolejności z ogłoszenia.
-                  </p>
-                  <div className="space-y-1">
-                    {details.sections.map((s) => (
-                      <details
-                        key={s.key}
-                        open={OPEN_SECTION.test(s.title) || OPEN_SECTION.test(s.key)}
-                        className="rounded border border-slate-200 px-3 py-1.5"
-                      >
-                        <summary className="cursor-pointer font-medium text-slate-900">{s.title}</summary>
-                        <p className="mt-1 whitespace-pre-line text-slate-800">{s.text}</p>
-                      </details>
-                    ))}
-                  </div>
-                </section>
+                  {details.lots.length > 0 && (
+                    <section aria-labelledby="notice-lots-title">
+                      <h3 id="notice-lots-title" className="mb-1 text-sm font-semibold text-slate-900">
+                        {details.lots.length > 1
+                          ? `Części zamówienia (${details.lots.length})`
+                          : 'Przedmiot zamówienia z ogłoszenia'}
+                      </h3>
+                      <ul className="space-y-2">
+                        {details.lots.map((lot, i) => (
+                          <li key={`${lot.lot_no ?? 'x'}-${i}`} className="rounded border border-slate-200 px-3 py-2">
+                            <div className="font-medium text-slate-900">
+                              {lot.lot_no !== null && details.lots.length > 1 ? `Część ${lot.lot_no}: ` : ''}
+                              {lot.name ?? <span className="text-slate-500">nazwa nie podana</span>}
+                              {details.lots.length > 1 && lot.bhp !== undefined && (
+                                <span
+                                  title={lot.bhp_reason ?? 'brak kodów CPV z listy BHP i środków ochrony w opisie części'}
+                                  className={`ml-2 inline-block rounded px-1.5 text-[11px] font-normal ${
+                                    lot.bhp ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                                  }`}
+                                >
+                                  {lot.bhp ? 'towary BHP' : 'bez towarów BHP'}
+                                </span>
+                              )}
+                            </div>
+                            {lot.description ? (
+                              <p className="mt-1 whitespace-pre-line text-slate-800">{lot.description}</p>
+                            ) : (
+                              <p className="mt-1 text-slate-500">Ogłoszenie nie podaje opisu tej części.</p>
+                            )}
+                            <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-slate-500">
+                              {lot.cpv_main && (
+                                <span>
+                                  kod rodzaju zamówienia (CPV): {lot.cpv_main}
+                                  {lot.cpv_main_name ? ` — ${lot.cpv_main_name}` : ''}
+                                </span>
+                              )}
+                              <span>wartość z ogłoszenia: {lot.estimated_value ?? 'nie podano'}</span>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
+                  {details.sections.length > 0 && (
+                    <section aria-labelledby="notice-sections-title">
+                      <h3 id="notice-sections-title" className="text-sm font-semibold text-slate-900">
+                        Treść ogłoszenia
+                      </h3>
+                      <p className="mb-1 text-[11px] text-slate-500">
+                        Tekst słowo w słowo z ogłoszenia w Biuletynie Zamówień Publicznych, w kolejności z ogłoszenia.
+                      </p>
+                      <div className="space-y-1">
+                        {details.sections.map((s) => (
+                          <details
+                            key={s.key}
+                            open={OPEN_SECTION.test(s.title) || OPEN_SECTION.test(s.key)}
+                            className="rounded border border-slate-200 px-3 py-1.5"
+                          >
+                            <summary className="cursor-pointer font-medium text-slate-900">{s.title}</summary>
+                            <p className="mt-1 whitespace-pre-line text-slate-800">{s.text}</p>
+                          </details>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </div>
               )}
 
               <section aria-labelledby="notice-docs-title">

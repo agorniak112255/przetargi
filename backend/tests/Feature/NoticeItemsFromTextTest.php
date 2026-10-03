@@ -48,8 +48,10 @@ final class NoticeItemsFromTextTest extends TestCase
                 // do modelu idzie sekcja „Przedmiot zamówienia” z treści ogłoszenia
                 return str_contains($messages[1]['content'], 'Część 2 - Dostawa Bielizny trudnopalnej termoaktywna');
             })->andReturn(['content' => json_encode(['items' => [
-                // towar BHP z cytatem z ogłoszenia; ilości w cytacie nie ma → null (do uzupełnienia), nie 50
-                ['lot_no' => 2, 'name' => 'Bielizna trudnopalna termoaktywna', 'quantity' => 50, 'unit' => 'kpl.', 'quote' => 'Część 2 - Dostawa Bielizny trudnopalnej termoaktywna', 'bhp' => true],
+                // towar BHP z cytatem z ogłoszenia; ilości w cytacie nie ma → null (do uzupełnienia), nie 50;
+                // cecha „trudnopalnej” przepisana z ogłoszenia (w odmianie modelu — zapisany wycinek z ogłoszenia),
+                // „klasa 2” — nie ma jej w ogłoszeniu, odpada
+                ['lot_no' => 2, 'name' => 'Bielizna termoaktywna', 'spec' => ['trudnopalna', 'klasa 2'], 'quantity' => 50, 'unit' => 'kpl.', 'quote' => 'Część 2 - Dostawa Bielizny trudnopalnej termoaktywna', 'bhp' => true],
                 // spoza BHP — odznaczony
                 ['lot_no' => 1, 'name' => 'Gaśnice i węże', 'quantity' => null, 'unit' => null, 'quote' => 'Cześć 1 - Dostawa gaśnic i węzy', 'bhp' => false],
                 // cytatu nie ma w ogłoszeniu — odznaczony, część spoza ogłoszenia → null
@@ -67,7 +69,9 @@ final class NoticeItemsFromTextTest extends TestCase
             ->assertJsonPath('source.notice_number', $notice->notice_number);
 
         $items = $response->json('items');
-        $this->assertSame(['Bielizna trudnopalna termoaktywna', 'Gaśnice i węże', 'Rękawice nitrylowe'], array_column($items, 'name'));
+        $this->assertSame(['Bielizna termoaktywna', 'Gaśnice i węże', 'Rękawice nitrylowe'], array_column($items, 'name'));
+        // wymaganie pozycji = rodzaj — cechy z ogłoszenia (wyszukiwanie produktu dostaje specyfikację)
+        $this->assertSame('Bielizna termoaktywna — trudnopalnej', $items[0]['requirement']);
         $this->assertSame([true, false, false], array_column($items, 'selected'));
         $this->assertSame([1, 1, 1], array_column($items, 'quantity'));
         $this->assertSame([true, true, true], array_column($items, 'quantity_missing'));
@@ -101,8 +105,9 @@ final class NoticeItemsFromTextTest extends TestCase
             // BHP bez ilości w ogłoszeniu — nie zgadujemy ilości, zostaje w podglądzie
             ['lot_no' => 6, 'name' => 'Rękawice specjalne', 'quantity' => null, 'unit' => null, 'quote' => 'rękawice specjalne', 'bhp' => true],
         ]], JSON_UNESCAPED_UNICODE)];
+        // drugi odczyt bierze wynik z pamięci podręcznej — model pytany raz
         $this->mock(OpenAiCompatibleClient::class, function (MockInterface $mock) use ($answer): void {
-            $mock->shouldReceive('chat')->twice()->andReturn($answer);
+            $mock->shouldReceive('chat')->once()->andReturn($answer);
         });
 
         $response = $this->postJson("/api/tenders/{$tenderId}/documents/from-notice-text", ['auto_add' => true])
@@ -129,6 +134,31 @@ final class NoticeItemsFromTextTest extends TestCase
             ->assertJsonPath('auto_add_note', 'Przetarg ma już pozycje — towary z ogłoszenia są tylko w podglądzie.');
         $this->assertSame(2, TenderItem::query()->where('tender_id', $tenderId)->count());
         $this->assertSame(1, TenderActivity::query()->where('tender_id', $tenderId)->where('action', 'items_from_notice')->count());
+    }
+
+    public function test_panel_reading_is_reused_and_refresh_asks_model_again(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('przetargi')->create());
+        $notice = $this->fixtureNotice('contract-lots');
+        $answer = ['content' => json_encode(['items' => [
+            ['lot_no' => 2, 'name' => 'Bielizna termoaktywna', 'spec' => ['trudnopalnej'], 'quantity' => null, 'unit' => null, 'quote' => 'Część 2 - Dostawa Bielizny trudnopalnej termoaktywna', 'bhp' => true],
+        ]], JSON_UNESCAPED_UNICODE)];
+        $this->mock(OpenAiCompatibleClient::class, function (MockInterface $mock) use ($answer): void {
+            $mock->shouldReceive('chat')->twice()->andReturn($answer);
+        });
+
+        // szczegóły ogłoszenia odczytały asortyment — kreator przetargu nie pyta modelu drugi raz
+        $this->getJson("/api/notices/{$notice->id}/items")->assertOk()->assertJsonPath('cached', false);
+        $tenderId = $this->postJson("/api/notices/{$notice->id}/tender")->assertCreated()->json('tender_id');
+        $this->postJson("/api/tenders/{$tenderId}/documents/from-notice-text")
+            ->assertOk()
+            ->assertJsonPath('items.0.name', 'Bielizna termoaktywna')
+            ->assertJsonPath('items.0.requirement', 'Bielizna termoaktywna — trudnopalnej');
+
+        // „Odczytaj ponownie” — drugie zapytanie do modelu
+        $this->postJson("/api/tenders/{$tenderId}/documents/from-notice-text", ['refresh' => true])
+            ->assertOk()
+            ->assertJsonPath('items_count', 1);
     }
 
     public function test_quantity_only_from_quote_with_dashes_and_thousands(): void

@@ -285,6 +285,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::middleware('permission:tenders.create|tenders.view_all')->group(function (): void {
         Route::get('/notices', [NoticeController::class, 'index']);
         Route::get('/notices/{notice}', [NoticeController::class, 'show'])->whereNumber('notice');
+        Route::get('/notices/{notice}/items', [NoticeController::class, 'items'])->whereNumber('notice');
         Route::post('/notices/{notice}/skip', [NoticeController::class, 'skip']);
         Route::delete('/notices/{notice}/skip', [NoticeController::class, 'unskip']);
     });

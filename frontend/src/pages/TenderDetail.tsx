@@ -190,6 +190,8 @@ type Item = {
   custom_name?: string | null
   custom_url?: string | null
   updated_at?: string | null
+  /** pochodzenie: 'notice_text' — z treści ogłoszenia, 'document' — z dokumentu, null — ręcznie albo dawna */
+  source?: string | null
 }
 
 type Coverage = {
@@ -362,8 +364,34 @@ type PreviewItem = {
   quote_found?: boolean
   /** zapisany już w przetargu automatycznie (towar BHP z ilością z ogłoszenia) */
   added?: boolean
+  /** cechy towaru przepisane z treści ogłoszenia (część wymagania po „ — ”) */
+  spec?: string | null
+  /**
+   * pozycja z treści ogłoszenia, którą ta pozycja z dokumentu uzupełni zamiast dodać nową (null — dodaje nową).
+   * Serwer zaznacza ją sam tylko przy jednoznacznym dopasowaniu 1:1; replaces_options — wszystkie pasujące (możliwe).
+   */
+  replaces_item_id?: number | null
+  replaces_label?: string | null
+  replaces_options?: number[]
+  /** dlaczego pasująca pozycja nie została zaznaczona sama (wniosek aplikacji) */
+  replaces_hint?: string | null
 }
 type PreviewCondition = { category: string | null; content: string; selected: boolean }
+/** Pozycja przetargu dodana z treści ogłoszenia — dokument może ją uzupełnić albo (wybór człowieka) usunąć. */
+type NoticeItemRow = {
+  id: number
+  line_no: number
+  name: string
+  requirement: string
+  quantity: number
+  /** część zamówienia z ogłoszenia (null — nieznana) */
+  lot_no?: number | null
+  label: string
+  /** produkt w ofercie (karta albo własny) — null: bez produktu */
+  product: string | null
+  /** produkt wybrał człowiek — uzupełnienie go nie zdejmie; null — produkt zmieniony po odczycie, rozstrzygnie serwer przy zapisie */
+  keeps_product: boolean | null
+}
 
 type Detail = {
   tender: Tender & {
@@ -738,6 +766,8 @@ const actionLabel: Record<string, string> = {
   created: 'Utworzono przetarg',
   document_added: 'Dodano dokument',
   items_from_notice: 'Dodano towary z ogłoszenia',
+  items_updated_from_document: 'Dokument uzupełnił pozycje z ogłoszenia',
+  items_removed_by_document: 'Usunięto pozycje z ogłoszenia (dokument je rozpisuje)',
   updated: 'Zmieniono dane przetargu',
   status_changed: 'Zmiana statusu',
   item_updated: 'Zmiana pozycji',
@@ -862,6 +892,159 @@ function activityHasRealChange(a: ActivityRow): boolean {
 }
 
 /**
+ * Przy pozycji z dokumentu: którą pozycję z treści ogłoszenia uzupełni (zamiast dodać nową). Serwer zaznacza sam tylko
+ * jednoznaczne 1:1; pozostałe pasujące są „możliwe” do wyboru. Ilość: z dokumentu, gdy ją podaje — inaczej z ogłoszenia.
+ */
+function NoticeReplaceChoice({
+  item,
+  rowNumber,
+  noticeItems,
+  disabled,
+  onChange,
+}: {
+  item: PreviewItem
+  /** numer wiersza w podglądzie (do opisu pola dla czytników ekranu) */
+  rowNumber: number
+  noticeItems: NoticeItemRow[]
+  disabled: boolean
+  onChange: (noticeId: number | null) => void
+}) {
+  const options = (item.replaces_options ?? [])
+    .map((nid) => noticeItems.find((n) => n.id === nid))
+    .filter((n): n is NoticeItemRow => n !== undefined)
+  if (options.length === 0) return null
+  const chosen = options.find((n) => n.id === item.replaces_item_id) ?? null
+  const rowName = item.name || splitSiwzRequirement(item.requirement).name
+  return (
+    <div className="mt-1 rounded border border-sky-200 bg-sky-50 px-1.5 py-1 text-[10px] text-sky-900">
+      {disabled ? (
+        <span>Możliwa pozycja z ogłoszenia: {options[0].label} — przy „Zastąp istniejące pozycje” dodaje się jako nowa.</span>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-1">
+            <span aria-hidden="true">{chosen ? 'Uzupełni pozycję z ogłoszenia:' : 'Możliwe uzupełnienie pozycji z ogłoszenia:'}</span>
+            <select
+              aria-label={`Wiersz ${rowNumber} z dokumentu („${rowName}”): którą pozycję z ogłoszenia uzupełni`}
+              className="max-w-[260px] rounded border border-sky-300 bg-white px-1 py-0.5 text-[10px]"
+              value={chosen ? String(chosen.id) : ''}
+              onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+            >
+              <option value="">nie — dodaj jako nową pozycję</option>
+              {options.map((n) => (
+                <option key={n.id} value={n.id}>
+                  pozycja {n.line_no}: {n.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {chosen && !item.selected && (
+            <span className="mt-0.5 block font-semibold text-amber-800">
+              (pozycja niezaznaczona — nic nie uzupełni)
+            </span>
+          )}
+          {chosen && (
+            <span className="mt-0.5 block text-sky-800">
+              {item.quantity_missing
+                ? `Ilości w dokumencie brak — zostaje ${chosen.quantity} z ogłoszenia. `
+                : chosen.quantity !== item.quantity
+                  ? `Ilość: w ogłoszeniu ${chosen.quantity}, w dokumencie ${item.quantity} — zostanie ${item.quantity}. `
+                  : ''}
+              {chosen.product && chosen.keeps_product
+                ? `Ręcznie wybrany produkt „${chosen.product}” zostaje — sprawdź, czy pasuje do opisu z dokumentu.`
+                : chosen.product && chosen.keeps_product === null
+                  ? `Produkt „${chosen.product}” zmieniono po odczycie dokumentu — przy zapisie zostanie, jeśli wybrał go człowiek, inaczej zostanie zdjęty do ponownego doboru.`
+                  : chosen.product
+                  ? `Produkt „${chosen.product}” zostanie zdjęty — pozycja do ponownego doboru.`
+                  : 'Opis z dokumentu zastąpi krótką nazwę z ogłoszenia.'}
+            </span>
+          )}
+          {/* replaces_label — serwer zaznaczył jednoznaczne 1:1 (człowiek mógł je odznaczyć) */}
+          {!chosen && !item.replaces_label && (
+            <span className="mt-0.5 block text-sky-800">
+              Niezaznaczone ({item.replaces_hint ?? 'dopasowanie nie jest jednoznaczne'} — ocena aplikacji). Wybierz
+              ręcznie, jeśli to ten sam towar, albo zostaw jako nową pozycję.
+            </span>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Podgląd dokumentu: pozycje dodane wcześniej z treści ogłoszenia — która zostanie uzupełniona, a która nie ma
+ * odpowiednika (wtedy człowiek może ją usunąć, gdy dokument rozpisuje ją na kilka pozycji).
+ */
+function NoticeItemsInTender({
+  noticeItems,
+  previewItems,
+  removeIds,
+  disabled,
+  onToggleRemove,
+}: {
+  noticeItems: NoticeItemRow[]
+  previewItems: PreviewItem[]
+  removeIds: number[]
+  disabled: boolean
+  onToggleRemove: (noticeId: number, remove: boolean) => void
+}) {
+  if (noticeItems.length === 0) return null
+  return (
+    <div>
+      <h4 className="mb-1 text-xs font-semibold">Pozycje z ogłoszenia w przetargu ({noticeItems.length})</h4>
+      <p className="mb-1 text-[11px] text-slate-600">
+        Te pozycje aplikacja dodała wcześniej z treści ogłoszenia. Pozycja z dokumentu może je uzupełnić (opis i ilość
+        z dokumentu) zamiast dodawać drugą taką samą.
+        {disabled && ' Przy „Zastąp istniejące pozycje” wszystkie obecne pozycje zostaną usunięte.'}
+      </p>
+      <ul className="max-h-56 space-y-1 overflow-y-auto rounded border border-slate-200 bg-white p-2 text-xs">
+        {noticeItems.map((n) => {
+          const filler = disabled
+            ? undefined
+            : previewItems.find((p) => p.selected && p.replaces_item_id === n.id)
+          const removing = removeIds.includes(n.id)
+          // pasuje do jakiegoś wiersza dokumentu, ale nikt jej nie wybrał — to wniosek aplikacji, nie fakt
+          const possible = !filler && previewItems.some((p) => (p.replaces_options ?? []).includes(n.id))
+          return (
+            <li key={n.id} className="border-b border-slate-100 py-1.5 last:border-b-0">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="text-slate-400">pozycja {n.line_no}</span>
+                <span className={removing ? 'text-slate-400 line-through' : 'font-medium'}>{n.label}</span>
+                {n.product && <span className="text-[10px] text-slate-500">produkt: {n.product}</span>}
+              </div>
+              {filler ? (
+                <p className="text-[11px] text-emerald-700">
+                  uzupełni ją: {filler.name || splitSiwzRequirement(filler.requirement).name}
+                </p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-x-3 text-[11px]">
+                  <span className="text-amber-700">
+                    {possible
+                      ? 'możliwy odpowiednik w dokumencie — niewybrany; bez wyboru zostaje bez zmian'
+                      : 'aplikacja nie znalazła odpowiednika w dokumencie — zostaje bez zmian'}
+                  </span>
+                  {!disabled && (
+                    <label className="flex items-center gap-1 text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={removing}
+                        aria-label={`Usuń pozycję ${n.line_no} („${n.name}”) — dokument rozpisuje ją na kilka pozycji`}
+                        onChange={(e) => onToggleRemove(n.id, e.target.checked)}
+                      />
+                      <span aria-hidden="true">usuń — dokument rozpisuje ją na kilka pozycji</span>
+                    </label>
+                  )}
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+/**
  * Klucz = id: przejście z przetargu A do B bez opuszczania strony (np. z powiadomienia) montuje widok od nowa —
  * bez kroku kreatora, filtrów i podglądu importu z poprzedniego przetargu.
  */
@@ -968,6 +1151,9 @@ function TenderDetailView() {
     fromNotice?: boolean
     /** ile towarów BHP z ogłoszenia aplikacja zapisała sama — w podglądzie zostają pozostałe */
     autoAdded?: number
+    /** pozycje z treści ogłoszenia w przetargu (podgląd dokumentu) i te, które człowiek kazał usunąć */
+    noticeItems?: NoticeItemRow[]
+    removeNoticeIds?: number[]
   } | null>(null)
   const [replaceItems, setReplaceItems] = useState(false)
   const [replaceConditions, setReplaceConditions] = useState(false)
@@ -1138,6 +1324,56 @@ function TenderDetailView() {
     )
     return d
   }, [id])
+
+  /**
+   * Podgląd dokumentu trzyma pozycje z ogłoszenia z chwili odczytu. Po każdym odświeżeniu przetargu (zapis albo
+   * usunięcie pozycji, dopasowanie) przeliczamy je lokalnie z data.tender.items — bez ponownego zapytania: znikają
+   * pozycje usunięte albo już uzupełnione (source ≠ 'notice_text') razem z wyborami „uzupełnij”/„usuń”, które na nie
+   * wskazywały; ilość i produkt bierzemy z przetargu. Ocena „produkt wybrał człowiek” zostaje z serwera.
+   */
+  useEffect(() => {
+    const tenderItems = data?.tender.items
+    if (!tenderItems) return
+    setDocPreview((p) => {
+      if (!p?.noticeItems || p.noticeItems.length === 0) return p
+      const live = new Map(tenderItems.filter((i) => i.source === 'notice_text').map((i) => [i.id, i]))
+      let changed = false
+      const noticeItems: NoticeItemRow[] = []
+      for (const n of p.noticeItems) {
+        const item = live.get(n.id)
+        if (!item) {
+          changed = true
+          continue
+        }
+        const product = item.custom_name || item.main_product?.name || null
+        if (item.quantity !== n.quantity || product !== n.product) {
+          changed = true
+          noticeItems.push({
+            ...n,
+            quantity: item.quantity,
+            product,
+            // nowy produkt — czy wybrał go człowiek, sprawdzi serwer przy zapisie (historia pozycji)
+            keeps_product: product !== n.product ? null : n.keeps_product,
+            label: `${n.name} · ilość ${item.quantity}${n.lot_no != null ? ` · część ${n.lot_no}` : ''}`,
+          })
+        } else {
+          noticeItems.push(n)
+        }
+      }
+      if (!changed) return p
+      const ids = new Set(noticeItems.map((n) => n.id))
+      return {
+        ...p,
+        noticeItems,
+        removeNoticeIds: (p.removeNoticeIds ?? []).filter((nid) => ids.has(nid)),
+        items: p.items.map((row) => ({
+          ...row,
+          replaces_item_id: row.replaces_item_id != null && !ids.has(row.replaces_item_id) ? null : row.replaces_item_id,
+          replaces_options: (row.replaces_options ?? []).filter((nid) => ids.has(nid)),
+        })),
+      }
+    })
+  }, [data])
 
   /** zapisana godzina składania („10:00” albo '') — do odświeżenia pola godziny tylko, gdy nikt go nie zmieniał */
   const savedDeadlineTimeRef = useRef('')
@@ -1394,6 +1630,7 @@ function TenderDetailView() {
     conditions: PreviewCondition[]
     items_count: number
     conditions_count: number
+    notice_items?: NoticeItemRow[]
   }
 
   function analysisTargets(): string[] {
@@ -1434,6 +1671,8 @@ function TenderDetailView() {
         mapping_notes: res.mapping_notes,
         items: (res.items ?? []).map((i) => ({ ...i, selected: i.selected !== false })),
         conditions: (res.conditions ?? []).map((c) => ({ ...c, selected: c.selected !== false })),
+        noticeItems: res.notice_items ?? [],
+        removeNoticeIds: [],
       })
       setDocStatus(
         `Gotowe: ${fileName} — ${res.items_count} pozycji, ${res.conditions_count} warunków. Sprawdź numer, nazwę i cenę, potem kliknij „Dodaj do przetargu”.`,
@@ -1642,6 +1881,8 @@ function TenderDetailView() {
           items?: PreviewItem[]
           conditions?: PreviewCondition[]
         } | null
+        /** propozycje uzupełnienia pozycji z ogłoszenia — liczone przez serwer przy otwarciu podglądu */
+        notice_items?: NoticeItemRow[]
       }>(`/tenders/${id}/documents/${docId}`)
       const items = (res.analysis_json?.items ?? []).map((i) => ({
         ...i,
@@ -1660,6 +1901,8 @@ function TenderDetailView() {
         extracted_text: res.extracted_text ?? '',
         items,
         conditions,
+        noticeItems: res.notice_items ?? [],
+        removeNoticeIds: [],
       })
       setDocStatus(
         `Podgląd zapisanego pliku: ${items.length} pozycji, ${conditions.length} warunków — sprawdź i kliknij „Dodaj do przetargu”.`,
@@ -1697,50 +1940,96 @@ function TenderDetailView() {
             }),
           },
         )
-        await load()
+        // zapis się udał — podgląd znika od razu (ponowne „Dodaj” dublowałoby pozycje), odświeżenie osobno
         setDocPreview(null)
-        setDocStatus(
-          `Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`,
-        )
-        setMsg(`Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`)
+        const text = `Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`
+        setDocStatus(text)
+        setMsg(text)
+        try {
+          await load()
+        } catch {
+          setErr('Zapisano, ale nie udało się odświeżyć widoku — odśwież stronę.')
+        }
         return
       }
+      // „Zastąp istniejące pozycje” kasuje wszystko — uzupełnianie i usuwanie pozycji z ogłoszenia wtedy nie działa
+      const enrich = !replaceItems && !docPreview.fromNotice
+      // tylko pozycje z ogłoszenia z listy podglądu — przycinanej po każdym odświeżeniu przetargu (efekt wyżej)
+      const liveNoticeIds = new Set((docPreview.noticeItems ?? []).map((n) => n.id))
       const items = docPreview.items
         .filter((i) => i.selected)
-        .map(({ sku, name, requirement, quantity, offer_price, currency, norms, description }) => ({
+        .map(({ sku, name, requirement, quantity, quantity_missing, offer_price, currency, norms, description, replaces_item_id, lot_no }) => ({
           sku: sku ?? null,
           name: name ?? requirement,
           requirement,
           quantity,
+          quantity_missing: quantity_missing ?? false,
           offer_price: offer_price ?? null,
           currency: currency ?? null,
           norms: norms ?? null,
           description: description ?? null,
+          lot_no: lot_no ?? null,
+          replaces_item_id: enrich && replaces_item_id != null && liveNoticeIds.has(replaces_item_id) ? replaces_item_id : null,
         }))
       const conditions = docPreview.conditions
         .filter((c) => c.selected)
         .map(({ category, content }) => ({ category, content }))
-      const res = await api<{ items_created: number; conditions_created: number }>(
-        `/tenders/${id}/documents/commit`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            document_id: docPreview.document_id,
-            items,
-            conditions,
-            replace_items: replaceItems,
-            replace_conditions: replaceConditions,
-          }),
-        },
-      )
-      await load()
+      // pozycja wybrana do uzupełnienia nie jest jednocześnie usuwana
+      const replacedIds = new Set(items.map((i) => i.replaces_item_id).filter((v): v is number => v != null))
+      const removeIds = enrich
+        ? (docPreview.removeNoticeIds ?? []).filter((nid) => !replacedIds.has(nid) && liveNoticeIds.has(nid))
+        : []
+      const res = await api<{
+        items_created: number
+        items_updated?: number
+        items_removed?: number
+        conditions_created: number
+      }>(`/tenders/${id}/documents/commit`, {
+        method: 'POST',
+        body: JSON.stringify({
+          document_id: docPreview.document_id,
+          items,
+          conditions,
+          replace_items: replaceItems,
+          replace_conditions: replaceConditions,
+          remove_item_ids: removeIds,
+          // podgląd z treści ogłoszenia — pozycje mają pochodzenie „ogłoszenie” (dokument może je potem uzupełnić)
+          origin: docPreview.fromNotice ? 'notice_text' : 'document',
+        }),
+      })
+      const updated = res.items_updated ?? 0
+      const removed = res.items_removed ?? 0
+      const summary = [
+        `Dodano do przetargu: ${res.items_created} ${plural(res.items_created, 'pozycję', 'pozycje', 'pozycji')}`,
+        updated > 0 ? `uzupełniono ${updated} ${plural(updated, 'pozycję', 'pozycje', 'pozycji')} z ogłoszenia` : '',
+        removed > 0 ? `usunięto ${removed} ${plural(removed, 'pozycję', 'pozycje', 'pozycji')} z ogłoszenia` : '',
+        `${res.conditions_created} ${plural(res.conditions_created, 'warunek', 'warunki', 'warunków')}`,
+      ]
+        .filter(Boolean)
+        .join(', ')
+      // zapis się udał — podgląd znika od razu (ponowne „Dodaj” dublowałoby pozycje); odświeżenie i dobór osobno
       setDocPreview(null)
-      setDocStatus(
-        `Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`,
-      )
-      setMsg(`Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`)
-      if (items.length) setTab('pozycje')
+      setDocStatus(`${summary}.`)
+      setMsg(`${summary}.`)
+      if (items.length || removed > 0) setTab('pozycje')
       else setTab('warunki')
+      let fresh: Detail
+      try {
+        fresh = await load()
+      } catch {
+        setErr('Zapisano, ale nie udało się odświeżyć widoku — odśwież stronę.')
+        return
+      }
+      // nowe i uzupełnione pozycje od razu dostają produkty z katalogu („Dopasuj AI” dla pozycji bez produktu) —
+      // jak po dodaniu towarów z treści ogłoszenia; podsumowanie zapisu zostaje przed komunikatem dopasowania
+      if (res.items_created + updated > 0) {
+        if (fresh.can_edit && can(user, 'tenders.edit_offer')) {
+          await runMatch(true, undefined, fresh)
+          setMsg((m) => (m ? `${summary}. ${m}` : `${summary}.`))
+        } else {
+          setMsg(`${summary}. Produkty dobierze osoba z uprawnieniem do wyceny („Dopasuj AI”).`)
+        }
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu')
     } finally {
@@ -1760,6 +2049,7 @@ function TenderDetailView() {
         extracted_text: string
         items: PreviewItem[]
         conditions: PreviewCondition[]
+        notice_items?: NoticeItemRow[]
       }>(`/tenders/${id}/documents/${docId}/reanalyze`, {
         method: 'POST',
         body: JSON.stringify({ mode: docMode, targets }),
@@ -1769,6 +2059,8 @@ function TenderDetailView() {
         extracted_text: res.extracted_text,
         items: (res.items ?? []).map((i) => ({ ...i, selected: true })),
         conditions: (res.conditions ?? []).map((c) => ({ ...c, selected: true })),
+        noticeItems: res.notice_items ?? [],
+        removeNoticeIds: [],
       })
       setTab('dokumenty')
       setMsg('Plik odczytany ponownie — sprawdź zaznaczone i dodaj do przetargu.')
@@ -3225,15 +3517,37 @@ function TenderDetailView() {
                   >
                     {docMode === 'simple' && !docPreview.fromNotice
                       ? 'Dodaj do przetargu'
-                      : `Dodaj do przetargu: ${docPreview.items.filter((i) => i.selected).length} pozycji, ${
-                          docPreview.conditions.filter((c) => c.selected).length
-                        } warunków`}
+                      : (() => {
+                          const selected = docPreview.items.filter((i) => i.selected)
+                          const enriched =
+                            replaceItems || docPreview.fromNotice
+                              ? 0
+                              : selected.filter((i) => i.replaces_item_id != null).length
+                          const conditionsCount = docPreview.conditions.filter((c) => c.selected).length
+                          return `Dodaj do przetargu: ${selected.length - enriched} nowych pozycji${
+                            enriched > 0 ? `, uzupełnij ${enriched} z ogłoszenia` : ''
+                          }, ${conditionsCount} warunków`
+                        })()}
                   </button>
                 </div>
               </div>
               <p className="text-xs text-slate-600">
                 Zaznaczono:{' '}
-                <strong>{docPreview.items.filter((i) => i.selected).length}</strong> pozycji,{' '}
+                <strong>{docPreview.items.filter((i) => i.selected).length}</strong> pozycji
+                {!replaceItems && !docPreview.fromNotice && (() => {
+                  const replaced = docPreview.items
+                    .filter((i) => i.selected && i.replaces_item_id != null)
+                    .map((i) => i.replaces_item_id)
+                  const enrich = replaced.length
+                  const remove = (docPreview.removeNoticeIds ?? []).filter((nid) => !replaced.includes(nid)).length
+                  return (
+                    <>
+                      {enrich > 0 && ` (w tym ${enrich} uzupełni pozycje z ogłoszenia)`}
+                      {remove > 0 && `, do usunięcia ${remove} z ogłoszenia`}
+                    </>
+                  )
+                })()}
+                ,{' '}
                 <strong>{docPreview.conditions.filter((c) => c.selected).length}</strong> warunków
                 <button
                   type="button"
@@ -3284,6 +3598,21 @@ function TenderDetailView() {
                     <p className="rounded bg-white/80 px-2 py-1 text-[11px] text-slate-600">
                       {docPreview.mapping_notes}
                     </p>
+                  )}
+                  {!docPreview.fromNotice && (
+                    <NoticeItemsInTender
+                      noticeItems={docPreview.noticeItems ?? []}
+                      previewItems={docPreview.items}
+                      removeIds={docPreview.removeNoticeIds ?? []}
+                      disabled={replaceItems}
+                      onToggleRemove={(noticeId, remove) =>
+                        setDocPreview((p) => {
+                          if (!p) return p
+                          const rest = (p.removeNoticeIds ?? []).filter((nid) => nid !== noticeId)
+                          return { ...p, removeNoticeIds: remove ? [...rest, noticeId] : rest }
+                        })
+                      }
+                    />
                   )}
                   <div>
                     <h4 className="mb-1 text-xs font-semibold">
@@ -3364,6 +3693,33 @@ function TenderDetailView() {
                                   {it.quote && (
                                     <p className="mt-0.5 text-[10px] text-slate-500">z ogłoszenia: „{it.quote}”</p>
                                   )}
+                                  {it.spec && (
+                                    <p className="mt-0.5 text-[10px] text-slate-600">
+                                      cechy przepisane z ogłoszenia (trafią do wymagania): {it.spec}
+                                    </p>
+                                  )}
+                                  {!docPreview.fromNotice && (
+                                    <NoticeReplaceChoice
+                                      item={it}
+                                      rowNumber={idx + 1}
+                                      noticeItems={docPreview.noticeItems ?? []}
+                                      disabled={replaceItems}
+                                      onChange={(noticeId) =>
+                                        setDocPreview((p) => {
+                                          if (!p) return p
+                                          // jedna pozycja z ogłoszenia — jedno uzupełnienie: ten sam wybór znika z innych wierszy
+                                          const items = p.items.map((row, i) =>
+                                            i === idx
+                                              ? { ...row, replaces_item_id: noticeId }
+                                              : noticeId !== null && row.replaces_item_id === noticeId
+                                                ? { ...row, replaces_item_id: null }
+                                                : row,
+                                          )
+                                          return { ...p, items }
+                                        })
+                                      }
+                                    />
+                                  )}
                                 </td>
                                 <td className="p-1.5 max-w-[200px] text-[11px] text-slate-700">
                                   {it.norms ?? '—'}
@@ -3377,7 +3733,9 @@ function TenderDetailView() {
                                   {it.quantity}
                                   {it.unit ? ` ${it.unit}` : ''}
                                   {it.quantity_missing && (
-                                    <span className="block text-[10px] text-amber-700">ilość nie podana w ogłoszeniu</span>
+                                    <span className="block text-[10px] text-amber-700">
+                                      {docPreview.fromNotice ? 'ilość nie podana w ogłoszeniu' : 'ilość nie podana w dokumencie'}
+                                    </span>
                                   )}
                                 </td>
                               </tr>

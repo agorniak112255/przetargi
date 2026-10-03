@@ -11,6 +11,8 @@ use App\Models\ProcurementNoticeSkip;
 use App\Services\Bzp\EzamowieniaDocuments;
 use App\Services\Bzp\NoticeBhpLots;
 use App\Services\Bzp\NoticeClientAmbiguousException;
+use App\Services\Bzp\NoticeItemsBusyException;
+use App\Services\Bzp\NoticeItemsReader;
 use App\Services\Bzp\NoticeListQuery;
 use App\Services\Bzp\NoticeSections;
 use App\Services\Bzp\NoticeTenderCreator;
@@ -20,6 +22,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use RuntimeException;
 
 /**
  * Zakładka „Ogłoszenia”: lista ogłoszeń o zamówieniu z Biuletynu (NoticeListQuery), wspólna decyzja „pominięte”
@@ -82,6 +85,57 @@ class NoticeController extends Controller
             'html_note' => $htmlAvailable ? null : 'Pełnej treści tego ogłoszenia już nie przechowujemy (usuwana po '
                 .(int) config('bzp.html_retention_days', 30).' dniach, gdy z ogłoszenia nie założono przetargu). '
                 .'Poniżej części zamówienia odczytane przy pobraniu ogłoszenia; całość jest na stronie ogłoszenia w Biuletynie.',
+        ]);
+    }
+
+    /**
+     * Podsumowanie asortymentu z treści ogłoszenia (szczegóły ogłoszenia, NoticeItemsReader::readCached): towary
+     * z ilościami i cechami przepisanymi z ogłoszenia. Uprawnienia jak show; model uruchamia tylko tenders.create
+     * (także „Odczytaj ponownie”, ?refresh=1) — tenders.view_all bez create dostaje wynik zapamiętany albo items: null
+     * z wyjaśnieniem. ?cached_only=1 — tylko wynik zapamiętany (bez modelu, bez blokad; panel pyta tak od razu po
+     * otwarciu, a model dopiero, gdy panel zostaje otwarty). 422 — model nie odpowiedział albo ogłoszenie bez opisu
+     * przedmiotu (reason: no_description — stan trwały, ponowienie nic nie da); 503 — model zajęty.
+     */
+    public function items(Request $request, ProcurementNotice $notice, NoticeItemsReader $reader): JsonResponse
+    {
+        $this->ensureContractNotice($notice);
+        $canRunModel = $request->user()->can('tenders.create');
+        $refresh = $request->boolean('refresh');
+        abort_if($refresh && ! $canRunModel, 403, 'Ponowny odczyt asortymentu wymaga uprawnienia do zakładania przetargów.');
+        $cachedOnly = $request->boolean('cached_only') && ! $refresh;
+
+        // odczyt z modelem w jednym żądaniu
+        @set_time_limit(180);
+
+        try {
+            $result = $reader->readCached($notice, $refresh, $canRunModel && ! $cachedOnly);
+        } catch (NoticeItemsBusyException $e) {
+            return response()->json(['message' => $e->getMessage()], 503);
+        } catch (RuntimeException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'reason' => $e->getCode() === NoticeItemsReader::NO_DESCRIPTION ? 'no_description' : null,
+            ], 422);
+        }
+
+        if ($result === null) {
+            return response()->json([
+                'items' => null,
+                'lots' => [],
+                'source' => null,
+                'read_at' => null,
+                'cached' => false,
+                'note' => $canRunModel ? null : 'Asortymentu z tego ogłoszenia nikt jeszcze nie odczytał. Odczyt uruchamia osoba z uprawnieniem do zakładania przetargów.',
+            ]);
+        }
+
+        return response()->json([
+            'items' => $result['items'],
+            'lots' => $result['lots'],
+            'source' => $result['source'],
+            'read_at' => $result['read_at'],
+            'cached' => $result['cached'],
+            'note' => null,
         ]);
     }
 

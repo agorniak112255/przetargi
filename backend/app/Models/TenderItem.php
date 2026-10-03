@@ -30,6 +30,9 @@ class TenderItem extends Model
         'companion_offer_price',
         'margin_percent',
         'status',
+        // pochodzenie: 'notice_text' (treść ogłoszenia), 'document' (dokument postępowania), null — ręcznie/dawne
+        'source',
+        'source_ref',
     ];
 
     /**
