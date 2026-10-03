@@ -5,6 +5,7 @@ import { can, canAny } from '../lib/api'
 import { CHAT_PERMISSION } from '../lib/chat'
 import { usePresence } from '../lib/usePresence'
 import { ChatNavBadge } from './ChatUnreadProvider'
+import { IncomingCallProvider } from './IncomingCallProvider'
 import { NavIcon, type NavIconName } from './NavIcon'
 import { NotificationBell } from './NotificationBell'
 
@@ -150,6 +151,7 @@ export function Layout() {
       <main className="app-main flex-1 overflow-auto p-5">
         <Outlet />
       </main>
+      <IncomingCallProvider />
     </div>
   )
 }

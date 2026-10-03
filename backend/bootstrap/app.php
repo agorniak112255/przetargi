@@ -78,6 +78,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('campaigns:replies')->everyTenMinutes()->withoutOverlapping(30)->runInBackground();
         // wynik kampanii: stan pozycji po 7 i 30 dniach od wysyłki — po nocnym odczycie XL
         $schedule->command('campaigns:stock-followup')->dailyAt('04:40')->withoutOverlapping(30);
+        // czat: nieodebrane i opuszczone rozmowy głosowe/wideo (uzgadnianie z LiveKit, żądania do 3 s na rozmowę)
+        $schedule->command('chat:calls-expire')->everyMinute()->withoutOverlapping(5)->runInBackground();
         // sygnał, że cron serwera (schedule:run) działa — okno „Sprawdź teraz” ostrzega, gdy go brak
         $schedule->call(static function (): void {
             Cache::forever(B2bSyncRun::SCHEDULER_HEARTBEAT_KEY, now()->toIso8601String());

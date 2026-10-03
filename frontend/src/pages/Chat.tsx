@@ -14,6 +14,17 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { ApiError } from '../lib/api'
 import {
+  callDurationLabel,
+  callKindLabel,
+  callPageUrl,
+  fetchCall,
+  fetchCallsConfig,
+  isCallStatusNewerOrSame,
+  startCall,
+  type CallKind,
+  type ChatCallMeta,
+} from '../lib/calls'
+import {
   addParticipants,
   avatarColor,
   CHAT_COUNTER_FROM,
@@ -44,7 +55,7 @@ import {
   type ChatUser,
 } from '../lib/chat'
 import { useChatUnread } from '../lib/chatUnread'
-import { onRealtime, useRealtimeStatus } from '../lib/realtime'
+import { onRealtime, useRealtimeStatus, type ChatCallUpdatedEvent } from '../lib/realtime'
 
 /**
  * Czat firmowy: po lewej kanały i osoby, po prawej otwarta rozmowa.
@@ -226,6 +237,61 @@ function MailCard({ m }: { m: ChatMessage }) {
   )
 }
 
+/** Wpis o rozmowie głosowej/wideo — zielona ramka; stan z meta.call (ta sama wiadomość zmienia się z rozmową). */
+function CallCard({
+  m,
+  own,
+  calling,
+  onJoin,
+  onCallBack,
+}: {
+  m: ChatMessage
+  own: boolean
+  calling: boolean
+  onJoin: (callId: number) => void
+  onCallBack: (kind: CallKind) => void
+}) {
+  const call = m.meta?.call
+  if (!call) return null
+  const kind: CallKind = call.kind === 'video' ? 'video' : 'audio'
+  let text: string
+  let action: ReactNode = null
+  if (call.status === 'missed') {
+    text = 'Nieodebrane połączenie'
+    action = (
+      <button
+        type="button"
+        disabled={calling}
+        onClick={() => onCallBack(kind)}
+        className="justify-self-start font-medium text-sky-700 hover:underline disabled:opacity-50"
+      >
+        {own ? 'Zadzwoń ponownie' : 'Oddzwoń'}
+      </button>
+    )
+  } else if (call.status === 'ended') {
+    const duration = callDurationLabel(call.duration_seconds)
+    text = duration ? `Rozmowa · ${duration}` : 'Rozmowa zakończona'
+  } else {
+    text = 'Rozmowa trwa'
+    action = (
+      <button
+        type="button"
+        onClick={() => onJoin(call.id)}
+        className="justify-self-start font-medium text-sky-700 hover:underline"
+      >
+        Dołącz
+      </button>
+    )
+  }
+  return (
+    <div className="mt-1 grid gap-0.5 border border-l-[3px] border-slate-200 border-l-green-600 bg-green-50 px-2.5 py-1.5 text-xs">
+      <span className="text-[10.5px] uppercase tracking-wide text-slate-500">{callKindLabel(kind)}</span>
+      <span className="font-semibold text-slate-800">{text}</span>
+      {action}
+    </div>
+  )
+}
+
 function MessageItem({
   m,
   own,
@@ -235,6 +301,9 @@ function MessageItem({
   onCancelDelete,
   onDelete,
   deleting,
+  calling,
+  onJoinCall,
+  onCallBack,
 }: {
   m: ChatMessage
   own: boolean
@@ -244,6 +313,9 @@ function MessageItem({
   onCancelDelete: () => void
   onDelete: () => void
   deleting: boolean
+  calling: boolean
+  onJoinCall: (callId: number) => void
+  onCallBack: (kind: CallKind) => void
 }) {
   if (m.kind === 'system') {
     return (
@@ -260,11 +332,15 @@ function MessageItem({
       {m.body ? <MessageText text={m.body} /> : null}
       {m.kind === 'link' && <LinkCard m={m} />}
       {m.kind === 'mail' && <MailCard m={m} />}
+      {m.kind === 'call' && (
+        <CallCard m={m} own={own} calling={calling} onJoin={onJoinCall} onCallBack={onCallBack} />
+      )}
     </>
   )
 
+  // Wpisu o rozmowie nie da się usunąć (serwer odpowiada 422) — bez przycisku „Usuń”.
   const deleteControls =
-    own && !m.deleted ? (
+    own && !m.deleted && m.kind !== 'call' ? (
       confirming ? (
         <span className="flex items-center justify-end gap-2 text-[11px]">
           <span className="text-slate-600">Usunąć tę wiadomość?</span>
@@ -450,11 +526,13 @@ function Thread({
   onConversationUpdated,
   onLeft,
   onBack,
+  callsEnabled,
 }: {
   conversation: ChatConversation
   me: number
   users: ChatUser[]
   live: boolean
+  callsEnabled: boolean
   onRead: (conversationId: number, messageId: number, unreadTotal: number) => void
   onListChanged: () => void
   onConversationUpdated: (c: ChatConversation) => void
@@ -481,6 +559,8 @@ function Thread({
   const [addOpen, setAddOpen] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [leaving, setLeaving] = useState(false)
+  const [calling, setCalling] = useState(false)
+  const [blockedCallUrl, setBlockedCallUrl] = useState('')
   const readUpTo = useRef(conversation.last_read_message_id ?? 0)
 
   const scroller = useRef<HTMLDivElement>(null)
@@ -493,14 +573,24 @@ function Thread({
   }, [])
   // Usunięcia, o których wiemy ze zdarzenia — także gdy zdarzenie wyprzedziło odpowiedź z tą wiadomością.
   const deletedIds = useRef(new Set<number>())
+  // Najnowszy znany stan rozmów (po id wiadomości kind=call) — spóźniona odpowiedź z listy nie cofa „trwa” na „dzwoni”.
+  const callMetas = useRef(new Map<number, ChatCallMeta>())
 
   const applyIncoming = useCallback(
     (list: ChatMessage[]) => {
       if (list.length === 0) return
       const known = deletedIds.current
-      const incoming = known.size === 0
-        ? list
-        : list.map((m) => (known.has(m.id) && !m.deleted ? { ...m, deleted: true, body: null, meta: null } : m))
+      const metas = callMetas.current
+      const incoming = list.map((m) => {
+        if (known.has(m.id) && !m.deleted) return { ...m, deleted: true, body: null, meta: null }
+        const call = m.kind === 'call' ? m.meta?.call : undefined
+        if (call) {
+          const ours = metas.get(m.id)
+          if (ours && !isCallStatusNewerOrSame(ours.status, call.status)) return { ...m, meta: { ...m.meta, call: ours } }
+          metas.set(m.id, call)
+        }
+        return m
+      })
       commit(mergeMessages(messagesRef.current, incoming))
       const uuids = new Set(list.map((m) => m.client_uuid).filter(Boolean))
       if (uuids.size > 0) setPending((prev) => prev.filter((p) => !uuids.has(p.client_uuid)))
@@ -573,6 +663,34 @@ function Thread({
     void loadInitial()
   }, [loadInitial])
 
+  /** Zmiana stanu rozmowy: świeży stan z GET /chat/calls/{id} i podmiana karty po message_id (W5), bez względu na stronę. */
+  const patchCall = useCallback(
+    async (e: ChatCallUpdatedEvent) => {
+      let meta: ChatCallMeta = {
+        id: e.call_id,
+        kind: e.kind,
+        status: e.status,
+        duration_seconds: e.duration_seconds ?? null,
+      }
+      let messageId = e.message_id
+      try {
+        const r = await fetchCall(e.call_id)
+        meta = { id: r.data.id, kind: r.data.kind, status: r.data.status, duration_seconds: r.data.duration_seconds }
+        messageId = r.data.message_id ?? messageId
+      } catch {
+        /* zostaje stan ze zdarzenia */
+      }
+      if (!messageId) return
+      const ours = callMetas.current.get(messageId)
+      if (ours && !isCallStatusNewerOrSame(ours.status, meta.status)) return
+      callMetas.current.set(messageId, meta)
+      const prev = messagesRef.current
+      if (!prev.some((m) => m.id === messageId && m.kind === 'call')) return
+      commit(prev.map((m) => (m.id === messageId && m.kind === 'call' ? { ...m, meta: { ...m.meta, call: meta } } : m)))
+    },
+    [commit],
+  )
+
   // Sygnały z serwera: nowa wiadomość w tej rozmowie albo ponowne połączenie.
   useEffect(() => {
     const offs = [
@@ -588,9 +706,12 @@ function Thread({
         commit(prev.map((m) => (m.id === e.message_id ? { ...m, deleted: true, body: null, meta: null } : m)))
       }),
       onRealtime('connected', () => void loadNewer()),
+      onRealtime('chat.call.updated', (e) => {
+        if (e.conversation_id === id) void patchCall(e)
+      }),
     ]
     return () => offs.forEach((off) => off())
-  }, [id, loadNewer, commit])
+  }, [id, loadNewer, commit, patchCall])
 
   /** Ostatnia strona od nowa — serwer zwraca też usunięte („wiadomość usunięta”), merge podmienia je po id. */
   const reconcileLatest = useCallback(async () => {
@@ -707,6 +828,48 @@ function Thread({
     }
   }
 
+  /** Dołączenie do trwającej rozmowy — nowa karta od razu w kliknięciu (inaczej przeglądarka ją zablokuje). */
+  function joinCallTab(callId: number) {
+    setActionErr('')
+    setBlockedCallUrl('')
+    const url = callPageUrl(callId)
+    if (!window.open(url, '_blank')) setBlockedCallUrl(url)
+  }
+
+  /**
+   * Nowa rozmowa: kartę otwieramy pustą od razu w kliknięciu, a adres rozmowy wstawiamy po odpowiedzi serwera
+   * (POST /calls zakłada pokój na serwerze rozmów — po takiej przerwie przeglądarka mogłaby zablokować nową kartę).
+   * Gdy w rozmowie czatu już ktoś dzwoni albo rozmowa trwa, serwer zwraca tę rozmowę — wtedy po prostu dołączamy.
+   */
+  async function placeCall(kind: CallKind) {
+    if (calling) return
+    setCalling(true)
+    setActionErr('')
+    setBlockedCallUrl('')
+    const tab = window.open('', '_blank')
+    if (tab) {
+      try {
+        tab.document.title = 'Rozmowa'
+        tab.document.body.textContent = 'Łączę z rozmową…'
+      } catch {
+        /* pusta karta bez napisu — nic złego */
+      }
+    }
+    try {
+      const r = await startCall(id, kind)
+      // Pełny adres — pusta karta (about:blank) nie musi znać adresu aplikacji, od którego liczy się ścieżkę.
+      const url = new URL(callPageUrl(r.data.id), window.location.origin).href
+      if (tab && !tab.closed) tab.location.replace(url)
+      else if (!window.open(url, '_blank')) setBlockedCallUrl(url)
+      onListChanged()
+    } catch (ex) {
+      tab?.close()
+      setActionErr(errorText(ex, 'Nie udało się zadzwonić.'))
+    } finally {
+      setCalling(false)
+    }
+  }
+
   async function leave() {
     setLeaving(true)
     setActionErr('')
@@ -769,6 +932,26 @@ function Thread({
               </p>
             ) : null}
           </div>
+          {callsEnabled && (isChannel || other) && !confirmLeave && (
+            <>
+              <button
+                type="button"
+                disabled={calling}
+                onClick={() => void placeCall('audio')}
+                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Zadzwoń
+              </button>
+              <button
+                type="button"
+                disabled={calling}
+                onClick={() => void placeCall('video')}
+                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Wideo
+              </button>
+            </>
+          )}
           {canManage && !confirmLeave && (
             <>
               <button
@@ -805,6 +988,14 @@ function Thread({
           )}
         </div>
         {actionErr && <p className="mt-1.5 rounded bg-red-50 px-2 py-1 text-xs text-red-700">{actionErr}</p>}
+        {blockedCallUrl && (
+          <p className="mt-1.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+            Przeglądarka zablokowała nową kartę.{' '}
+            <a href={blockedCallUrl} target="_blank" rel="noreferrer" className="font-medium underline">
+              Otwórz rozmowę
+            </a>
+          </p>
+        )}
       </div>
 
       <div
@@ -867,6 +1058,9 @@ function Thread({
                 onCancelDelete={() => setConfirmDelete(null)}
                 onDelete={() => void removeMessage(m.id)}
                 deleting={deleting}
+                calling={calling}
+                onJoinCall={joinCallTab}
+                onCallBack={(kind) => void placeCall(kind)}
               />
             </div>
           )
@@ -1019,6 +1213,7 @@ export function Chat() {
   const [pageErr, setPageErr] = useState('')
   const [search, setSearch] = useState('')
   const [newChannelOpen, setNewChannelOpen] = useState(false)
+  const [callsEnabled, setCallsEnabled] = useState(false)
 
   const activeId = Number(params.get('c')) || null
   const directUser = Number(params.get('u')) || null
@@ -1059,6 +1254,20 @@ export function Chat() {
     void loadList()
     void loadUsers()
   }, [loadList, loadUsers])
+
+  // Rozmowy głosowe i wideo — przyciski tylko, gdy serwer rozmów jest skonfigurowany.
+  useEffect(() => {
+    let cancelled = false
+    fetchCallsConfig().then(
+      (c) => {
+        if (!cancelled) setCallsEnabled(Boolean(c.enabled))
+      },
+      () => {},
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Obecność osób (zielona kropka) — co minutę przy widocznej karcie.
   useEffect(() => {
@@ -1292,6 +1501,7 @@ export function Chat() {
             onConversationUpdated={upsert}
             onLeft={onLeft}
             onBack={() => setParams({})}
+            callsEnabled={callsEnabled}
           />
         ) : (
           <div className="hidden min-h-0 items-center justify-center p-6 text-center text-sm text-slate-500 md:flex">

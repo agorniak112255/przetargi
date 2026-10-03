@@ -24,4 +24,22 @@ return [
 
     /** Najdłuższy skrót wiadomości w zdarzeniu chat.message — zdarzenie Reverb ma limit 10 000 bajtów. */
     'preview_length' => 300,
+
+    /**
+     * Rozmowy głosowe i wideo (LiveKit). Włączone, gdy url, api_key i api_secret są niepuste.
+     * url — adres sygnalizacji dla przeglądarki (wss://…); api_url — adres, pod którym serwer aplikacji woła API
+     * pokojów LiveKit (Twirp), na produkcji http://127.0.0.1:7880. Ten sam sekret podpisuje tokeny klientów
+     * i webhooki LiveKit (POST /api/chat/livekit/webhook).
+     */
+    'calls' => [
+        'url' => env('LIVEKIT_URL'),
+        'api_url' => env('LIVEKIT_API_URL', 'http://127.0.0.1:7880'),
+        'api_key' => env('LIVEKIT_API_KEY'),
+        'api_secret' => env('LIVEKIT_API_SECRET'),
+        'max_participants' => (int) env('LIVEKIT_MAX_PARTICIPANTS', 50),
+        // dzwonek u odbiorców; po tym czasie nieodebrana rozmowa staje się nieodebranym połączeniem
+        'ring_seconds' => 45,
+        // ważność tokenu dołączenia (s) — klient dostaje nowy przy każdym POST /join
+        'token_ttl' => 120,
+    ],
 ];

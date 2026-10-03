@@ -15,6 +15,7 @@
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
     "laravel-echo": "2.5.0",
+    "livekit-client": "2.22.3",
     "pusher-js": "8.6.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

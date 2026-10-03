@@ -6,7 +6,7 @@ import { AppFrame, Mark, Slideshow } from './kit'
  * otwarta rozmowa oznacza wiadomości jako przeczytane). Układ jak w pages/Chat.tsx.
  */
 
-type Focus = 'list' | 'compose' | 'cards' | 'delete' | 'failed'
+type Focus = 'list' | 'compose' | 'cards' | 'delete' | 'failed' | 'call' | 'callcard'
 
 function M({ on, children }: { on: boolean; children: ReactNode }) {
   return on ? <Mark>{children}</Mark> : <>{children}</>
@@ -91,10 +91,20 @@ function ChatScreen({ focus }: { focus: Focus }) {
         <div className="grid min-w-0 grid-rows-[auto_1fr_auto]">
           <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-1.5">
             <Av text="MK" color="bg-blue-100 text-blue-800" online />
-            <div>
+            <div className="flex-1">
               <p className="text-[12px] font-semibold text-slate-900">Marek Kowalski</p>
               <p className="text-[10.5px] text-green-700">w pracy</p>
             </div>
+            <M on={focus === 'call'}>
+              <span className="flex gap-1.5">
+                <span className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[10.5px] font-medium text-slate-700">
+                  Zadzwoń
+                </span>
+                <span className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[10.5px] font-medium text-slate-700">
+                  Wideo
+                </span>
+              </span>
+            </M>
           </div>
           <div className="flex flex-col gap-2 px-3 py-2">
             <span className="self-center rounded-full bg-slate-100 px-2 text-[10px] text-slate-500">Dzisiaj</span>
@@ -142,6 +152,23 @@ function ChatScreen({ focus }: { focus: Focus }) {
                 </M>
               </div>
             </div>
+            {focus === 'callcard' && (
+              <div className="grid max-w-[80%] grid-cols-[24px_1fr] gap-2">
+                <Av text="MK" color="bg-blue-100 text-blue-800" />
+                <div className="text-[11.5px] text-slate-900">
+                  <div className="text-[10.5px] text-slate-500">
+                    <span className="mr-1 font-semibold text-slate-900">Marek Kowalski</span>10:55
+                  </div>
+                  <M on>
+                    <div className="grid gap-0.5 border border-l-[3px] border-slate-200 border-l-green-600 bg-green-50 px-2 py-1 text-[11px]">
+                      <span className="text-[9.5px] uppercase tracking-wide text-slate-500">Rozmowa wideo</span>
+                      <span className="font-semibold text-slate-800">Nieodebrane połączenie</span>
+                      <span className="font-medium text-sky-700">Oddzwoń</span>
+                    </div>
+                  </M>
+                </div>
+              </div>
+            )}
             {focus === 'failed' && (
               <M on>
                 <div className="grid max-w-[80%] gap-0.5 justify-self-end">
@@ -244,6 +271,101 @@ function ShareScreen() {
   )
 }
 
+/** Okno dzwonka w prawym górnym rogu aplikacji (components/IncomingCallProvider.tsx). */
+function RingScreen() {
+  return (
+    <AppFrame nav="Zapytania">
+      <div className="relative min-h-[230px]">
+        <div className="space-y-1.5 opacity-40">
+          <p className="text-base font-semibold">Zapytanie #91 · Budmax Sp. z o.o.</p>
+          <div className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px]">1. Rękawice nitrylowe, rozm. M — 200 op.</div>
+          <div className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px]">2. Okulary ochronne EN 166 — 60 szt.</div>
+          <div className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px]">3. Kask ochronny z paskiem — 30 szt.</div>
+        </div>
+        <div className="absolute right-0 top-0 grid w-[230px] gap-2 rounded-lg border border-slate-300 bg-white p-2.5 text-slate-900 shadow-lg">
+          <div className="grid grid-cols-[34px_1fr] items-center gap-2">
+            <span className="grid h-[34px] w-[34px] place-items-center rounded-full bg-blue-100 text-xs font-semibold text-blue-800 ring-4 ring-green-600/30">
+              MK
+            </span>
+            <div>
+              <b className="block text-[12px] font-semibold">Marek Kowalski</b>
+              <span className="block text-[10.5px] text-slate-500">dzwoni · rozmowa wideo</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <Mark>
+              <span className="w-full rounded bg-green-600 px-2 py-1 text-center text-[11px] font-medium text-white">Odbierz</span>
+            </Mark>
+            <span className="rounded bg-red-600 px-2 py-1 text-center text-[11px] font-medium text-white">Odrzuć</span>
+          </div>
+          <span className="justify-self-center text-[10.5px] font-medium text-sky-700">Odbierz bez kamery</span>
+        </div>
+      </div>
+    </AppFrame>
+  )
+}
+
+function DarkTile({ ini, name, color, talk, children }: { ini?: string; name: string; color?: string; talk?: boolean; children?: ReactNode }) {
+  return (
+    <div
+      className={`relative grid min-h-[80px] place-items-center rounded-md bg-[#172033] ${talk ? 'outline outline-2 -outline-offset-2 outline-[#22c55e]' : ''}`}
+    >
+      {children ?? <span className={`grid h-10 w-10 place-items-center rounded-full text-sm font-semibold ${color}`}>{ini}</span>}
+      <span className="absolute bottom-1 left-1 rounded bg-[#020617]/70 px-1.5 text-[9.5px] text-[#e2e8f0]">{name}</span>
+    </div>
+  )
+}
+
+function DarkButton({ label, mark, tone = 'normal' }: { label: string; mark?: boolean; tone?: 'normal' | 'off' | 'hang' }) {
+  const look =
+    tone === 'off'
+      ? 'bg-[#f1f5f9] border-[#f1f5f9]'
+      : tone === 'hang'
+        ? 'w-10 bg-red-600 border-red-600'
+        : 'bg-[#1e293b] border-[#334155]'
+  const dot = <span className={`block h-7 min-w-7 rounded-full border ${look}`} />
+  return (
+    <div className="grid justify-items-center gap-0.5">
+      {mark ? <Mark>{dot}</Mark> : dot}
+      <span className="text-[9px] text-[#94a3b8]">{label}</span>
+    </div>
+  )
+}
+
+/** Rozmowa w osobnej karcie (pages/CallPage.tsx) — zawsze ciemna, jak na makiecie. */
+function CallScreen({ focus }: { focus: 'controls' | 'screen' }) {
+  return (
+    <div className="pointer-events-none overflow-hidden rounded-xl border border-slate-200 shadow-sm">
+      <div className="grid gap-2 bg-[#0b1220] p-3 text-[#e2e8f0]">
+        <div className="flex items-center gap-2 text-[10.5px] text-[#94a3b8]">
+          <b className="font-semibold text-[#f1f5f9]">Kanał „Przetargi”</b>
+          <span>3 osoby · 12:41</span>
+          <span className="ml-auto">Rozmowa nie jest nagrywana</span>
+        </div>
+        <div className="grid grid-cols-[2fr_1fr] gap-2">
+          <div className="row-span-2 grid min-h-[170px] place-items-center rounded-md bg-[#020617] outline outline-2 -outline-offset-2 outline-[#22c55e]">
+            <div className="w-[88%] rounded bg-white p-2 text-[9.5px] text-slate-900">
+              <p className="font-semibold">Cenniki → Ansell · rękawice antyprzecięciowe</p>
+              <p className="mt-1 text-slate-500">HyFlex 11-542 · poziom C · 14,80 zł</p>
+              <p className="text-slate-500">HyFlex 11-727 · poziom C · 19,40 zł</p>
+            </div>
+          </div>
+          <DarkTile ini="AN" name="Anna Nowak" color="bg-green-100 text-green-800" />
+          <DarkTile ini="KW" name="Ty" color="bg-sky-100 text-sky-800" />
+        </div>
+        <div className="flex justify-center gap-3">
+          <DarkButton label="Mikrofon" />
+          <DarkButton label="Kamera wył." tone="off" />
+          <DarkButton label="Pokaż ekran" mark={focus === 'screen'} />
+          <DarkButton label="Podnieś rękę" mark={focus === 'controls'} />
+          <DarkButton label="Osoby (3)" />
+          <DarkButton label="Rozłącz" tone="hang" mark={focus === 'controls'} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ChatHelp() {
   return (
     <Slideshow
@@ -297,6 +419,48 @@ export function ChatHelp() {
           click: 'Najedź na swoją wiadomość, kliknij „Usuń” nad nią i potwierdź czerwonym „Usuń”.',
           tone: 'amber',
           screen: <ChatScreen focus="delete" />,
+        },
+        {
+          action: 'Rozmowa głosowa i wideo',
+          does: 'Z czatu można zadzwonić do jednej osoby albo do całego kanału. „Zadzwoń” to rozmowa głosowa, „Wideo” — z kamerą. Rozmowa otwiera się w nowej karcie przeglądarki; najpierw widzisz podgląd kamery i możesz włączyć albo wyłączyć mikrofon i kamerę, a potem klikasz „Dołącz”. Nie trzeba niczego instalować — wystarczy Chrome albo Edge. Rozmowy nie są nagrywane.',
+          click: '„Zadzwoń” albo „Wideo” w górnym pasku otwartej rozmowy, a w nowej karcie — „Dołącz”.',
+          tone: 'blue',
+          screen: <ChatScreen focus="call" />,
+        },
+        {
+          action: 'Ktoś dzwoni',
+          does: 'Gdy masz otwartą aplikację, w prawym górnym rogu pojawia się okno z dzwonkiem — na każdej stronie, nie tylko w czacie. Dzwonek trwa 45 sekund. Dźwięk zagra dopiero wtedy, gdy wcześniej choć raz kliknąłeś coś na stronie (tak działają przeglądarki); inaczej zobaczysz samo okno. Gdy aplikacja jest zamknięta, dzwoni Thunderbird. Odebranie na jednym komputerze wycisza dzwonek na pozostałych.',
+          click: '„Odbierz” (rozmowa otworzy się w nowej karcie), „Odbierz bez kamery” albo „Odrzuć”.',
+          tone: 'blue',
+          screen: <RingScreen />,
+        },
+        {
+          action: 'W trakcie rozmowy',
+          does: 'Na dole są przyciski: mikrofon, kamera, pokazanie ekranu, podniesienie ręki (pozostali widzą żółtą rączkę przy Twoim nazwisku), lista osób i ustawienia (wybór mikrofonu, kamery i głośników). Zielona ramka pokazuje, kto teraz mówi. Gdy przeglądarka wstrzyma dźwięk, pojawi się przycisk „Włącz dźwięk”. Przy chwilowej utracie internetu rozmowa łączy się ponownie sama.',
+          click: 'Przyciski pod obrazem. „Rozłącz” (czerwony) kończy Twój udział — w rozmowie z jedną osobą (nie w kanale) kończy całą rozmowę.',
+          tone: 'blue',
+          screen: <CallScreen focus="controls" />,
+        },
+        {
+          action: 'Pokazanie ekranu',
+          does: 'Możesz pokazać pozostałym swój ekran, jedno okno albo kartę przeglądarki — np. cennik albo ofertę. Pokazywany ekran jest największy na środku. Przeglądarka zapyta, co udostępnić; „Anuluj” niczego nie pokazuje.',
+          click: '„Pokaż ekran”, wybierz okno i „Udostępnij”. Koniec — „Przestań pokazywać”.',
+          tone: 'blue',
+          screen: <CallScreen focus="screen" />,
+        },
+        {
+          action: 'Ile osób i co widać',
+          does: 'W jednej rozmowie może być najwyżej 50 osób. Obraz widać naraz najwyżej od 9 osób — pierwszeństwo ma pokazywany ekran, osoby, które mówią, i te, które mówiły niedawno; resztę widać na liście „Osoby”. Gdy w rozmowie są już 4 osoby, dołączasz z wyłączoną kamerą, a od 10 osób — także z wyłączonym mikrofonem. Włączysz je przyciskami w każdej chwili.',
+          click: '„Osoby” — lista wszystkich w rozmowie z ikonami mikrofonu, kamery i podniesionej ręki.',
+          tone: 'slate',
+          screen: <CallScreen focus="controls" />,
+        },
+        {
+          action: 'Rozmowa w czacie',
+          does: 'Każda rozmowa zostawia w czacie wpis w zielonej ramce. Gdy rozmowa trwa — „Rozmowa trwa” z przyciskiem „Dołącz”. Po zakończeniu — „Rozmowa · 12 min”. Gdy nikt nie odebrał — „Nieodebrane połączenie” z przyciskiem „Oddzwoń”. Takiego wpisu nie da się usunąć.',
+          click: '„Dołącz” albo „Oddzwoń” w zielonej ramce.',
+          tone: 'slate',
+          screen: <ChatScreen focus="callcard" />,
         },
       ]}
     />

@@ -59,6 +59,27 @@ kanału robi kluczem dodatku (`POST /api/broadcasting/auth`). Bez połączenia
 od Thunderbirda 115, bez dodatkowej zgody), więc aktualizacja do 1.32.0 przechodzi
 po cichu.
 
+## Rozmowy głosowe i wideo (od 1.33.0)
+
+W czacie aplikacji można zadzwonić do kolegi albo zrobić rozmowę w kanale
+(najwyżej 50 osób naraz). **Sama rozmowa odbywa się w przeglądarce** (Chrome albo
+Edge) — dodatek tylko dzwoni.
+
+**Gdy ktoś dzwoni.** W rogu ekranu pojawia się dymek „Dzwoni Jan Kowalski” (albo
+„Rozmowa w kanale …”) i przez 45 sekund co 3 sekundy słychać krótki sygnał.
+Kliknięcie dymka otwiera stronę rozmowy w przeglądarce — tam włączasz mikrofon
+i kamerę i klikasz **Dołącz**. Dzwonek milknie sam, gdy dzwoniący się rozłączy,
+gdy odbierzesz albo odrzucisz na innym komputerze, po kliknięciu dymka albo po
+45 sekundach.
+
+Wpis o rozmowie w czacie („Rozmowa wideo”) nie daje osobnego dymka „nowa
+wiadomość” — liczba nieprzeczytanych odświeża się jak zwykle.
+
+Technicznie: zdarzenia `chat.call.ringing` i `chat.call.updated` na tym samym
+kanale co czat, dźwięk przez WebAudio w tle dodatku (gdy Thunderbird go zablokuje,
+zostaje sam dymek), kliknięcie → `windows.openDefaultBrowser(adres + '/czat/rozmowa/{id}')`.
+Bez nowych zgód, więc aktualizacja do 1.33.0 przechodzi po cichu.
+
 ## Załączniki z zapytaniem (od 1.29.0)
 
 Gdy klient przysyła listę produktów w pliku, okienko nad mailem pokazuje
@@ -509,6 +530,9 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
   `GET /api/chat/users`, `POST /api/chat/direct/{user}/messages`; zdarzenia na kanale
   `private-user.{id}`: `chat.message`, `chat.read`, `queue.updated`. 403 z czatu =
   konto bez czatu (dodatek ukrywa czat i sprawdza ponownie co kwadrans).
+- rozmowy (1.33.0+): zdarzenia `chat.call.ringing` (`call_id`, `conversation_id`,
+  `conversation_name`, `kind`, `started_by`) i `chat.call.updated` (`call_id`, `status`,
+  `reason`) na tym samym kanale; strona `/czat/rozmowa/{id}` w aplikacji.
 - `POST /api/inquiries` przyjmuje pole `force` (domyślnie false) i przy cudzym
   zapytaniu z tego samego maila odpowiada **409** z polem `duplicate`
   (`id`, `user.name`, `created_at`, `replied_at`, `match`).

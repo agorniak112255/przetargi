@@ -1,4 +1,5 @@
 import { api } from './api'
+import { callKindLabel, type ChatCallMeta } from './calls'
 
 /**
  * Czat firmowy — typy i wywołania API zgodne z kontraktem (GET/POST /chat/…).
@@ -39,9 +40,10 @@ export type ChatMailMeta = {
 export type ChatMessage = {
   id: number
   conversation_id: number
-  kind: 'text' | 'link' | 'mail' | 'system'
+  /** call = wpis o rozmowie głosowej/wideo (body null, stan w meta.call); takiego wpisu nie da się usunąć. */
+  kind: 'text' | 'link' | 'mail' | 'system' | 'call'
   body: string | null
-  meta: { link?: ChatLinkMeta; mail?: ChatMailMeta } | null
+  meta: { link?: ChatLinkMeta; mail?: ChatMailMeta; call?: ChatCallMeta } | null
   /** null przy kind ≠ system = konto usunięte. */
   user: ChatPerson | null
   deleted: boolean
@@ -200,6 +202,7 @@ export function messagePreview(m: ChatMessage | null): string {
   const body = (m.body ?? '').replace(/\s+/g, ' ').trim()
   if (m.kind === 'mail') return `Mail: ${m.meta?.mail?.subject ?? ''}${body ? ` · ${body}` : ''}`
   if (m.kind === 'link') return body || (m.meta?.link?.title ?? 'Link')
+  if (m.kind === 'call') return callKindLabel(m.meta?.call?.kind === 'video' ? 'video' : 'audio')
   return body
 }
 

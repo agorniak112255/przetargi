@@ -37,11 +37,38 @@ export type ChatConversationEvent = { conversation_id: number }
 
 export type ChatDeletedEvent = { conversation_id: number; message_id: number }
 
+/** Ktoś dzwoni (tylko do odbiorców rozmowy, bez dzwoniącego). */
+export type ChatCallRingingEvent = {
+  call_id: number
+  conversation_id: number
+  /** Rozmowa 1:1 — imię dzwoniącego, kanał — nazwa kanału. */
+  conversation_name: string
+  kind: 'audio' | 'video'
+  started_by: { id: number; name: string }
+  started_at: string
+}
+
+/**
+ * Zmiana stanu rozmowy. reason = status — zmiana statusu (wszyscy odbiorcy); declined / joined — tylko do osoby,
+ * która odrzuciła albo dołączyła (jej inne karty i urządzenia przestają dzwonić).
+ */
+export type ChatCallUpdatedEvent = {
+  call_id: number
+  conversation_id: number
+  message_id: number | null
+  status: 'ringing' | 'active' | 'ended' | 'missed'
+  kind: 'audio' | 'video'
+  reason: 'status' | 'declined' | 'joined'
+  duration_seconds: number | null
+}
+
 type RealtimeEvents = {
   'chat.message': ChatMessageEvent
   'chat.read': ChatReadEvent
   'chat.conversation': ChatConversationEvent
   'chat.deleted': ChatDeletedEvent
+  'chat.call.ringing': ChatCallRingingEvent
+  'chat.call.updated': ChatCallUpdatedEvent
   /** Kanał (ponownie) zasubskrybowany — czas odświeżyć dane z API. */
   connected: Record<string, never>
 }
@@ -60,6 +87,8 @@ const handlers: { [K in EventName]: Set<Handler<K>> } = {
   'chat.read': new Set(),
   'chat.conversation': new Set(),
   'chat.deleted': new Set(),
+  'chat.call.ringing': new Set(),
+  'chat.call.updated': new Set(),
   connected: new Set(),
 }
 
@@ -196,5 +225,11 @@ export async function startRealtime(userId: number): Promise<void> {
     })
     .listen('.chat.deleted', (e: ChatDeletedEvent) => {
       if (gen === generation) emit('chat.deleted', e)
+    })
+    .listen('.chat.call.ringing', (e: ChatCallRingingEvent) => {
+      if (gen === generation) emit('chat.call.ringing', e)
+    })
+    .listen('.chat.call.updated', (e: ChatCallUpdatedEvent) => {
+      if (gen === generation) emit('chat.call.updated', e)
     })
 }

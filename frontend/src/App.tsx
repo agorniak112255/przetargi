@@ -47,7 +47,10 @@ import { Substitutes } from './pages/Substitutes'
 import { TenderDetail } from './pages/TenderDetail'
 import { Tenders } from './pages/Tenders'
 import { can, canAny } from './lib/api'
-import { useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
+
+/** Strona rozmowy głosowej/wideo — osobny kawałek razem z livekit-client (reszta aplikacji go nie pobiera). */
+const CallPage = lazy(() => import('./pages/CallPage'))
 
 const RETRY_MS = 15_000
 
@@ -148,6 +151,21 @@ export default function App() {
       <AppearanceProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          {/* Rozmowa otwiera się w osobnej karcie — bez paska bocznego (poza Layout) i bez dzwonka. */}
+          <Route
+            path="/czat/rozmowa/:id"
+            element={
+              <Guard>
+                <PermissionGuard permission="chat">
+                  <Suspense
+                    fallback={<p className="min-h-screen bg-[#0b1220] p-8 text-sm text-[#94a3b8]">Ładowanie rozmowy…</p>}
+                  >
+                    <CallPage />
+                  </Suspense>
+                </PermissionGuard>
+              </Guard>
+            }
+          />
           <Route
             element={
               <Guard>

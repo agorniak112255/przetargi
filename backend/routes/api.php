@@ -27,9 +27,11 @@ use App\Http\Controllers\Api\CampaignClickController;
 use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CampaignTemplateController;
 use App\Http\Controllers\Api\CardMatchController;
+use App\Http\Controllers\Api\Chat\ChatCallController;
 use App\Http\Controllers\Api\Chat\ChatConversationController;
 use App\Http\Controllers\Api\Chat\ChatMessageController;
 use App\Http\Controllers\Api\Chat\ChatUserController;
+use App\Http\Controllers\Api\Chat\LiveKitWebhookController;
 use App\Http\Controllers\Api\Chat\RealtimeController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
@@ -129,8 +131,22 @@ Route::middleware('auth:sanctum')->group(function (): void {
             ->whereNumber('user')
             ->middleware('throttle:60,1,chat-messages');
         Route::delete('/messages/{message}', [ChatMessageController::class, 'destroy'])->whereNumber('message');
+
+        // rozmowy głosowe i wideo (LiveKit)
+        Route::get('/calls/config', [ChatCallController::class, 'config']);
+        Route::post('/conversations/{conversation}/calls', [ChatCallController::class, 'store'])
+            ->whereNumber('conversation')
+            ->middleware('throttle:10,1,chat-calls');
+        Route::get('/calls/{call}', [ChatCallController::class, 'show'])->whereNumber('call');
+        Route::post('/calls/{call}/join', [ChatCallController::class, 'join'])->whereNumber('call');
+        Route::post('/calls/{call}/decline', [ChatCallController::class, 'decline'])->whereNumber('call');
+        Route::post('/calls/{call}/leave', [ChatCallController::class, 'leave'])->whereNumber('call');
     });
 });
+
+// Webhook serwera LiveKit (rozmowy w czacie) — bez auth:sanctum, bez limitu i poza `log.activity`: nadawcę potwierdza
+// podpis JWT sekretem API; limit żądań gubiłby zdarzenia przy wielu osobach w rozmowie.
+Route::post('/chat/livekit/webhook', LiveKitWebhookController::class);
 
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);

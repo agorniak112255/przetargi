@@ -391,6 +391,33 @@ final class ChatService
         return [$message, true];
     }
 
+    /**
+     * Wpis o rozmowie głosowej/wideo (kind=call, autor = dzwoniący, bez treści) i zwykłe zdarzenie chat.message.
+     * Wołane w transakcji rozpoczęcia rozmowy — zdarzenie wychodzi po zatwierdzeniu.
+     *
+     * @param  array{id: int, kind: string, status: string, duration_seconds: int|null}  $call
+     */
+    public function postCallMessage(User $me, ChatConversation $conversation, array $call): ChatMessage
+    {
+        $message = ChatMessage::query()->create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $me->id,
+            'kind' => ChatMessage::KIND_CALL,
+            'body' => null,
+            'meta' => ['call' => $call],
+            'client_uuid' => null,
+        ]);
+        ChatConversation::query()
+            ->whereKey($conversation->id)
+            ->where(fn ($query) => $query->whereNull('last_message_id')->orWhere('last_message_id', '<', $message->id))
+            ->update(['last_message_id' => $message->id, 'updated_at' => now()]);
+
+        $message->setRelation('user', $me);
+        $this->broadcastMessage($conversation, $message, $me);
+
+        return $message;
+    }
+
     /** Usunięcie własnej wiadomości: treść i meta znikają, wiersz zostaje jako „wiadomość usunięta”. */
     public function deleteMessage(User $me, int $messageId): ChatMessage
     {
@@ -402,6 +429,10 @@ final class ChatService
             // cudza wiadomość w rozmowie, w której mnie nie ma, to dla mnie „nie ma takiej” — jak przy rozmowach
             $this->findForUser($me, (int) $message->conversation_id);
             throw new AccessDeniedHttpException('Można usunąć tylko własną wiadomość.');
+        }
+        if ($message->kind === ChatMessage::KIND_CALL) {
+            // wpis prowadzi do rozmowy (Dołącz / Oddzwoń) i niesie jej stan — znika tylko razem z rozmową czatu
+            throw ValidationException::withMessages(['message' => 'Wpisu o rozmowie nie można usunąć.']);
         }
         if ($message->deleted_at === null) {
             $message->forceFill(['body' => null, 'meta' => null, 'deleted_at' => now()])->save();
@@ -695,7 +726,7 @@ final class ChatService
      *
      * @return list<int>
      */
-    private function recipientIds(ChatConversation $conversation): array
+    public function recipientIds(ChatConversation $conversation): array
     {
         // Tylko osoby z uprawnieniem — komu odebrano czat, nie dostaje już zapowiedzi wiadomości (skrót treści)
         // ze starych rozmów, choć jego wiersz uczestnika zostaje.
@@ -715,6 +746,7 @@ final class ChatService
         $preview = match ($message->kind) {
             ChatMessage::KIND_MAIL => (string) ($meta['mail']['subject'] ?? ''),
             ChatMessage::KIND_LINK => (string) ($message->body ?? $meta['link']['title'] ?? ''),
+            ChatMessage::KIND_CALL => ($meta['call']['kind'] ?? null) === 'video' ? 'Rozmowa wideo' : 'Rozmowa głosowa',
             default => (string) $message->body,
         };
 

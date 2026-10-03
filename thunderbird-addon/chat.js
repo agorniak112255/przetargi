@@ -1,7 +1,8 @@
 /*
  * Czat firmowy w tle dodatku (od 1.32.0): przestrzeń „Czat Supon” na pionowym pasku Thunderbirda, liczba
  * nieprzeczytanych na jej przycisku, powiadomienia o nowych wiadomościach i połączenie na żywo z serwerem
- * (Reverb, protokół Pushera — vendor/pusher.min.js).
+ * (Reverb, protokół Pushera — vendor/pusher.min.js). Od 1.33.0 także dzwonek rozmów głosowych i wideo
+ * (chat.call.ringing / chat.call.updated) — rozmowa sama odbywa się w przeglądarce.
  *
  * To samo połączenie niesie sygnał `queue.updated`: w kolejce dodatku pojawiła się praca („Zapisz i wyślij”,
  * oferta). Dzięki niemu background.js pyta o kolejkę od razu, a przy działającym połączeniu rzadziej na zapas.
@@ -56,6 +57,15 @@ const CHAT_REALTIME_RECHECK_MINUTES = 15
 /** Najdłuższa treść powiadomienia — dłuższą system i tak utnie. */
 const CHAT_PREVIEW_CHARS = 300
 
+/** Przedrostek powiadomienia o dzwoniącej rozmowie (od 1.33.0) — po nim kliknięcie otwiera rozmowę w przeglądarce. */
+const CALL_NOTIFICATION_PREFIX = 'call-'
+
+/** Tyle sekund dzwoni rozmowa, jeśli serwer wcześniej nie powie, że już nie trzeba (jak `ring_seconds` w aplikacji). */
+const CALL_RING_SECONDS = 45
+
+/** Co tyle sekund dzwonek powtarza krótki dwutonowy sygnał. */
+const CALL_BEEP_EVERY_SECONDS = 3
+
 const chatState = {
   /** Numer przebiegu: zmiana klucza albo adresu unieważnia wszystko, co było w drodze. */
   generation: 0,
@@ -85,6 +95,12 @@ const chatState = {
   /** Po tej chwili ponawiamy konfigurację połączenia na żywo (0 = nie trzeba). */
   realtimeRetryAt: 0,
   restartTimer: null,
+  /** Dzwoniące rozmowy po numerze: { stopTimer } — każda ma własne 45 s i milknie niezależnie. */
+  calls: new Map(),
+  /** Jeden zegar dzwonka dla wszystkich dzwoniących rozmów — dwie naraz nie grają jedna przez drugą. */
+  ringTimer: null,
+  /** Wspólny AudioContext dzwonka; zakładany przy pierwszym dzwonku, zamykany, gdy nic już nie dzwoni. */
+  audio: null,
 }
 
 /** Połączenie na żywo działa i kanał użytkownika jest zasubskrybowany — sygnały dotrą bez pytania serwera. */
@@ -260,6 +276,7 @@ function chatEnable() {
 async function chatDisable() {
   chatState.enabled = false
   chatState.unread = 0
+  chatCallStopAll()
   chatState.recheckAt = Date.now() + CHAT_DISABLED_RECHECK_MINUTES * 60 * 1000
   await chatRemoveSpace()
 }
@@ -362,6 +379,8 @@ async function chatOnMessage(data) {
     chatRefreshUnread()
   }
 
+  // Wpis o rozmowie (kind=call) tylko odświeża licznik — dzwoni osobne zdarzenie chat.call.ringing.
+  if (data.kind === 'call') return
   if (chatState.enabled !== true || await chatInFront()) return
 
   try {
@@ -388,6 +407,185 @@ function chatOnRead(data) {
 /** W kolejce dodatku jest praca — pytamy o nią od razu (background.js). */
 function chatOnQueue() {
   if (typeof queueSignal === 'function') queueSignal()
+}
+
+/* ------------------------------ rozmowy (dzwonek) ------------------------------ */
+
+/*
+ * Od 1.33.0: rozmowa głosowa albo wideo z czatu. Sama rozmowa odbywa się w przeglądarce (Chrome/Edge) — dodatek
+ * tylko dzwoni: powiadomienie i dźwięk, a kliknięcie otwiera stronę rozmowy. Dzwonek milknie, gdy serwer powie,
+ * że rozmowa już nie dzwoni (chat.call.updated: status ≠ ringing albo odebrałem / odrzuciłem na innym urządzeniu),
+ * po kliknięciu powiadomienia albo po 45 s.
+ */
+
+/** Numer rozmowy z danych zdarzenia albo identyfikatora powiadomienia; cokolwiek innego = null. */
+function chatCallId(value) {
+  const text = String(value ?? '')
+  if (!/^\d+$/.test(text)) return null
+  const id = Number(text)
+
+  return id > 0 ? id : null
+}
+
+function chatCallTitle(data) {
+  const conversation = String(data.conversation_name || '').trim()
+  if (chatState.types.get(Number(data.conversation_id)) === 'channel' && conversation !== '') {
+    return 'Rozmowa w kanale ' + conversation
+  }
+  const caller = data.started_by && typeof data.started_by === 'object' ? String(data.started_by.name || '').trim() : ''
+  if (caller !== '') return 'Dzwoni ' + caller
+  // W rozmowie 1:1 nazwą rozmowy jest imię dzwoniącego.
+  if (conversation !== '') return 'Dzwoni ' + conversation
+
+  return 'Ktoś dzwoni'
+}
+
+function chatCallText(data) {
+  return (data.kind === 'video' ? 'Rozmowa wideo' : 'Rozmowa głosowa') + ' — kliknij, aby odebrać w przeglądarce.'
+}
+
+/**
+ * Jeden krótki dwutonowy sygnał przez WebAudio. Bez AudioContext albo z zawieszonym (blokada odtwarzania bez
+ * kliknięcia) — cisza, zostaje samo powiadomienie; zawieszony prosimy o wznowienie, więc może zagrać następny sygnał.
+ */
+function chatCallBeep() {
+  if (chatState.audio === null) {
+    if (typeof AudioContext !== 'function') return
+    try {
+      chatState.audio = new AudioContext()
+    } catch (e) {
+      return
+    }
+  }
+  const audio = chatState.audio
+  if (audio.state !== 'running') {
+    if (audio.state === 'suspended') {
+      try {
+        Promise.resolve(audio.resume()).catch(() => {})
+      } catch (e) {
+        // zostaje samo powiadomienie
+      }
+    }
+
+    return
+  }
+  try {
+    const start = audio.currentTime
+    for (const [offset, frequency] of [[0, 880], [0.45, 660]]) {
+      const oscillator = audio.createOscillator()
+      const gain = audio.createGain()
+      oscillator.type = 'sine'
+      oscillator.frequency.value = frequency
+      // Łagodne narastanie i wygaszanie — bez trzasków na początku i końcu tonu.
+      gain.gain.setValueAtTime(0, start + offset)
+      gain.gain.linearRampToValueAtTime(0.2, start + offset + 0.03)
+      gain.gain.linearRampToValueAtTime(0, start + offset + 0.4)
+      oscillator.connect(gain)
+      gain.connect(audio.destination)
+      oscillator.start(start + offset)
+      oscillator.stop(start + offset + 0.42)
+    }
+  } catch (e) {
+    console.warn('Supon: dzwonek nie zagrał:', e.message)
+  }
+}
+
+/** Dzwonek gra, dopóki dzwoni choć jedna rozmowa; gdy żadna — zegar stoi, a AudioContext jest zamknięty. */
+function chatCallSyncRinger() {
+  if (chatState.calls.size > 0) {
+    if (chatState.ringTimer === null) {
+      chatCallBeep()
+      chatState.ringTimer = setInterval(chatCallBeep, CALL_BEEP_EVERY_SECONDS * 1000)
+    }
+
+    return
+  }
+  if (chatState.ringTimer !== null) {
+    clearInterval(chatState.ringTimer)
+    chatState.ringTimer = null
+  }
+  if (chatState.audio !== null) {
+    const audio = chatState.audio
+    chatState.audio = null
+    try {
+      Promise.resolve(audio.close()).catch(() => {})
+    } catch (e) {
+      // i tak go porzucamy
+    }
+  }
+}
+
+/** Rozmowa przestaje dzwonić: jej zegar, powiadomienie i (gdy to była ostatnia) dźwięk. */
+function chatCallStop(callId) {
+  const call = chatState.calls.get(callId)
+  if (call === undefined) return
+  clearTimeout(call.stopTimer)
+  chatState.calls.delete(callId)
+  chatCallSyncRinger()
+  Promise.resolve()
+    .then(() => browser.notifications.clear(CALL_NOTIFICATION_PREFIX + callId))
+    .catch(() => {})
+}
+
+function chatCallStopAll() {
+  for (const callId of [...chatState.calls.keys()]) chatCallStop(callId)
+}
+
+/** Ktoś dzwoni (chat.call.ringing): dźwięk od razu, powiadomienie z tytułem zależnym od typu rozmowy. */
+async function chatOnCallRinging(data) {
+  if (!data || typeof data !== 'object' || chatState.enabled === false) return
+  const callId = chatCallId(data.call_id)
+  if (callId === null || chatState.calls.has(callId)) return
+  // Serwer nie dzwoni do dzwoniącego — to tylko zabezpieczenie przed dzwonieniem do samego siebie.
+  const caller = data.started_by && typeof data.started_by === 'object' ? data.started_by : null
+  if (caller !== null && chatState.userId !== null && Number(caller.id) === Number(chatState.userId)) return
+
+  const call = { stopTimer: null }
+  call.stopTimer = setTimeout(() => chatCallStop(callId), CALL_RING_SECONDS * 1000)
+  chatState.calls.set(callId, call)
+  chatCallSyncRinger()
+
+  // Typ rozmowy (kanał czy 1:1) decyduje o tytule; nowej rozmowy jeszcze nie znamy — pytamy o listę.
+  if (!chatState.types.has(Number(data.conversation_id))) {
+    try {
+      await chatLoadConversations()
+    } catch (e) {
+      // tytuł bez typu rozmowy: „Dzwoni {kto}”
+    }
+  }
+  // W międzyczasie rozmowa mogła przestać dzwonić (albo zmienił się klucz) — wtedy bez powiadomienia.
+  if (chatState.calls.get(callId) !== call) return
+
+  const notificationId = CALL_NOTIFICATION_PREFIX + callId
+  try {
+    await browser.notifications.create(notificationId, {
+      type: 'basic',
+      iconUrl: browser.runtime.getURL(CHAT_ICON),
+      title: chatCallTitle(data),
+      message: chatCallText(data),
+    })
+  } catch (e) {
+    console.warn('Supon: powiadomienie o rozmowie się nie pokazało:', e.message)
+
+    return
+  }
+  // Rozmowa przestała dzwonić, zanim powiadomienie się pokazało — sprzątanie wyprzedziło pokazanie.
+  if (chatState.calls.get(callId) !== call) browser.notifications.clear(notificationId).catch(() => {})
+}
+
+/** Zmiana stanu rozmowy (chat.call.updated) — reguła końca dzwonienia jak w aplikacji. */
+function chatOnCallUpdated(data) {
+  if (!data || typeof data !== 'object') return
+  const callId = chatCallId(data.call_id)
+  if (callId === null || !chatState.calls.has(callId)) return
+  if (data.status !== 'ringing' || data.reason === 'declined' || data.reason === 'joined') chatCallStop(callId)
+}
+
+/** Kliknięcie powiadomienia o rozmowie: dzwonek milknie, strona rozmowy otwiera się w przeglądarce. */
+async function chatCallAnswer(callId) {
+  chatCallStop(callId)
+  const { baseUrl } = await getSettings()
+  await browser.windows.openDefaultBrowser(baseUrl + '/czat/rozmowa/' + callId)
 }
 
 /* --------------------------- połączenie na żywo --------------------------- */
@@ -498,6 +696,14 @@ function chatConnect(config, userId) {
   channel.bind('queue.updated', () => {
     if (generation === chatState.generation) chatOnQueue()
   })
+  // Rozmowy głosowe i wideo (od 1.33.0) — dodatek tylko dzwoni, rozmowa jest w przeglądarce.
+  channel.bind('chat.call.ringing', (data) => {
+    if (generation !== chatState.generation) return
+    chatOnCallRinging(data).catch((e) => console.warn('Supon: dzwonek rozmowy:', e.message))
+  })
+  channel.bind('chat.call.updated', (data) => {
+    if (generation === chatState.generation) chatOnCallUpdated(data)
+  })
 }
 
 /** Konfiguracja połączenia z serwera; `realtime: null` = serwer go nie ma, zostaje odpytywanie. */
@@ -603,6 +809,8 @@ async function chatRecheck() {
 async function chatRestart() {
   chatState.generation += 1
   chatStopRealtime()
+  // Dzwonek z poprzedniego konta nie może grać dalej — serwer nie powie mu już, że ma przestać.
+  chatCallStopAll()
   chatState.ready = false
   chatState.starting = false
   chatState.retryAt = 0
@@ -662,6 +870,16 @@ browser.notifications.onClicked.addListener((notificationId) => {
   const match = /^chat-(\d+)-/.exec(id)
   chatOpen(match ? Number(match[1]) : null)
     .catch((e) => console.warn('Supon: nie udało się otworzyć czatu:', e.message))
+  browser.notifications.clear(id).catch(() => {})
+})
+
+// Powiadomienie o rozmowie: strona rozmowy w domyślnej przeglądarce — sama rozmowa nie odbywa się w Thunderbirdzie.
+browser.notifications.onClicked.addListener((notificationId) => {
+  const id = String(notificationId || '')
+  if (!id.startsWith(CALL_NOTIFICATION_PREFIX)) return
+  const callId = chatCallId(id.slice(CALL_NOTIFICATION_PREFIX.length))
+  if (callId === null) return
+  chatCallAnswer(callId).catch((e) => console.warn('Supon: nie udało się otworzyć rozmowy:', e.message))
   browser.notifications.clear(id).catch(() => {})
 })
 
