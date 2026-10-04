@@ -53,6 +53,7 @@ class B2bConnectorRegistry
         MsaB2bConnector::class,
         BigB2bConnector::class,
         SaraB2bConnector::class,
+        CanisB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
