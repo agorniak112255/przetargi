@@ -66,6 +66,47 @@ final class NormsFromShopCardsTest extends TestCase
             $facts('Norma', 'EN 13034 (Type 6) PB', ['Norma']),
             'nawias tylko na części wartości zostaje dosłownie',
         );
+        // Przypadki z produkcji 04.10.2026: Canis #70820, #70865, PROTEKT, Portwest/ELTEN, 3M, Canis (czeskie „a”).
+        $this->assertSame(
+            [['label' => 'EN 420', 'value' => null], ['label' => 'EN 388', 'value' => null]],
+            $facts('Normy', 'EN 420 EN 388', ['Normy']),
+            'normy rozdzielone samą spacją (Canis) — druga nie jest wartością pierwszej',
+        );
+        $this->assertSame([
+            ['label' => 'EN 420', 'value' => null],
+            ['label' => 'EN 455-1', 'value' => null],
+            ['label' => 'EN 455-2', 'value' => null],
+            ['label' => 'EN 455-3', 'value' => null],
+        ], $facts('Normy', 'EN 420 EN 455-1/2/3', ['Normy']), 'części 1/2/3 normy rozpisane, nie „/2/3” jako wartość');
+        $this->assertSame(
+            [['label' => 'EN 358', 'value' => null], ['label' => 'EN 361', 'value' => null]],
+            $facts('Norma', 'CE EN 358, CE EN 361', ['Norma']),
+            'przedrostek „CE” nie gubi normy (PROTEKT)',
+        );
+        $this->assertSame(
+            [['label' => 'EN ISO 20345:2012', 'value' => 'S3 (CI SRC)']],
+            $facts('Norma', 'UNI EN ISO 20345:2012 S3 (CI SRC)', ['Norma']),
+        );
+        $this->assertSame([['label' => 'PN EN 388', 'value' => null]], $facts('Norma', 'PN EN 388', ['Norma']), '„PN EN” to jedno oznaczenie');
+        $this->assertSame(
+            [['label' => 'EN 388', 'value' => '4121X'], ['label' => 'EN 407', 'value' => '412X4X']],
+            $facts('Norma', 'EN 388 4121X EN 407 412X4X', ['Norma']),
+        );
+        $this->assertSame(
+            [['label' => 'EN 21420:2020', 'value' => null], ['label' => 'EN 388:2016+A1:2018', 'value' => null]],
+            $facts('Norma', 'EN 21420:2020 / CE EN 388:2016+A1:2018', ['Norma']),
+            '„/ CE” to dopisek o znaku, nie wartość',
+        );
+        $this->assertSame(
+            [['label' => 'EN 166', 'value' => null], ['label' => 'EN 169', 'value' => null], ['label' => 'EN 175', 'value' => null]],
+            $facts('Normy', 'EN 166, EN 169 a EN 175', ['Normy']),
+            'spójnik „a” między normami to nie wartość',
+        );
+        $this->assertSame(
+            [['label' => 'EN ISO 374-1', 'value' => 'Type A']],
+            $facts('Norma', 'EN ISO 374-1 Type A', ['Norma']),
+            'wielkie „A” typu zostaje wartością',
+        );
         $this->assertSame([], $facts('Materiał', 'EN 355', ['Norma']), 'wiersz o innej nazwie to nie lista norm');
         $this->assertSame([], $facts('Norma', 'brak', ['Norma']), 'wartość bez oznaczenia normy');
     }

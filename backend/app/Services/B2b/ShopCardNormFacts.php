@@ -34,11 +34,18 @@ final class ShopCardNormFacts
     /** Oznaczenie normy na początku pozycji: „EN 388:2016 + A1:2018”, „EN ISO 20345:2022”, „EN143 : 2001”, „PN-EN 361”. */
     private const DESIGNATION = '/^(?:PN[\s\-]+)?EN(?:\s?ISO)?\s?\d{2,6}(?:-\d{1,3})*(?:\s?:\s?(?:19|20)\d{2}(?!\d))?(?:\s*\+\s*A\d{1,2}(?:\s?:\s?(?:19|20)\d{2}(?!\d))?)?/iu';
 
-    /** Separator listy tylko przed kolejnym oznaczeniem — przecinek wewnątrz wartości („kat. II, III”) listy nie dzieli. */
-    private const LIST_SPLIT = '/\s*[,;\n]\s*(?=(?:PN[\s\-]+)?EN\s?(?:ISO\s?)?\d)/iu';
+    /**
+     * Separator listy tylko przed kolejnym oznaczeniem — przecinek wewnątrz wartości („kat. II, III”) listy nie dzieli.
+     * Canis rozdziela normy samą spacją („EN 420 EN 388”, „EN 420 EN 455-1/2/3”) — spacja po literze albo cyfrze też
+     * dzieli, inaczej druga norma była wartością pierwszej („EN 420 EN 388”). „PN EN 388” zostaje jednym oznaczeniem.
+     */
+    private const LIST_SPLIT = '/(?:\s*[,;\n]\s*|(?<=[\p{L}\p{N}])(?<!\bPN)\s+)(?=(?:PN[\s\-]+)?EN\s?(?:ISO\s?)?\d)/iu';
 
-    /** Dopisek o znaku CE na końcu listy 3M — to nie poziom normy stojącej przed nim. */
-    private const CE_TAIL = '/\s*[,;]\s*(?:oznaczenie\s+)?CE\s*$/iu';
+    /** Dopisek o znaku CE na końcu listy 3M („…, Oznaczenie CE”) albo pozycji („EN 21420:2020 / CE EN 388”) — to nie poziom normy przed nim. */
+    private const CE_TAIL = '/\s*[,;\/]\s*(?:oznaczenie\s+)?CE\s*$/iu';
+
+    /** Sam spójnik między normami („EN 169 a EN 175”, „EN 358 i EN 361”) — to nie wartość normy stojącej przed nim. */
+    private const LONE_CONJUNCTION = '/^(?:a|i|oraz|and|und|et)$/u';
 
     /**
      * Pary z wierszy tabelki o podanych nazwach, w kolejności tabelki; powtórzone pary odpadają.
@@ -133,8 +140,18 @@ final class ShopCardNormFacts
                 continue;
             }
             $label = trim($m[0]);
-            $rest = self::unwrapped(Utf8Trim::trim(mb_substr($item, mb_strlen($m[0])), " \t:;,–—-"));
-            $out[] = ['label' => $label, 'value' => $rest === '' ? null : $rest];
+            $tail = trim(mb_substr($item, mb_strlen($m[0])));
+            // „EN 455-1/2/3” to części 1, 2 i 3 tej normy — bez rozpisania „/2/3” było wartością („EN 455-1 /2/3”).
+            // Tylko sam zapis części: z czymś po nim nie wiadomo, której części dotyczy reszta.
+            if (preg_match('/^(.*-)(\d{1,3})$/u', $label, $part) === 1 && preg_match('/^(?:\/\d{1,3})+$/u', $tail) === 1) {
+                foreach ([$part[2], ...explode('/', ltrim($tail, '/'))] as $number) {
+                    $out[] = ['label' => $part[1].$number, 'value' => null];
+                }
+
+                continue;
+            }
+            $rest = self::unwrapped(Utf8Trim::trim($tail, " \t:;,–—-"));
+            $out[] = ['label' => $label, 'value' => $rest === '' || preg_match(self::LONE_CONJUNCTION, $rest) === 1 ? null : $rest];
         }
 
         return $out;
