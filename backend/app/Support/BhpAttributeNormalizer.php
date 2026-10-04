@@ -578,17 +578,28 @@ final class BhpAttributeNormalizer
         return array_values(array_unique($found));
     }
 
+    /** Numery norm bez części (odzież ostrzegawcza, nakolanniki), u których „-N” po numerze to klasa albo typ. */
+    public const NORMS_WITHOUT_PARTS = ['471', '20471', '14404'];
+
     /** @return list<string> */
     public function detectNormsFromText(string $text): array
     {
         if (trim($text) === '') {
             return [];
         }
-        if (preg_match_all('/\bEN(?:\s*ISO)?\s*\d{3,5}(?::\s*\d{4})?(?:\s*\+\s*A\d+)?\b/iu', $text, $m) < 1) {
+        // Część normy (1–2 cyfry) należy do oznaczenia: bez niej „EN 1149-5” dawało gołe „EN 1149”, a „EN ISO 374-1:2016” —
+        // „EN ISO 374”, obok pełnego zapisu z tabelki czy od producenta. Trzy cyfry po myślniku to poziomy albo sklejony numer
+        // innej normy („EN 511-111”, „EN 361-358-813”). Ukośnik nie jest częścią: „EN 20471/2” u Snickersa to klasa 2.
+        if (preg_match_all('/\bEN(?:\s*ISO)?\s*(\d{3,5})((?:-\d{1,2}(?!\d))*)(?::\s*\d{4})?(?:\s*\+\s*A\d+)?\b/iu', $text, $m, PREG_SET_ORDER) < 1) {
             return [];
         }
         $out = [];
-        foreach ($m[0] as $raw) {
+        foreach ($m as $match) {
+            $raw = $match[0];
+            // Normy bez części, przy których myślnik niesie klasę albo typ: „EN ISO 20471-2” (klasa 2), „EN 14404-3” (typ 3).
+            if ($match[2] !== '' && in_array($match[1], self::NORMS_WITHOUT_PARTS, true)) {
+                $raw = str_replace($match[1].$match[2], $match[1], $raw);
+            }
             $norm = preg_replace('/\s+/', ' ', trim($raw));
             if (is_string($norm) && $norm !== '') {
                 $out[] = $norm;

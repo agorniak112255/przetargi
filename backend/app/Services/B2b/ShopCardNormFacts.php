@@ -7,6 +7,7 @@ namespace App\Services\B2b;
 use App\Models\B2bAccount;
 use App\Models\Product;
 use App\Models\ProductShopCard;
+use App\Support\BhpAttributeNormalizer;
 use App\Support\BrandKey;
 use App\Support\ManufacturerNormFacts;
 use App\Support\Utf8Trim;
@@ -154,7 +155,10 @@ final class ShopCardNormFacts
                 continue;
             }
             // „EN 1149/5” (BIG) to część 5 normy, czyli EN 1149-5 — oznaczenie bez części i bez roku, sama „/N” po nim.
-            if (preg_match('/^(?:PN[\s\-]+)?EN(?:\s?ISO)?\s?\d{2,6}$/iu', $label) === 1 && preg_match('/^\/(\d{1,2})$/u', $tail, $slashPart) === 1) {
+            // Nie przy normach bez części: „EN ISO 20471/2” to klasa 2 (BhpAttributeNormalizer::NORMS_WITHOUT_PARTS).
+            if (preg_match('/^(?:PN[\s\-]+)?EN(?:\s?ISO)?\s?(\d{2,6})$/iu', $label, $number) === 1
+                && ! in_array($number[1], BhpAttributeNormalizer::NORMS_WITHOUT_PARTS, true)
+                && preg_match('/^\/(\d{1,2})$/u', $tail, $slashPart) === 1) {
                 $out[] = ['label' => $label.'-'.$slashPart[1], 'value' => null];
 
                 continue;

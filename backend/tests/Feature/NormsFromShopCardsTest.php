@@ -108,6 +108,7 @@ final class NormsFromShopCardsTest extends TestCase
             'wielkie „A” typu zostaje wartością',
         );
         $this->assertSame([['label' => 'EN 1149-5', 'value' => null]], $facts('Norma', 'EN 1149/5', ['Norma']), '„EN 1149/5” (BIG) to część 5');
+        $this->assertSame([['label' => 'EN ISO 20471', 'value' => '/2']], $facts('Norma', 'EN ISO 20471/2', ['Norma']), '„/2” przy odzieży ostrzegawczej to klasa, nie część');
         $this->assertSame(
             [['label' => 'EN 1073-2:2002-10', 'value' => null]],
             $facts('Norma', 'EN 1073-2:2002-10', ['Norma']),

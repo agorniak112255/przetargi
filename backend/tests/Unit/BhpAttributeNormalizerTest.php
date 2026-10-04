@@ -937,4 +937,22 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertSame('glasses', $type('Okulary ochronne w etui', 'Okulary ochronne z etui i sznurkiem.', 'Okulary ochronne'));
         $this->assertSame('goggles', $type('Gogle ochronne z paskiem', 'Gogle z regulowanym paskiem.', 'Gogle'));
     }
+
+    /** Przypadki z produkcji 04.10.2026: goły skrót obok pełnego oznaczenia z tabelki („EN 1149” przy „EN 1149-5”). */
+    public function test_norms_from_text_keep_the_part_but_not_classes_or_levels(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame(['EN 1149-5'], $n->detectNormsFromText('Antystatyczny wg EN 1149-5'));
+        $this->assertSame(['EN ISO 374-1:2016', 'EN ISO 374-5'], $n->detectNormsFromText('EN ISO 374-1:2016 Type B, EN ISO 374-5'));
+        $this->assertSame(['EN 61340-5-1'], $n->detectNormsFromText('ESD: EN 61340-5-1'));
+        // klasa i typ po myślniku albo ukośniku to nie część normy
+        $this->assertSame(['EN ISO 20471:2013'], $n->detectNormsFromText('EN ISO 20471-2:2013'));
+        $this->assertSame(['EN 20471'], $n->detectNormsFromText('Ogrodniczki odblaskowe, EN 20471/2'));
+        $this->assertSame(['EN 14404'], $n->detectNormsFromText('Nakolanniki EN 14404-3'));
+        $this->assertSame(['EN 1149'], $n->detectNormsFromText('EN 1149/5'), 'ukośnik w tekście jest dwuznaczny — bez części');
+        // poziomy i sklejone numery innych norm
+        $this->assertSame(['EN 511'], $n->detectNormsFromText('EN 511-111'));
+        $this->assertSame(['EN 361'], $n->detectNormsFromText('EN 361-358-813'));
+    }
 }
