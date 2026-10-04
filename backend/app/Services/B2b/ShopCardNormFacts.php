@@ -31,8 +31,11 @@ final class ShopCardNormFacts
 
     public const OTHER_SOURCE = 'other_source';
 
-    /** Oznaczenie normy na początku pozycji: „EN 388:2016 + A1:2018”, „EN ISO 20345:2022”, „EN143 : 2001”, „PN-EN 361”. */
-    private const DESIGNATION = '/^(?:PN[\s\-]+)?EN(?:\s?ISO)?\s?\d{2,6}(?:-\d{1,3})*(?:\s?:\s?(?:19|20)\d{2}(?!\d))?(?:\s*\+\s*A\d{1,2}(?:\s?:\s?(?:19|20)\d{2}(?!\d))?)?/iu';
+    /**
+     * Oznaczenie normy na początku pozycji: „EN 388:2016 + A1:2018”, „EN ISO 20345:2022”, „EN143 : 2001”, „PN-EN 361”,
+     * wydanie z miesiącem „EN 1073-2:2002-10” (BIG) — bez miesiąca „-10” zostawało wartością („EN 1073-2:2002 10”).
+     */
+    private const DESIGNATION = '/^(?:PN[\s\-]+)?EN(?:\s?ISO)?\s?\d{2,6}(?:-\d{1,3})*(?:\s?:\s?(?:19|20)\d{2}(?!\d)(?:-(?:0[1-9]|1[0-2])(?!\d))?)?(?:\s*\+\s*A\d{1,2}(?:\s?:\s?(?:19|20)\d{2}(?!\d))?)?/iu';
 
     /**
      * Separator listy tylko przed kolejnym oznaczeniem — przecinek wewnątrz wartości („kat. II, III”) listy nie dzieli.
@@ -147,6 +150,12 @@ final class ShopCardNormFacts
                 foreach ([$part[2], ...explode('/', ltrim($tail, '/'))] as $number) {
                     $out[] = ['label' => $part[1].$number, 'value' => null];
                 }
+
+                continue;
+            }
+            // „EN 1149/5” (BIG) to część 5 normy, czyli EN 1149-5 — oznaczenie bez części i bez roku, sama „/N” po nim.
+            if (preg_match('/^(?:PN[\s\-]+)?EN(?:\s?ISO)?\s?\d{2,6}$/iu', $label) === 1 && preg_match('/^\/(\d{1,2})$/u', $tail, $slashPart) === 1) {
+                $out[] = ['label' => $label.'-'.$slashPart[1], 'value' => null];
 
                 continue;
             }

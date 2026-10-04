@@ -107,6 +107,17 @@ final class NormsFromShopCardsTest extends TestCase
             $facts('Norma', 'EN ISO 374-1 Type A', ['Norma']),
             'wielkie „A” typu zostaje wartością',
         );
+        $this->assertSame([['label' => 'EN 1149-5', 'value' => null]], $facts('Norma', 'EN 1149/5', ['Norma']), '„EN 1149/5” (BIG) to część 5');
+        $this->assertSame(
+            [['label' => 'EN 1073-2:2002-10', 'value' => null]],
+            $facts('Norma', 'EN 1073-2:2002-10', ['Norma']),
+            'miesiąc wydania (BIG) należy do oznaczenia, nie jest wartością',
+        );
+        $this->assertSame(
+            [['label' => 'EN ISO 11612:2015', 'value' => '1/1/1/X/X/1']],
+            $facts('Norma', 'EN ISO 11612:2015 1/1/1/X/X/1', ['Norma']),
+            'poziomy po roku zostają wartością',
+        );
         $this->assertSame([], $facts('Materiał', 'EN 355', ['Norma']), 'wiersz o innej nazwie to nie lista norm');
         $this->assertSame([], $facts('Norma', 'brak', ['Norma']), 'wartość bez oznaczenia normy');
     }
