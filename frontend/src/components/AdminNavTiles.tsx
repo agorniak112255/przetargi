@@ -21,7 +21,7 @@ export const adminTiles: AdminTile[] = [
   {
     to: '/admin/roles',
     label: 'Role',
-    description: 'Uprawnienia grup',
+    description: 'Uprawnienia grup i zespoły',
     permission: 'admin.roles.manage',
   },
   {

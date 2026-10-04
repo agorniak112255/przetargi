@@ -10,7 +10,7 @@ import { AppFrame, Btn, Card, Field, LiveFrame, LivePage, LiveScreen, Mark, Slid
  * wyszukiwanie Ctrl+K, karta klienta i notatki, powiązanie zapytania z klientem, wynik zapytania i podpowiedź z ERP XL,
  * ważność oferty, cele handlowców i przypisanie pracownika ERP XL; „Czego jeszcze nie ma”. Etapy 0–1: godzina składania
  * i numer ogłoszenia, wynik przetargu i pobieranie wyniku z Biuletynu, raport skuteczności, powiadomienia i wzmianki
- * „@”, „Do zrobienia dziś”, stan systemu.
+ * „@”, „Do zrobienia dziś”, stan systemu. Wynik kampanii w Raportach i zespoły w Rolach.
  * Ekrany to rysunki poglądowe z przykładowymi danymi (poza dashboardem i stanem systemu — tam prawdziwy widok).
  */
 
@@ -699,6 +699,37 @@ function Stage01Slideshow() {
               fallback={<SystemStatusSketch />}
               mark="text=Wycisz e-mail"
             />
+          ),
+        },
+        {
+          action: 'Wynik kampanii i zespoły',
+          does: 'W Raportach jest zakładka „Wynik kampanii” — podstawa premii za pozbywanie się zalegającego towaru. Pokazuje „uwolnione pieniądze” (koszt zakupu sprzedanego towaru, który w dniu wysyłki leżał co najmniej 180 dni bez sprzedaży), sprzedaż odbiorcom kampanii, odzysk na każde 100 zł kosztu, marżę, sprzedaż poniżej kosztu i ile towar leżał przed mailem. Każda pozycja faktury należy tylko do jednej kampanii — ostatniego maila z tym towarem przed zakupem. Handlowiec widzi swoje kampanie, kierownik zespołu — członków swoich zespołów, zarząd z uprawnieniem „Wynik kampanii — wszyscy pracownicy” — wszystkich. Zespoły z kierownikami ustawia administrator w „Administracja” → „Role”, w części „Zespoły”.',
+          click: '„Raporty” → „Wynik kampanii”: wybierz miesiąc, a kierownik także osobę. „Pobierz pozycje faktur (CSV)” zapisuje każdą policzoną pozycję do sprawdzenia przed premią. Szczegóły: Pomoc → Raporty, slajdy „Wynik kampanii” i „Zespoły”.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Raporty">
+              <Card className="p-3">
+                <p className="mb-2 text-xs font-semibold">Wynik kampanii · Październik 2026</p>
+                <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                  {(
+                    [
+                      ['Uwolnione pieniądze', '48 tys. zł'],
+                      ['Sprzedaż odbiorcom', '126 tys. zł'],
+                      ['Odzysk', '131 zł na 100 zł'],
+                      ['Marża', '24,6%'],
+                    ] as const
+                  ).map(([label, value]) => (
+                    <div key={label} className="rounded-lg border border-slate-200 p-2">
+                      <p className="text-[11px] text-slate-500">{label}</p>
+                      <p className="text-sm font-semibold">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-[11px] text-slate-600">
+                  <Mark>Administracja → Role → Zespoły</Mark> — kto jest kierownikiem i czyje wyniki widzi.
+                </p>
+              </Card>
+            </AppFrame>
           ),
         },
       ]}

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
-import { AppFrame, Card, LivePage, Mark, Slideshow, Th } from './kit'
+import { AppFrame, Btn, Card, LivePage, Mark, Slideshow, Th } from './kit'
 import { useAuth } from '../../auth'
+import { AdminTeams } from '../../components/AdminTeams'
 import { Reports } from '../Reports'
 import { can, canAny } from '../../lib/api'
 
@@ -98,6 +99,68 @@ function Kpis({ items }: { items: [string, string, string, string | null][] }) {
         </Card>
       ))}
     </div>
+  )
+}
+
+/** Rysunek części „Zespoły” z Administracja → Role (dla osób bez uprawnienia do ról — przykładowe dane). */
+function TeamsSketch() {
+  const people: [string, string, boolean, boolean][] = [
+    ['Jan Kowalski', 'dyrektor', true, true],
+    ['Anna Nowak', 'handlowiec', true, false],
+    ['Piotr Wiśniewski', 'handlowiec', true, false],
+    ['Katarzyna Zielińska', 'handlowiec', false, false],
+  ]
+  return (
+    <AppFrame nav="Administracja">
+      <Card className="p-3">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h2 className="text-xs font-semibold">Zespoły — kto widzi czyje wyniki kampanii</h2>
+          <Mark>
+            <Btn label="Dodaj zespół" />
+          </Mark>
+        </div>
+        <p className="mb-2 text-[11px] text-slate-500">Kierownik zespołu widzi w Raportach wynik kampanii wszystkich członków swoich zespołów.</p>
+        <table className="mb-3 w-full text-left text-xs">
+          <thead>
+            <tr className="border-b bg-slate-50">
+              <Th>Zespół</Th>
+              <Th>Kierownicy</Th>
+              <Th>Członkowie</Th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-b">
+              <td className="p-2 font-medium">Handel Rzeszów</td>
+              <td className="p-2">Jan Kowalski</td>
+              <td className="p-2">Anna Nowak, Piotr Wiśniewski</td>
+            </tr>
+            <tr>
+              <td className="p-2 font-medium">Handel Kraków</td>
+              <td className="p-2 text-amber-700">brak kierownika — zespół nie zmienia, kto co widzi</td>
+              <td className="p-2">Katarzyna Zielińska</td>
+            </tr>
+          </tbody>
+        </table>
+        <div className="rounded-lg border border-slate-200 p-2">
+          <p className="mb-1 text-xs font-semibold">Zmiana zespołu „Handel Rzeszów”</p>
+          <p className="mb-1 text-[11px] text-slate-600">W zespole: 3 osoby, w tym kierowników: 1</p>
+          <ul className="divide-y divide-slate-100 rounded border border-slate-100 text-xs">
+            {people.map(([name, role, member, leader]) => (
+              <li key={name} className="flex items-center gap-3 px-2 py-1">
+                <span className="flex flex-1 items-center gap-2">
+                  <input type="checkbox" checked={member} readOnly aria-label={`${name} w zespole`} />
+                  {name} <span className="text-slate-500">{role}</span>
+                </span>
+                <span className="flex items-center gap-1 text-slate-600">
+                  <input type="checkbox" checked={leader} readOnly aria-label={`${name} — kierownik zespołu`} />
+                  kierownik zespołu
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </Card>
+    </AppFrame>
   )
 }
 
@@ -580,6 +643,23 @@ export function ReportsHelp() {
                 </table>
               </Card>
             </AppFrame>
+          ),
+        },
+        {
+          action: 'Zespoły — kto czyje wyniki widzi',
+          does: 'Zespół to grupa pracowników z jednym albo kilkoma kierownikami. Kierownik zespołu widzi w Raportach → „Wynik kampanii” kampanie wszystkich członków swoich zespołów (ranking, wybór osoby, plik z pozycjami faktur); członek zespołu bez zaznaczenia „kierownik zespołu” dalej widzi tylko swoje kampanie. Zespoły nie zmieniają uprawnień z ról — rola mówi, co ktoś może robić, zespół tylko, czyje wyniki kampanii widzi kierownik. Jedna osoba może być w kilku zespołach, a kierownik — kierować kilkoma. Zespół bez kierownika nic nie zmienia. Zarząd nie musi być w zespole: wystarczy mu w roli uprawnienie „Wynik kampanii — wszyscy pracownicy”. Zmiana składu działa od razu i wstecz — nowy kierownik widzi całą historię kampanii członków, a osoba usunięta z zespołu znika z jego raportu.',
+          click: 'Zespoły ustawia administrator (uprawnienie „Zarządzanie rolami”): „Administracja” → „Role”, na dole część „Zespoły — kto widzi czyje wyniki kampanii”. „Dodaj zespół” → wpisz nazwę (np. „Handel Kraków”) → zaznacz osoby w zespole i przy kierowniku „kierownik zespołu” (to zaznaczenie samo dopisuje osobę do zespołu) → „Dodaj zespół”. „Zmień” przy zespole otwiera ten sam formularz, „Usuń” usuwa zespół po potwierdzeniu (konta i kampanie zostają). Wyszukiwarka „Szukaj osoby” zawęża listę.',
+          tone: 'amber',
+          screen: (
+            <LivePage
+              nav="Administracja"
+              path="/admin/roles"
+              page={<AdminTeams />}
+              allowed={can(user, 'admin.roles.manage')}
+              mark="text=Dodaj zespół"
+              maxHeight={520}
+              fallback={<TeamsSketch />}
+            />
           ),
         },
       ]}
