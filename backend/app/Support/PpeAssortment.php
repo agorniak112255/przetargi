@@ -214,6 +214,21 @@ final class PpeAssortment
     private const FOOTWEAR_CLASS_TOKENS = '/\bs1\h?p?[ls]?\b|\bs[2-7][ls]?\b|\bo1\h?p?[ls]?\b|\bo[2-7][ls]?\b|\bsb\b|\bob\b/u';
 
     /**
+     * Tekst o pomiarze gazów: „O2” i „O3” to w nim tlen i ozon, nie klasa obuwia — detektory MSA „ALTAIR – ALTAIR O2
+     * 19,5/23 Vol%”, „ALTAIR 5X – LEL PEN, O2, CO, H2S” były przez to obuwiem (a potem dostawały klasę „O2”). Po normalize().
+     */
+    private const GAS_MEASUREMENT = '/\b(detektor|czujnik|miernik|gazomierz|analizator|detector|sensor|tlen|oxygen|ozon|ozone'
+        .'|h2s|co2|lel|ppm|vol)\w*|\bgaz(u|y|ow|owy|owe|ami)?\b|\bgas(es)?\b/u';
+
+    /**
+     * Detektor gazów i gaz do jego kalibracji to sprzęt pomiarowy, nie ŚOI — detektory ALTAIR 5X dostawały rodzinę
+     * z opisu („obsługa w rękawicach”) albo obuwie z „O2”. Sam „detektor” to za mało: „Zarękawki wykrywalne przez
+     * detektor metalu” są ŚOI. Nazwa po normalize().
+     */
+    private const GAS_DEVICE_NAME = '/\b((detektor|miernik|analizator)\w*\s+(gaz|wielogaz|jednogaz|dwugaz|tlen)\w*|gazomierz\w*|gas\s+detector\w*|multigas'
+        .'|gaz\w*\s+do\s+kalibracji|calibration\s+(testing\s+)?gas)\b/u';
+
+    /**
      * Obuwie jako przedmiot czynności („czyszczenie obuwia”, „wycieraczka do butów”) — wyrób służy
      * obuwiu, ale nim nie jest („usuwa brud z obuwia”, „przyczepność dla butów”). Bez tego 94 maty Coba były obuwiem.
      */
@@ -286,6 +301,7 @@ final class PpeAssortment
         $t = preg_replace(self::FOOTWEAR_AS_OBJECT, ' ', $t) ?? $t;
         $hasHelm = preg_match('/\b(helm|kask)\w*/u', $t) === 1;
 
+        $classText = preg_match(self::GAS_MEASUREMENT, $t) === 1 ? (preg_replace('/\bo[23]\b/u', '  ', $t) ?? $t) : $t;
         $best = null;
         $bestAt = PHP_INT_MAX;
         foreach (self::FAMILY_PATTERNS as $family => $pattern) {
@@ -295,7 +311,7 @@ final class PpeAssortment
             }
             $at = $this->firstWordOffset($pattern, $t);
             if ($family === self::FAMILY_FOOTWEAR && $footwearClasses) {
-                $classAt = $this->firstWordOffset(self::FOOTWEAR_CLASS_TOKENS, $t);
+                $classAt = $this->firstWordOffset(self::FOOTWEAR_CLASS_TOKENS, $classText);
                 if ($classAt !== null && ($at === null || $classAt < $at)) {
                     $at = $classAt;
                 }
@@ -1639,7 +1655,8 @@ final class PpeAssortment
         }
 
         $identity = $this->productIdentityText($product);
-        if ($this->isResuscitationMask($identity, (string) ($product->description ?? '')) || $this->isBeardCover($identity)) {
+        if ($this->isResuscitationMask($identity, (string) ($product->description ?? '')) || $this->isBeardCover($identity)
+            || $this->namesGasDevice((string) $product->name)) {
             return null;
         }
         // Z opisu bez klas obuwia: „S1”, „SB” w prozie to klasa ogniowa, oznaczenie wariantu albo cudzy wyrób.
@@ -1701,6 +1718,12 @@ final class PpeAssortment
     public function isBeardCover(string $identity): bool
     {
         return preg_match(self::BEARD_COVER, $this->normalize($identity)) === 1 && $this->family($identity) === null;
+    }
+
+    /** Nazwa karty nazywa detektor gazów albo gaz kalibracyjny (GAS_DEVICE_NAME) i żadnej rodziny ŚOI — sprzęt pomiarowy. */
+    public function namesGasDevice(string $name): bool
+    {
+        return preg_match(self::GAS_DEVICE_NAME, $this->normalize($name)) === 1 && $this->family($name) === null;
     }
 
     /** Nazwa karty nazywa znak albo tablicę BHP (SAFETY_SIGN_NAME) — wyrób spoza ŚOI, choćby przedstawiał maskę czy aparat. */

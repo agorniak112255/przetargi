@@ -342,6 +342,50 @@ final class ManualPriceListClassificationTest extends TestCase
         $this->assertTrue($this->assortment->namesRespiratoryAccessory('Half Mask Storage Bag Portwest B940'));
     }
 
+    /**
+     * #65946 i #66029 z produkcji (backfill 04.10.2026): „O2” w nazwie detektora gazu to tlen. Z niego szła kategoria
+     * „obuwie”, a kolejne przeliczenie czytało ją jak kategorię od modelu i dopisywało klasę obuwia „O2”.
+     */
+    public function test_oxygen_in_gas_detector_name_is_not_footwear_class(): void
+    {
+        foreach ([
+            ['Detektor jednogazowy ALTAIR – ALTAIR O2 19,5/23 Vol%', '10092523', 'Mierniki przenośne > Jedno lub dwugazowe',
+                'Detektor jednogazowy ALTAIR został zaprojektowany z myślą o żywotności. Jest wyposażony w opcje czujników '
+                    .'tlenku węgla, siarkowodoru i tlenu w połączeniu z alarmami diodowymi/dźwiękowymi/wibracyjnymi.'],
+            ['Detektor gazu ALTAIR 5X – Kolorowy, LEL PEN , O2 , CO , H2S , 0-10% CO2 , EUROPA', '10119615', 'Mierniki przenośne > Wielogazowe',
+                'Detektor gazu ALTAIR 5X wykrywa jednocześnie nawet 6 gazów i jest dostępny ze zintegrowanym czujnikiem PID. '
+                    .'Duże przyciski pozwalają na obsługę w rękawicach ochronnych.'],
+        ] as [$name, $sku, $category, $description]) {
+            // stan po backfillu: zapisane kategoria „obuwie” i klasa „O2”
+            $detector = $this->card($name, $sku, $description, null, ['kategoria_bhp' => 'obuwie', 'klasa_ochrony' => 'O2']);
+            $detector->setAttribute('category', $category);
+            $attrs = $this->normalizer->forProduct($detector);
+
+            $this->assertSame('inne', $attrs['kategoria_bhp'], $name);
+            $this->assertNull($attrs['klasa_ochrony'], $name);
+            $this->assertNull($attrs['typ_wyrobu'], $name);
+            // rodzina po zapisie przeliczonych atrybutów (backfill → Product::saving); opis ALTAIR 5X wspomina rękawice
+            $detector->enrichment_payload = ['attributes' => $attrs];
+            $this->assertNull($this->assortment->productFamily($detector), $name);
+        }
+        $this->assertTrue($this->assortment->namesGasDevice('Gaz do kalibracji – Calibration Testing Gas, Gas can 34L, 20ppm H2S, 60ppm CO, CH4, 2.5% CO2, 15% O2'));
+        $this->assertFalse($this->assortment->namesGasDevice('Półmaska 3M 6200 z detektorem końca żywotności'));
+        // #37687: wyrób ŚOI wykrywalny przez detektor metalu
+        $this->assertFalse($this->assortment->namesGasDevice('Zarękawki foliowe wykrywalne przez detektor metalu RFOL-DETECT.'));
+
+        // ochraniacze na obuwie (#9171) zostają przy kategorii obuwia od modelu
+        $overshoes = $this->card('2000-WH STD OVERSHOES 400.42-46', '400.42-46', 'Ochraniacze jednorazowe z polipropylenu.', null, ['kategoria_bhp' => 'obuwie']);
+        $this->assertSame('obuwie', $this->normalizer->forProduct($overshoes)['kategoria_bhp']);
+        $this->assertNotSame(PpeAssortment::FAMILY_FOOTWEAR, $this->assortment->family('Detektor wielogazowy O2, CO, H2S, LEL'));
+
+        // but z samą klasą w nazwie zostaje obuwiem, także z zapisaną kategorią
+        $this->assertSame(PpeAssortment::FAMILY_FOOTWEAR, $this->assortment->family('ARYEL 320 671460 O2 FO SRC'));
+        $shoe = $this->card('ARYEL 320 671460 S3L', '671460', 'Lekki model z kompozytowym podnoskiem.', null, ['kategoria_bhp' => 'obuwie']);
+        $attrs = $this->normalizer->forProduct($shoe);
+        $this->assertSame('obuwie', $attrs['kategoria_bhp']);
+        $this->assertSame('S3L', $attrs['klasa_ochrony']);
+    }
+
     /** #14315 i #14357 z produkcji: znak BHP to oznakowanie, a nie aparat czy maska z rysunku. */
     public function test_safety_sign_is_outside_ppe(): void
     {

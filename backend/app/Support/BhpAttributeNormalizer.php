@@ -319,10 +319,12 @@ final class BhpAttributeNormalizer
         // „drogi_oddechowe” (CEDERROTH 26604 „Maska oddechowa”, opis „resuscytacja usta-usta”) albo obuwie
         // z „czyszczenia obuwia”, a opis osłony brody KleenGuard A10 („ochrona dróg oddechowych”) dawał typ FFP.
         // Znak BHP też: „Stosuj aparat oddechowy” to oznakowanie, a dostawał typ „apparatus” z przedmiotu na znaku.
+        // Detektor gazów i gaz kalibracyjny to sprzęt pomiarowy (ALTAIR „O2” robił z nich obuwie).
         $outsidePpe = $assortment->namesFloorMat((string) ($context['name'] ?? ''))
             || $assortment->isResuscitationMask($identity, (string) ($context['description'] ?? ''))
             || $assortment->isBeardCover($identity)
-            || $assortment->namesSafetySign((string) ($context['name'] ?? ''));
+            || $assortment->namesSafetySign((string) ($context['name'] ?? ''))
+            || $assortment->namesGasDevice((string) ($context['name'] ?? ''));
 
         // Poza tym kategoria od modelu zostaje pierwsza: rzeczownik z nazwy przed nią psuł więcej, niż naprawiał
         // („Shoe cover”, „Low softshell footwear” — przegląd ręcznych cenników 22.09). Bez niej tożsamość, a na końcu
@@ -393,9 +395,12 @@ final class BhpAttributeNormalizer
         $priceListKlasa = $this->nullableString($priceList['klasa_ochrony'] ?? null);
         $rawKlasa = $this->nullableString($raw['klasa_ochrony'] ?? null);
         // Obuwie tylko ze słowa obuwniczego w tekście albo z jawnej kategorii payloadu — sama wyliczona kategoria
-        // nie wystarcza: statyw „TM 14-SB” czy instrukcja „OB 750 A” dostawały klasę obuwia z nazwy.
-        $footwear = $this->mentionsFootwear($this->normalizeText($katText))
-            || $this->normalizeKategoria($this->nullableString($raw['kategoria_bhp'] ?? null)) === 'obuwie';
+        // nie wystarcza: statyw „TM 14-SB” czy instrukcja „OB 750 A” dostawały klasę obuwia z nazwy. Wyrób spoza ŚOI
+        // (mata, detektor gazów) obuwiem nie jest, choćby zapisana kategoria mówiła „obuwie”: „ALTAIR O2” to tlen.
+        $footwear = ! $outsidePpe && (
+            $this->mentionsFootwear($this->normalizeText($katText))
+            || $this->normalizeKategoria($this->nullableString($raw['kategoria_bhp'] ?? null)) === 'obuwie'
+        );
         $identitySources = $this->footwearIdentitySources($name, $sku, (string) ($context['norms_column'] ?? ''), $shopFields);
         $footwearClass = $this->footwearClassByHierarchy($priceListKlasa, $identitySources, $rawKlasa, $footwear);
         $classTexts = [[$priceListKlasa ?? '', self::FOOTWEAR_CLASS_RE], ...$identitySources];
@@ -735,7 +740,8 @@ final class BhpAttributeNormalizer
         ?string $rawKlasa,
         bool $footwear,
     ): array {
-        $fromPayload = $this->extractFootwearClass($rawKlasa ?? '');
+        // Klasa obuwia z payloadu też tylko u obuwia: zapisana „O2” detektora ALTAIR to nasze dawne wyliczenie.
+        $fromPayload = $footwear ? $this->extractFootwearClass($rawKlasa ?? '') : null;
         $levels = [array_values(array_filter([$this->extractFootwearClass($priceListKlasa ?? '')]))];
         foreach ($identitySources as [$text, $pattern]) {
             $levels[] = $footwear ? $this->footwearClassesIn($text, $pattern) : [];
