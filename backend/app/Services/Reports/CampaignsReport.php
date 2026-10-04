@@ -135,7 +135,8 @@ final class CampaignsReport
                 $people[$userId]['campaigns']++;
             }
 
-            $month = self::emptyAcc();
+            // suma kampanii w miesiącu (nie nadpisywać $month — to RRRR-MM z żądania)
+            $monthAcc = self::emptyAcc();
             $window = self::emptyAcc();
             $perItem = [];
             foreach ($lines as $l) {
@@ -154,7 +155,7 @@ final class CampaignsReport
                     $p['first'] = $p['first'] === null ? $l['sold_at'] : min($p['first'], $l['sold_at']);
                 }
                 if ($inMonth($l)) {
-                    self::add($month, $l);
+                    self::add($monthAcc, $l);
                     self::add($p['month'], $l);
                     self::add($totals, $l);
                     self::add($people[$userId]['acc'], $l);
@@ -274,7 +275,7 @@ final class CampaignsReport
                 'window_end' => $c['end'],
                 'window_open' => $c['end'] >= $today,
                 'recipients_sent' => $c['sent'],
-                'month' => self::figures($month),
+                'month' => self::figures($monthAcc),
                 'window' => [
                     ...self::figures($window),
                     'offered_stock_value' => $offered === null ? null : self::money($offered),

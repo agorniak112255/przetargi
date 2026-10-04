@@ -125,6 +125,10 @@ final class CampaignsReportTest extends TestCase
 
         Sanctum::actingAs($this->admin());
         $r = $this->report('2026-09');
+        // nagłówek odpowiedzi: miesiąc jako RRRR-MM (pętla po kampaniach nie może go nadpisać — biały ekran na produkcji)
+        $this->assertSame('2026-09', $r['month']);
+        $this->assertTrue($r['closed']);
+        $this->assertSame('2026-10-07', $r['final_after']);
         $a = $this->campaignRow($r, $first);
         $b = $this->campaignRow($r, $second);
         $this->assertSame([100.0, 200.0], [$this->zl($a['month']['sales_net']), $this->zl($b['month']['sales_net'])]);
