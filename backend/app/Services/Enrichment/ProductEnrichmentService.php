@@ -254,6 +254,11 @@ final class ProductEnrichmentService
         $limit = $this->aiSettings->enrichmentBatchLimit();
         $requested = count($productIds);
         if ($requested > $limit) {
+            // Z force karty „done” nie odpadają, więc każda partia brała te same pierwsze karty listy — najpierw
+            // karty bez opisu i z najstarszym, a świeżo opisane trafiają na koniec i kolejna partia idzie dalej.
+            if ($force) {
+                $productIds = $this->oldestEnrichedFirst($productIds);
+            }
             $productIds = array_slice($productIds, 0, $limit);
         }
 
@@ -294,6 +299,26 @@ final class ProductEnrichmentService
             'product_ids' => $productIds,
             'skipped_b2b' => $skippedB2b,
         ];
+    }
+
+    /**
+     * Karty bez daty opisu na początku, potem od najstarszego enriched_at; przy równej dacie kolejność wejściowa.
+     *
+     * @param  list<int>  $ids
+     * @return list<int>
+     */
+    private function oldestEnrichedFirst(array $ids): array
+    {
+        $enrichedAt = [];
+        foreach (array_chunk($ids, 1000) as $chunk) {
+            foreach (Product::query()->whereIntegerInRaw('id', $chunk)->toBase()->get(['id', 'enriched_at']) as $row) {
+                $enrichedAt[(int) $row->id] = $row->enriched_at !== null ? (string) $row->enriched_at : '';
+            }
+        }
+        $position = array_flip($ids);
+        usort($ids, static fn (int $a, int $b): int => [$enrichedAt[$a] ?? '', $position[$a]] <=> [$enrichedAt[$b] ?? '', $position[$b]]);
+
+        return $ids;
     }
 
     /**
@@ -703,6 +728,8 @@ final class ProductEnrichmentService
             'images_ms' => 0,
             'docs_ms' => 0,
         ];
+        // pliki karty sprzed przebiegu z force (webFileIds) — ustalane po potwierdzeniu karty, potrzebne też w catch
+        $previousWebFiles = null;
         try {
             if (! $force && $product->trustedShopUrl() === null && $this->applyFromSkuCache($product)) {
                 $this->logEnrichmentTiming($timing, $started, extra: ['from_cache' => true]);
@@ -865,12 +892,10 @@ final class ProductEnrichmentService
                 });
             }
 
-            // Nowa karta potwierdzona — dopiero teraz stare zdjęcia i dokumenty ustępują.
-            // Nieudane ponowne pobranie zostawiało produkt z opisem, ale bez zdjęcia.
-            if ($force) {
-                $this->clearProductImages($product);
-                $this->clearProductDocuments($product);
-            }
+            // Stare zdjęcia i dokumenty ustępują dopiero zapisanemu nowemu opisowi (dropPreviousWebFiles). Kasowane tu,
+            // przy samej potwierdzonej karcie, znikały także wtedy, gdy model potem nie dał opisu albo przebieg padł —
+            // karta zostawała ze starym opisem bez zdjęć i PDF-ów (recenzja planu napraw cenników, 04.10.2026).
+            $previousWebFiles = $force ? $this->webFileIds($product) : null;
 
             $this->assertBatchNotCancelled($batchId);
 
@@ -1073,6 +1098,9 @@ final class ProductEnrichmentService
                 }
                 if ($savedImages !== []) {
                     $this->attemptLog()->add('image', 'zdjęcie z karty mimo cienkiego opisu');
+                    // nowe zdjęcie z karty niosącej kod zastępuje stare; dokumenty zostają razem ze starym opisem
+                    $this->dropPreviousWebFiles($product, $previousWebFiles, $savedImages, null);
+                    $previousWebFiles = null;
                     // Zdjęcie nie zastępuje opisu: karta bez opisu dostaje ten sam status, co
                     // przebieg bez zdjęcia (ProductSourcesNotFoundException → „manual”). Status
                     // „done” pokazywał się w panelu jako „OK”, a karta nie wracała do kolejki.
@@ -1367,6 +1395,11 @@ final class ProductEnrichmentService
                 $saved['packaging'] = $packaging;
             }
             $product->update($saved);
+            // Nowy opis zapisany — stare zdjęcia i dokumenty z internetu ustępują; te, które przebieg pobrał ponownie
+            // (ten sam plik — downloader oddaje istniejący wiersz), zostają.
+            $this->dropPreviousWebFiles($product, $previousWebFiles, $savedImages, $savedDocs);
+            // od tej chwili pliki należą do nowego opisu — błąd dalszych kroków nie może ich cofać (catch)
+            $previousWebFiles = null;
             $this->refineCategoryFromDescription($product, $description);
             $this->rememberAccessories($product, $pageSnippets);
 
@@ -1394,6 +1427,11 @@ final class ProductEnrichmentService
                     'enrichment_error' => mb_substr($e->getMessage(), 0, 2000),
                     'enrichment_trace' => $this->attemptLog()->snapshot($product),
                 ];
+                // Opis się nie zapisał (błąd modelu, zatrzymanie partii) — zdjęcia i pliki pobrane w tym przebiegu
+                // znikają, stare zostają przy starym opisie; bez tego karta miała oba komplety naraz.
+                if ($previousWebFiles !== null) {
+                    $this->dropWebFilesAddedSince($product, $previousWebFiles);
+                }
                 if ($force && $e instanceof ProductSourcesNotFoundException) {
                     $old = trim((string) $product->description);
                     if ($old !== '' && ! $this->descriptionMentionsProduct($old, $product)) {
@@ -1506,18 +1544,74 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Zdjęcia i dokumenty z internetu, które karta ma przed przebiegiem z force (bez plików z panelu B2B).
+     *
+     * @return array{images: list<int>, documents: list<int>}
+     */
+    private function webFileIds(Product $product): array
+    {
+        return [
+            'images' => ProductImage::query()->where('product_id', $product->id)->whereNull('b2b_account_id')
+                ->pluck('id')->map(static fn ($id): int => (int) $id)->all(),
+            'documents' => ProductDocument::query()->where('product_id', $product->id)->whereNull('b2b_account_id')
+                ->pluck('id')->map(static fn ($id): int => (int) $id)->all(),
+        ];
+    }
+
+    /**
+     * Usuwa zdjęcia i dokumenty sprzed przebiegu (webFileIds), których przebieg nie pobrał ponownie.
+     * null przy liście nowych plików = tych plików nie ruszamy.
+     *
+     * @param  array{images: list<int>, documents: list<int>}|null  $previous
+     * @param  list<object>|null  $newImages
+     * @param  list<object>|null  $newDocuments
+     */
+    private function dropPreviousWebFiles(Product $product, ?array $previous, ?array $newImages, ?array $newDocuments): void
+    {
+        if ($previous === null) {
+            return;
+        }
+        $idsOf = static fn (array $rows): array => array_map(static fn (object $row): int => (int) ($row->id ?? 0), $rows);
+        if ($newImages !== null) {
+            $this->clearProductImages($product, array_values(array_diff($previous['images'], $idsOf($newImages))));
+        }
+        if ($newDocuments !== null) {
+            $this->clearProductDocuments($product, array_values(array_diff($previous['documents'], $idsOf($newDocuments))));
+        }
+    }
+
+    /**
+     * Zdjęcia i dokumenty z internetu dodane od webFileIds() — przebieg z force, który nie zapisał opisu, nie zostawia
+     * nowych plików obok starych.
+     *
+     * @param  array{images: list<int>, documents: list<int>}  $previous
+     */
+    private function dropWebFilesAddedSince(Product $product, array $previous): void
+    {
+        $now = $this->webFileIds($product);
+        $this->clearProductImages($product, array_values(array_diff($now['images'], $previous['images'])));
+        $this->clearProductDocuments($product, array_values(array_diff($now['documents'], $previous['documents'])));
+    }
+
+    /**
      * Zdjęcia znalezione w internecie ustępują nowemu przebiegowi. Zdjęć z witryny dostawcy to nie
      * dotyczy — dokładnie jak przy plikach: packshot producenta przedstawia ten wariant wyrobu,
      * a ponowne wzbogacanie wstawiłoby na jego miejsce zdjęcie wyłowione przy cudzej karcie.
+     *
+     * @param  list<int>|null  $onlyIds  null = wszystkie zdjęcia z internetu
      */
-    private function clearProductImages(Product $product): void
+    private function clearProductImages(Product $product, ?array $onlyIds = null): void
     {
-        $product->loadMissing('images');
+        if ($onlyIds === []) {
+            return;
+        }
+        $images = ProductImage::query()
+            ->where('product_id', $product->id)
+            ->whereNull('b2b_account_id')
+            ->when($onlyIds !== null, static fn ($q) => $q->whereIn('id', $onlyIds))
+            ->get();
         $removed = false;
-        foreach ($product->images as $image) {
-            if ($image->b2b_account_id !== null) {
-                continue;
-            }
+        foreach ($images as $image) {
             try {
                 Storage::disk('public')->delete($image->path);
             } catch (Throwable) {
@@ -1536,12 +1630,18 @@ final class ProductEnrichmentService
      * Pliki znalezione w internecie ustępują nowej karcie produktu. Plików z panelu B2B to nie dotyczy:
      * przyszły od dostawcy razem z ceną, są dowodem pochodzenia danych karty i nie da się ich odtworzyć
      * z sieci — kolejne pobranie cennika pobrałoby je jeszcze raz niepotrzebnie.
+     *
+     * @param  list<int>|null  $onlyIds  null = wszystkie dokumenty z internetu
      */
-    private function clearProductDocuments(Product $product): void
+    private function clearProductDocuments(Product $product, ?array $onlyIds = null): void
     {
+        if ($onlyIds === []) {
+            return;
+        }
         $documents = ProductDocument::query()
             ->where('product_id', $product->id)
             ->whereNull('b2b_account_id')
+            ->when($onlyIds !== null, static fn ($q) => $q->whereIn('id', $onlyIds))
             ->get();
         foreach ($documents as $doc) {
             try {

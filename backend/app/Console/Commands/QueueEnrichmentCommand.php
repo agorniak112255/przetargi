@@ -6,12 +6,15 @@ namespace App\Console\Commands;
 
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDatasheetOnlyDescription;
 use App\Services\Enrichment\ProductEnrichmentService;
+use App\Services\PriceListCards;
+use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use RuntimeException;
 use Throwable;
@@ -26,6 +29,11 @@ use Throwable;
  * istniejących kart nie cofnęła, a „done” nie wraca do kolejki. Te karty idą ponownie z force (bez pamięci SKU).
  * Pomija karty powiązane z kontem łącznika B2bDatasheetOnlyDescription (ARTRA): ich opis pisze model wyłącznie
  * z karty katalogowej PDF (DescribeB2bProductFromDatasheetJob), a zwykłe wzbogacanie wzięłoby go z internetu.
+ *
+ * --enriched-before=DATA (04.10.2026, opisy Ansella i Coby sprzed poprawek jakości z 16.09): ponowne pobranie z force
+ * kart opisanych przed datą albo bez daty, w każdym statusie poza kolejką; najstarsze pierwsze, więc --limit daje próbkę
+ * z najgorszych. Force omija pamięć SKU — bez niego karta „failed” dostałaby z pamięci ten sam stary opis.
+ * --price-list= bierze karty cennika jak „Pobierz opisy” w Cennikach (PriceListCards).
  */
 final class QueueEnrichmentCommand extends Command
 {
@@ -34,32 +42,67 @@ final class QueueEnrichmentCommand extends Command
         {--category= : Tylko ta kategoria z cennika, np. „Środki ochrony indywidualnej”}
         {--limit=0 : Najwyżej tyle kart (0 = wszystkie)}
         {--done-without-description : Tylko karty „done” z pustym opisem — ponowne pobranie (filtr producenta/kategorii opcjonalny)}
+        {--price-list= : Tylko karty tego cennika (numer; ostatnie wgranie i karty z ceną z tego pliku)}
+        {--enriched-before= : Ponowne pobranie (force) kart opisanych przed tą datą albo bez daty, każdy status poza kolejką — od najstarszych}
+        {--id=* : Tylko te karty}
         {--user= : E-mail użytkownika, na którego idą partie (domyślnie pierwszy administrator)}
         {--apply : Zleć pobieranie (bez tej flagi tylko podgląd)}';
 
     protected $description = 'Zleca pobranie opisów kartom wybranego producenta i kategorii, które jeszcze nie mają opisu (podgląd bez --apply)';
 
-    public function handle(ProductEnrichmentService $enrichment, AiSettingsService $settings, B2bConnectorRegistry $registry): int
+    public function handle(ProductEnrichmentService $enrichment, AiSettingsService $settings, B2bConnectorRegistry $registry, PriceListCards $cards): int
     {
         $manufacturer = trim((string) $this->option('manufacturer'));
         $category = trim((string) $this->option('category'));
         $doneWithoutDescription = (bool) $this->option('done-without-description');
-        if ($manufacturer === '' && $category === '' && ! $doneWithoutDescription) {
-            $this->error('Podaj --manufacturer= albo --category= (albo --done-without-description) — bez filtra polecenie objęłoby cały katalog.');
+        $onlyIds = array_values(array_filter(array_map('intval', (array) $this->option('id')), static fn (int $id): bool => $id > 0));
+        $priceListOption = trim((string) $this->option('price-list'));
+        $listIds = null;
+        if ($priceListOption !== '') {
+            $priceList = PriceList::query()->find((int) $priceListOption);
+            if (! $priceList instanceof PriceList) {
+                $this->error("Nie ma cennika #{$priceListOption}.");
+
+                return self::FAILURE;
+            }
+            $listIds = $cards->ids($priceList);
+        }
+        // Stare opisy (sprzed poprawek jakości) — ponowne pobranie z force, także kart „done” i „manual”; najstarsze
+        // pierwsze, żeby --limit wziął próbkę z najgorszych. Karty w kolejce i w toku pomijamy.
+        $enrichedBefore = null;
+        $enrichedBeforeOption = trim((string) $this->option('enriched-before'));
+        if ($enrichedBeforeOption !== '') {
+            try {
+                $enrichedBefore = CarbonImmutable::parse($enrichedBeforeOption);
+            } catch (Throwable) {
+                $this->error("Nie rozumiem daty --enriched-before={$enrichedBeforeOption} (np. 2026-09-16).");
+
+                return self::FAILURE;
+            }
+        }
+        $refresh = $enrichedBefore !== null;
+        if ($manufacturer === '' && $category === '' && ! $doneWithoutDescription && $listIds === null && $onlyIds === []) {
+            $this->error('Podaj --manufacturer= albo --category= (albo --price-list=, --id=, --done-without-description) — bez filtra polecenie objęłoby cały katalog.');
 
             return self::FAILURE;
         }
         $limit = max(0, (int) $this->option('limit'));
-        $datasheetOnlyAccounts = $doneWithoutDescription ? $this->datasheetOnlyAccountIds($registry) : [];
+        $datasheetOnlyAccounts = $doneWithoutDescription || $refresh ? $this->datasheetOnlyAccountIds($registry) : [];
         $ids = Product::query()
             ->when(
-                $doneWithoutDescription,
-                static fn ($q) => $q->where('enrichment_status', Product::ENRICHMENT_DONE)
-                    // TRIM w MySQL i SQLite zdejmuje same spacje — znaki nowej linii i tabulatory usuwamy osobno
-                    ->where(static fn ($w) => $w->whereNull('description')->orWhereRaw(
-                        "TRIM(REPLACE(REPLACE(REPLACE(description, CHAR(10), ''), CHAR(13), ''), CHAR(9), '')) = ''"
-                    )),
-                static fn ($q) => $q->whereNotIn('enrichment_status', [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL]),
+                $refresh,
+                static fn ($q) => $q
+                    ->whereNotIn('enrichment_status', [Product::ENRICHMENT_QUEUED, Product::ENRICHMENT_RUNNING])
+                    ->where(static fn ($w) => $w->whereNull('enriched_at')->orWhere('enriched_at', '<', $enrichedBefore)),
+                fn ($q) => $q->when(
+                    $doneWithoutDescription,
+                    static fn ($q) => $q->where('enrichment_status', Product::ENRICHMENT_DONE)
+                        // TRIM w MySQL i SQLite zdejmuje same spacje — znaki nowej linii i tabulatory usuwamy osobno
+                        ->where(static fn ($w) => $w->whereNull('description')->orWhereRaw(
+                            "TRIM(REPLACE(REPLACE(REPLACE(description, CHAR(10), ''), CHAR(13), ''), CHAR(9), '')) = ''"
+                        )),
+                    static fn ($q) => $q->whereNotIn('enrichment_status', [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL]),
+                ),
             )
             ->when($datasheetOnlyAccounts !== [], static fn ($q) => $q->whereNotIn(
                 'id',
@@ -67,6 +110,10 @@ final class QueueEnrichmentCommand extends Command
             ))
             ->when($manufacturer !== '', static fn ($q) => $q->where('manufacturer', $manufacturer))
             ->when($category !== '', static fn ($q) => $q->where('category', $category))
+            ->when($listIds !== null, static fn ($q) => $q->whereIntegerInRaw('id', $listIds === [] ? [0] : $listIds))
+            ->when($onlyIds !== [], static fn ($q) => $q->whereIntegerInRaw('id', $onlyIds))
+            // NULL przed datami w MySQL i SQLite przy rosnącym porządku
+            ->when($refresh, static fn ($q) => $q->orderBy('enriched_at'))
             ->orderBy('id')
             ->when($limit > 0, static fn ($q) => $q->limit($limit))
             ->pluck('id')
@@ -95,7 +142,11 @@ final class QueueEnrichmentCommand extends Command
         $this->info(sprintf(
             'Do pobrania opisu: %d kart%s — %d partii po %d (limit z Ustawień AI).',
             count($ids),
-            $doneWithoutDescription ? ' „done” bez opisu, ponowne pobranie' : '',
+            match (true) {
+                $refresh => ' opisanych przed '.$enrichedBefore->format('Y-m-d').' albo bez daty, ponowne pobranie (force)',
+                $doneWithoutDescription => ' „done” bez opisu, ponowne pobranie',
+                default => '',
+            },
             $batches,
             $batchSize
         ));
@@ -113,8 +164,9 @@ final class QueueEnrichmentCommand extends Command
         $batchIds = [];
         foreach (array_chunk($ids, $batchSize) as $chunk) {
             try {
-                // „done” pomija enqueueProductIds bez force — przy kartach bez opisu to właśnie cel
-                $result = $enrichment->enqueueProductIds($chunk, $user, force: $doneWithoutDescription);
+                // „done” pomija enqueueProductIds bez force — przy kartach bez opisu i starych opisach to właśnie cel;
+                // force omija też pamięć SKU, która oddałaby stary opis bez nowego pobrania
+                $result = $enrichment->enqueueProductIds($chunk, $user, force: $doneWithoutDescription || $refresh);
             } catch (RuntimeException $e) {
                 $this->warn($e->getMessage());
 

@@ -8,9 +8,11 @@ use App\Jobs\PrefetchProductSourcesJob;
 use App\Models\AiSetting;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\User;
+use App\Services\Enrichment\ProductEnrichmentService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -140,11 +142,91 @@ final class QueueEnrichmentCommandTest extends TestCase
         );
     }
 
+    /**
+     * 04.10.2026: opisy Ansella sprzed poprawek jakości (16.09) — ponowne pobranie z force kart danego cennika, także
+     * „done” i „manual”, najstarsze pierwsze (próbka --limit z najgorszych); świeże opisy i karty w kolejce zostają.
+     */
+    public function test_enriched_before_requeues_old_descriptions_of_price_list_with_force_oldest_first(): void
+    {
+        $old = $this->ansellCard('A-OLD', Product::ENRICHMENT_DONE, '2026-09-11 20:00:00');
+        $older = $this->ansellCard('A-OLDER', Product::ENRICHMENT_MANUAL, '2026-09-10 08:00:00');
+        $never = $this->ansellCard('A-NEVER', Product::ENRICHMENT_FAILED, null);
+        $fresh = $this->ansellCard('A-FRESH', Product::ENRICHMENT_DONE, '2026-10-01 10:00:00');
+        $queued = $this->ansellCard('A-QUEUED', Product::ENRICHMENT_QUEUED, '2026-09-01 10:00:00');
+        $otherList = $this->ansellCard('A-OTHER', Product::ENRICHMENT_DONE, '2026-09-01 10:00:00');
+        PriceList::query()->create([
+            'manufacturer' => 'Ansell',
+            'version' => 'v1',
+            'original_filename' => 'ansell.xlsx',
+            'product_ids' => [$old->id, $older->id, $never->id, $fresh->id, $queued->id],
+        ]);
+        $listId = (int) PriceList::query()->value('id');
+
+        $this->artisan('products:queue-enrichment', ['--price-list' => $listId, '--enriched-before' => '2026-09-16'])
+            ->expectsOutputToContain('Do pobrania opisu: 3 kart opisanych przed 2026-09-16 albo bez daty, ponowne pobranie (force)')
+            ->assertSuccessful();
+        $this->assertSame(0, ProductEnrichmentBatch::query()->count());
+
+        $this->artisan('products:queue-enrichment', ['--price-list' => $listId, '--enriched-before' => '2026-09-16', '--limit' => 2, '--apply' => true])
+            ->expectsOutputToContain('Zlecono pobranie opisu: 2 kart w 1 partiach')
+            ->assertSuccessful();
+
+        $batch = ProductEnrichmentBatch::query()->sole();
+        $this->assertTrue((bool) $batch->force);
+        Queue::assertPushed(PrefetchProductSourcesJob::class, 2);
+        foreach ([$never, $older] as $card) {
+            Queue::assertPushed(PrefetchProductSourcesJob::class, static fn (PrefetchProductSourcesJob $job): bool => $job->productId === $card->id && $job->force);
+        }
+        $this->assertSame(Product::ENRICHMENT_DONE, $fresh->fresh()?->enrichment_status);
+        $this->assertSame(Product::ENRICHMENT_DONE, $otherList->fresh()?->enrichment_status);
+    }
+
+    public function test_enriched_before_rejects_unreadable_date(): void
+    {
+        $this->artisan('products:queue-enrichment', ['--manufacturer' => '3M', '--enriched-before' => 'wczoraj-ish'])
+            ->expectsOutputToContain('Nie rozumiem daty')
+            ->assertFailed();
+    }
+
+    /**
+     * „Pobierz opisy” z force przy limicie partii brało za każdym razem te same pierwsze karty listy — najpierw karty
+     * bez opisu i z najstarszym, świeżo opisane na koniec.
+     */
+    public function test_forced_batch_over_limit_takes_oldest_descriptions_first(): void
+    {
+        $fresh = $this->ansellCard('B-FRESH', Product::ENRICHMENT_DONE, '2026-10-04 09:00:00');
+        $old = $this->ansellCard('B-OLD', Product::ENRICHMENT_DONE, '2026-09-11 09:00:00');
+        $never = $this->ansellCard('B-NEVER', Product::ENRICHMENT_DONE, null);
+
+        $result = app(ProductEnrichmentService::class)->enqueueProductIds(
+            [$fresh->id, $old->id, $never->id],
+            User::query()->firstOrFail(),
+            force: true,
+            dispatchJobs: false,
+        );
+
+        $this->assertSame([$never->id, $old->id], $result['product_ids']);
+    }
+
     public function test_requires_a_filter(): void
     {
         $this->artisan('products:queue-enrichment')
             ->expectsOutputToContain('Podaj --manufacturer= albo --category=')
             ->assertFailed();
+    }
+
+    private function ansellCard(string $sku, string $status, ?string $enrichedAt): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => 'HyFlex '.$sku,
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+            'enrichment_status' => $status,
+            'enriched_at' => $enrichedAt,
+        ]);
     }
 
     private function card(string $sku, string $name, string $category, string $status): void

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Exceptions\EnrichmentCancelledException;
 use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\PrefetchProductSourcesJob;
@@ -3232,6 +3233,209 @@ final class ProductEnrichmentApiTest extends TestCase
             ['https://www.coba.com/datasheets/mata-przewodzaca-stolowa-pl_PL.pdf'],
             ProductDocument::query()->where('product_id', $product->id)->pluck('source_url')->all(),
         );
+    }
+
+    /**
+     * 04.10.2026 (recenzja planu napraw cenników): z force stare zdjęcia i pliki z internetu znikały zaraz po
+     * potwierdzeniu karty, zanim model napisał opis. Ustępują dopiero zapisanemu opisowi.
+     */
+    public function test_force_replaces_old_web_files_after_new_description_is_saved(): void
+    {
+        [$product, $service] = $this->forcedMatRunWithOldFiles($this->mockLlmWithSanitize([
+            'description' => 'Dwuwarstwowa mata przewodząca stołowa COBA do stref ESD, górna warstwa rozpraszająca 0,5 mm, '
+                .'zatrzask uziemiający 10 mm, zgodna z IEC 61340-5-1. Wymiary 0,6 m x 1,2 m, grubość 2 mm, kolor zielony.',
+            'features' => ['warstwa rozpraszająca'],
+            'specs' => ['Wymiary: 0,6 m x 1,2 m'],
+            'norms' => ['IEC 61340-5-1'],
+            'certificates' => [],
+            'materials' => ['guma'],
+            'use_cases' => ['stanowiska ESD'],
+            'image_urls' => [],
+            'document_urls' => [],
+            'source_urls' => ['https://www.coba.com/pl/produkt/mata-przewodzaca-stolowa'],
+            'confidence' => 0.9,
+        ]));
+
+        $service->enrichProduct($product, true);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertSame(
+            ['https://www.coba.com/datasheets/mata-przewodzaca-stolowa-pl_PL.pdf'],
+            ProductDocument::query()->where('product_id', $product->id)->pluck('source_url')->all(),
+        );
+        $this->assertSame(
+            ['https://www.coba.com/images/CDR0400-mata.png'],
+            ProductImage::query()->where('product_id', $product->id)->pluck('source_url')->all(),
+        );
+        Storage::disk('public')->assertMissing('products/stara-mata.jpg');
+        Storage::disk('public')->assertMissing('products/docs/stary-arkusz.pdf');
+    }
+
+    public function test_force_keeps_old_web_files_when_model_fails_after_card_is_confirmed(): void
+    {
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->andReturnUsing(static function (array $messages): array {
+            if (str_contains((string) ($messages[0]['content'] ?? ''), 'filtrem treści')) {
+                preg_match_all('#"url"\s*:\s*"(https?://[^"]+)"#', (string) ($messages[1]['content'] ?? ''), $m);
+
+                return ['pages' => array_map(static fn (string $url): array => [
+                    'url' => $url,
+                    'text' => 'Mata przewodząca stołowa COBA, zielona, 0,6 m x 1,2 m, 2 mm, CDR040004, IEC 61340-5-1.',
+                ], $m[1])];
+            }
+
+            throw new RuntimeException('Model nie odpowiedział (timeout)');
+        });
+        $llm->shouldReceive('chatJson')->zeroOrMoreTimes()->andThrow(new RuntimeException('Model nie odpowiedział (timeout)'));
+        $llm->shouldReceive('chatJsonWithImages')->zeroOrMoreTimes()->andReturn(['candidates' => []]);
+        [$product, $service] = $this->forcedMatRunWithOldFiles($llm);
+
+        try {
+            $service->enrichProduct($product, true);
+            $this->fail('Oczekiwano błędu modelu.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Model nie odpowiedział', $e->getMessage());
+        }
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_FAILED, $product->enrichment_status);
+        $this->assertStringContainsString('Stary opis maty', (string) $product->description);
+        $this->assertSame(['https://www.coba.com/stara-mata.jpg'], ProductImage::query()->where('product_id', $product->id)->pluck('source_url')->all());
+        $this->assertSame(['https://www.coba.com/stary-arkusz.pdf'], ProductDocument::query()->where('product_id', $product->id)->pluck('source_url')->all());
+        Storage::disk('public')->assertExists('products/stara-mata.jpg');
+        Storage::disk('public')->assertExists('products/docs/stary-arkusz.pdf');
+    }
+
+    /**
+     * Partia zatrzymana po pobraniu nowego zdjęcia, przed zapisem opisu: karta zostaje przy starym opisie i jego plikach,
+     * bez nowego zdjęcia obok starego.
+     */
+    public function test_force_cancelled_after_new_image_keeps_only_old_files(): void
+    {
+        $user = User::factory()->create();
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => $user->id,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'created_by' => $user->id,
+            'force' => true,
+        ]);
+        [$product, $service] = $this->forcedMatRunWithOldFiles(
+            $this->mockLlmWithSanitize([
+                'description' => 'Dwuwarstwowa mata przewodząca stołowa COBA do stref ESD, górna warstwa rozpraszająca 0,5 mm, '
+                    .'zatrzask uziemiający 10 mm, zgodna z IEC 61340-5-1. Wymiary 0,6 m x 1,2 m, grubość 2 mm, kolor zielony.',
+                'features' => ['warstwa rozpraszająca'],
+                'specs' => ['Wymiary: 0,6 m x 1,2 m'],
+                'norms' => ['IEC 61340-5-1'],
+                'certificates' => [],
+                'materials' => ['guma'],
+                'use_cases' => ['stanowiska ESD'],
+                'image_urls' => [],
+                'document_urls' => [],
+                'source_urls' => ['https://www.coba.com/pl/produkt/mata-przewodzaca-stolowa'],
+                'confidence' => 0.9,
+            ]),
+            static fn () => $batch->forceFill(['status' => ProductEnrichmentBatch::STATUS_CANCELLED])->save(),
+        );
+
+        try {
+            $service->enrichProduct($product, true, $batch->id);
+            $this->fail('Oczekiwano zatrzymania partii.');
+        } catch (EnrichmentCancelledException) {
+        }
+
+        $product->refresh();
+        $this->assertStringContainsString('Stary opis maty', (string) $product->description);
+        $this->assertSame(['https://www.coba.com/stara-mata.jpg'], ProductImage::query()->where('product_id', $product->id)->pluck('source_url')->all());
+        $this->assertSame(['https://www.coba.com/stary-arkusz.pdf'], ProductDocument::query()->where('product_id', $product->id)->pluck('source_url')->all());
+        Storage::disk('public')->assertExists('products/stara-mata.jpg');
+        $this->assertSame(['products/docs/stary-arkusz.pdf', 'products/stara-mata.jpg'], Storage::disk('public')->allFiles());
+    }
+
+    /**
+     * Karta maty CDR0400 z poprzedniego pobrania (opis, zdjęcie i arkusz z internetu) i przebieg z force na jej
+     * stronie producenta (jak test_documents_come_only_from_description_pages_or_carry_product_code).
+     *
+     * @return array{0: Product, 1: ProductEnrichmentService}
+     */
+    private function forcedMatRunWithOldFiles(OpenAiCompatibleClient $llm, ?callable $onNewImage = null): array
+    {
+        Storage::fake('public');
+        Storage::disk('public')->put('products/stara-mata.jpg', 'stare zdjęcie');
+        Storage::disk('public')->put('products/docs/stary-arkusz.pdf', 'stary arkusz');
+        $own = 'https://www.coba.com/pl/produkt/mata-przewodzaca-stolowa';
+        $product = $this->makeProduct([
+            'sku' => 'CDR0400',
+            'name' => 'Mata przewodząca stołowa Zielony 0.6m x 1.2m (2mm)',
+            'manufacturer' => 'Coba',
+            'description' => 'Stary opis maty przewodzącej stołowej COBA CDR0400.',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $product->images()->create([
+            'path' => 'products/stara-mata.jpg',
+            'source_url' => 'https://www.coba.com/stara-mata.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+            'checksum' => hash('sha256', 'stare zdjęcie'),
+        ]);
+        ProductDocument::query()->create([
+            'product_id' => $product->id,
+            'path' => 'products/docs/stary-arkusz.pdf',
+            'source_url' => 'https://www.coba.com/stary-arkusz.pdf',
+            'title' => 'Arkusz danych',
+            'kind' => 'datasheet',
+            'sort_order' => 0,
+            'checksum' => hash('sha256', 'stary arkusz'),
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')->once()->andReturn([
+            'results' => [['url' => $own, 'title' => 'Mata przewodząca stołowa - COBA PL', 'snippet' => 'CDR040004 Mata przewodząca stołowa COBA']],
+            'errors' => [],
+        ]);
+        $pdf = "%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n";
+        Http::fake([
+            'https://api.tavily.com/*' => Http::response(['results' => []], 200),
+            'https://www.coba.com/datasheets/*' => Http::response($pdf, 200, ['Content-Type' => 'application/pdf']),
+            $own => Http::response('<html><head><title>Mata przewodząca stołowa - COBA PL</title></head><body>'
+                .'<h1>Mata przewodząca stołowa</h1><p>'
+                .str_repeat('Mata przewodząca stołowa COBA, zielona, 0,6 m x 1,2 m, 2 mm, CDR040004, IEC 61340-5-1. ', 20)
+                .'</p><img src="https://www.coba.com/images/CDR0400-mata.png" alt="Mata przewodząca stołowa CDR0400">'
+                .'<a href="https://www.coba.com/datasheets/mata-przewodzaca-stolowa-pl_PL.pdf">Arkusz danych</a>'
+                .'</body></html>', 200, ['Content-Type' => 'text/html']),
+            'https://www.coba.com/images/*' => static function () use ($onNewImage) {
+                if ($onNewImage !== null) {
+                    $onNewImage();
+                }
+                $image = imagecreatetruecolor(600, 600);
+                imagefill($image, 0, 0, 0x2E7D32);
+                ob_start();
+                imagepng($image);
+
+                return Http::response((string) ob_get_clean(), 200, ['Content-Type' => 'image/png']);
+            },
+            '*' => Http::response('', 404),
+        ]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            new ProductImageCandidateVerifier(app(ProductSearchIdentity::class), $llm),
+            app(PpeAssortment::class),
+        );
+
+        return [$product, $service];
     }
 
     /**
