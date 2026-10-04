@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaSh
 use App\Http\Controllers\Api\Admin\RoleController as AdminRoleController;
 use App\Http\Controllers\Api\Admin\SessionController as AdminSessionController;
 use App\Http\Controllers\Api\Admin\SystemStatusController as AdminSystemStatusController;
+use App\Http\Controllers\Api\Admin\TeamController as AdminTeamController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AuthController;
@@ -29,6 +30,7 @@ use App\Http\Controllers\Api\CalendarIcsController;
 use App\Http\Controllers\Api\CampaignAssetController;
 use App\Http\Controllers\Api\CampaignClickController;
 use App\Http\Controllers\Api\CampaignController;
+use App\Http\Controllers\Api\CampaignReportController;
 use App\Http\Controllers\Api\CampaignTemplateController;
 use App\Http\Controllers\Api\CardMatchController;
 use App\Http\Controllers\Api\Chat\ChatCallController;
@@ -192,6 +194,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::get('/dashboard', DashboardController::class)->middleware('permission:dashboard.view');
+    // wynik kampanii: bez reports.view — dostęp i zakres (własne / zespół / wszyscy) sprawdza CampaignReportScope
+    Route::get('/reports/campaigns', [CampaignReportController::class, 'index']);
+    Route::get('/reports/campaigns/csv', [CampaignReportController::class, 'csv']);
     Route::get('/reports/summary', [ReportController::class, 'summary'])->middleware('permission:reports.view');
     Route::get('/reports/csv', [ReportController::class, 'csv'])->middleware('permission:reports.view');
     Route::get('/reports/catalog', [ReportController::class, 'catalog'])->middleware('permission:reports.view');
@@ -600,6 +605,11 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::put('/roles/{role}', [AdminRoleController::class, 'update'])->middleware('permission:admin.roles.manage');
         Route::patch('/roles/{role}', [AdminRoleController::class, 'rename'])->middleware('permission:admin.roles.manage');
         Route::delete('/roles/{role}', [AdminRoleController::class, 'destroy'])->middleware('permission:admin.roles.manage');
+        // zespoły (kto komu podlega) — raport „Wynik kampanii”
+        Route::get('/teams', [AdminTeamController::class, 'index'])->middleware('permission:admin.roles.manage');
+        Route::post('/teams', [AdminTeamController::class, 'store'])->middleware('permission:admin.roles.manage');
+        Route::put('/teams/{team}', [AdminTeamController::class, 'update'])->middleware('permission:admin.roles.manage');
+        Route::delete('/teams/{team}', [AdminTeamController::class, 'destroy'])->middleware('permission:admin.roles.manage');
 
         Route::get('/activity-logs', [AdminActivityLogController::class, 'index'])
             ->middleware('permission:admin.activity.view');

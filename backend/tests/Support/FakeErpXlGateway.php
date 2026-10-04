@@ -53,7 +53,7 @@ final class FakeErpXlGateway implements ErpXlGateway
 
     public ?int $customerSalesFrom = null;
 
-    /** @var list<array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}> */
+    /** @var list<array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float, cost: float, corrects_type: int|null, corrects_id: int|null}> */
     public array $saleLineRows = [];
 
     /** @var list<array{items: list<int>, from: int}> wywołania itemSaleLines */
@@ -359,12 +359,34 @@ final class FakeErpXlGateway implements ErpXlGateway
         return ['customer_gid' => $customerGid, 'net' => $net, 'documents' => $documents, 'last_date' => $lastDate];
     }
 
-    /** @return array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float} */
-    public static function saleLine(int $documentId, int $date, int $customerGid, int $itemGid, float $quantity, float $netValue, int $line = 1, int $type = 2033): array
+    /**
+     * Pozycja FS/PA jak z itemSaleLines; $cost = TrE_KosztKsiegowy (0 = XL nie podał kosztu).
+     *
+     * @return array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float, cost: float, corrects_type: int|null, corrects_id: int|null}
+     */
+    public static function saleLine(int $documentId, int $date, int $customerGid, int $itemGid, float $quantity, float $netValue, int $line = 1, int $type = 2033, float $cost = 0.0): array
+    {
+        $prefix = [2033 => 'FS', 2034 => 'PA', 2041 => 'FSK', 2042 => 'PAK'][$type] ?? 'dok. '.$type;
+
+        return [
+            'document_type' => $type, 'document_id' => $documentId, 'line' => $line, 'document_number' => $prefix.'-01H/'.$documentId.'/26/09',
+            'date' => $date, 'customer_gid' => $customerGid, 'item_gid' => $itemGid, 'quantity' => $quantity, 'net_value' => $netValue,
+            'cost' => $cost, 'corrects_type' => null, 'corrects_id' => null,
+        ];
+    }
+
+    /**
+     * Pozycja korekty (FSK 2041 / PAK 2042) jak z itemSaleLines: ilość, wartość i koszt ze znakiem, dokument korygowany
+     * z nagłówka korekty ($correctsType / $correctsId).
+     *
+     * @return array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float, cost: float, corrects_type: int|null, corrects_id: int|null}
+     */
+    public static function correctionLine(int $documentId, int $date, int $customerGid, int $itemGid, float $quantity, float $netValue, int $correctsId, float $cost = 0.0, int $line = 1, int $type = 2041, ?int $correctsType = null): array
     {
         return [
-            'document_type' => $type, 'document_id' => $documentId, 'line' => $line, 'document_number' => 'FS-01H/'.$documentId.'/26/09',
-            'date' => $date, 'customer_gid' => $customerGid, 'item_gid' => $itemGid, 'quantity' => $quantity, 'net_value' => $netValue,
+            ...self::saleLine($documentId, $date, $customerGid, $itemGid, $quantity, $netValue, $line, $type, $cost),
+            'corrects_type' => $correctsType ?? ($type === 2042 ? 2034 : 2033),
+            'corrects_id' => $correctsId,
         ];
     }
 

@@ -119,11 +119,14 @@ interface ErpXlGateway
     public function customerOperators(int $fromClarionDate): iterable;
 
     /**
-     * Pozycje FS i PA (zatwierdzone, do kontrahenta) z towarami z listy od daty — wynik kampanii „kupili odbiorcy”.
-     * net_value = TrE_KsiegowaNetto (PLN netto; na paragonie bez VAT). Strumień.
+     * Pozycje FS i PA (zatwierdzone, do kontrahenta, ilość > 0) i ich korekt FSK 2041 / PAK 2042 (te same stany, ilość
+     * albo wartość ≠ 0 — ze znakiem, ilość 0 = korekta ceny) z towarami z listy od daty — wynik kampanii „kupili
+     * odbiorcy”. net_value = TrE_KsiegowaNetto (PLN netto; na paragonie bez VAT), cost = TrE_KosztKsiegowy (PLN, ze
+     * znakiem; 0 = XL nie podał kosztu, np. FS do WZ). corrects_type / corrects_id — dokument korygowany z nagłówka
+     * korekty (TrN_ZwrTyp / TrN_ZwrNumer); null dla FS/PA i gdy XL go nie podał. Strumień.
      *
      * @param  list<int>  $itemGids
-     * @return iterable<array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}>
+     * @return iterable<array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float, cost: float, corrects_type: int|null, corrects_id: int|null}>
      */
     public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable;
 

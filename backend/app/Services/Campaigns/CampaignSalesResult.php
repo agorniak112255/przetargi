@@ -6,23 +6,26 @@ namespace App\Services\Campaigns;
 
 use App\Models\Campaign;
 use App\Models\CampaignItem;
-use App\Models\CampaignRecipient;
-use App\Models\ErpCustomer;
 use App\Models\ErpSaleLine;
 use App\Services\Erp\ErpCampaignSalesSync;
+use App\Support\PolishTime;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Cache;
 
 /**
  * „Kupili odbiorcy kampanii”: faktury i paragony z XL z towarami kampanii od dnia wysyłki przez
- * ErpCampaignSalesSync::WINDOW_DAYS dni — osobno odbiorcy (klient XL, któremu mail wyszedł; adres z grupy dopasowany
- * do kontrahenta po e-mailu) i pozostali klienci dla porównania. Zakup po mailu nie dowodzi, że kupił dzięki kampanii.
- * Ilości tylko per towar (różne jednostki się nie sumują); wartość netto PLN można sumować.
+ * ErpCampaignSalesSync::WINDOW_DAYS dni (CampaignWindow, dni w czasie polskim) — osobno odbiorcy (klient XL, któremu
+ * mail wyszedł: zamrożony przy wysyłce w campaign_recipient_customers, a w kampaniach sprzed tego — klient XL odbiorcy
+ * albo karta z jego adresem) i pozostali klienci dla porównania. Zakup po mailu nie dowodzi, że kupił dzięki kampanii.
+ * Korekty (FSK/PAK) odejmują ilość i wartość w tej grupie, do której należy korygowana pozycja z okna; korekta pozycji
+ * spoza okna się nie liczy. Ilości tylko per towar (różne jednostki się nie sumują); wartość netto PLN można sumować.
  */
 final class CampaignSalesResult
 {
     /** Najwięcej wierszy „kto kupił” w odpowiedzi. */
     private const MAX_BUYERS = 200;
+
+    public function __construct(private readonly CampaignAttribution $attribution) {}
 
     /** @return array<string, mixed>|null null = kampania jeszcze nie wysyłana */
     public function forCampaign(Campaign $campaign): ?array
@@ -31,18 +34,20 @@ final class CampaignSalesResult
         if ($from === null) {
             return null;
         }
-        $emailCustomers = $this->emailToCustomers();
-        $recipients = $this->recipientCustomers([(int) $campaign->id], $emailCustomers)[(int) $campaign->id] ?? ['customers' => [], 'since' => [], 'emails' => [], 'sent' => 0];
+        $recipients = $this->recipientCustomers([(int) $campaign->id => $from->toDateString()])[(int) $campaign->id];
         $items = CampaignItem::query()->where('campaign_id', $campaign->id)->whereNotNull('erp_item_id')
             ->with('erpItem:id,code,name,unit')->orderBy('position')->get();
         $itemIds = $items->pluck('erp_item_id')->map(static fn ($id): int => (int) $id)->unique()->values()->all();
 
         $lines = $itemIds === [] ? collect() : ErpSaleLine::query()
             ->whereIn('erp_item_id', $itemIds)
-            ->whereBetween('sold_at', [$from->toDateString(), $to->toDateString()])
+            // przedział [od, do + 1 dzień) — także dla daty zapisanej z godziną 00:00:00
+            ->where('sold_at', '>=', $from->toDateString())
+            ->where('sold_at', '<', $to->addDay()->toDateString())
             ->with('customer:id,acronym,name')
             ->orderBy('sold_at')->orderBy('id')
             ->get();
+        $byDocument = self::byDocument($lines->all());
 
         $perItem = [];
         foreach ($items as $item) {
@@ -60,20 +65,43 @@ final class CampaignSalesResult
         $buyers = [];
         $recipientBuyers = $otherBuyers = [];
         $valueRecipients = $valueOthers = 0.0;
-        foreach ($lines as $line) {
-            $customerId = $line->erp_customer_id !== null ? (int) $line->erp_customer_id : null;
-            // odbiorca dopisany później: jego zakupy sprzed maila liczą się jak pozostałych klientów
-            $isRecipient = $customerId !== null && isset($recipients['customers'][$customerId])
-                && $line->sold_at !== null && $line->sold_at->toDateString() >= $recipients['since'][$customerId];
-            $key = $isRecipient ? 'recipients' : 'others';
-            $row = &$perItem[(int) $line->erp_item_id];
-            $row['quantity_'.$key] += (float) $line->quantity;
-            $row['value_'.$key] += (float) $line->net_value;
-            unset($row);
-            if ($isRecipient) {
-                $valueRecipients += (float) $line->net_value;
-                $recipientBuyers[$customerId] = true;
-                if (count($buyers) < self::MAX_BUYERS) {
+        // grupa pozycji sprzedaży (id → odbiorca?) — korekta trafia tam, gdzie pozycja, którą koryguje
+        $groupOf = [];
+        // najpierw faktury i paragony, potem korekty (korekta może mieć niższe id niż korygowana pozycja)
+        foreach ([false, true] as $corrections) {
+            foreach ($lines as $line) {
+                $type = (int) $line->document_type;
+                if ($corrections !== CampaignAttribution::isCorrection($type)) {
+                    continue;
+                }
+                if ($corrections) {
+                    $root = self::correctedSale($line, $byDocument);
+                    if ($root === null || ! isset($groupOf[$root->id])) {
+                        continue;
+                    }
+                    $isRecipient = $groupOf[$root->id];
+                    $customerId = $root->erp_customer_id !== null ? (int) $root->erp_customer_id : null;
+                } else {
+                    if (! CampaignAttribution::isSale($type, (float) $line->quantity)) {
+                        continue;
+                    }
+                    $customerId = $line->erp_customer_id !== null ? (int) $line->erp_customer_id : null;
+                    // odbiorca dopisany później: jego zakupy sprzed maila liczą się jak pozostałych klientów
+                    $isRecipient = $customerId !== null && isset($recipients['customers'][$customerId])
+                        && $line->sold_at !== null && $line->sold_at->toDateString() >= $recipients['since'][$customerId];
+                    $groupOf[$line->id] = $isRecipient;
+                }
+                $key = $isRecipient ? 'recipients' : 'others';
+                $row = &$perItem[(int) $line->erp_item_id];
+                $row['quantity_'.$key] += (float) $line->quantity;
+                $row['value_'.$key] += (float) $line->net_value;
+                unset($row);
+                if ($isRecipient && $customerId !== null) {
+                    $valueRecipients += (float) $line->net_value;
+                    // kupujący = faktura albo paragon; sama korekta nie robi z klienta kupującego
+                    if (! $corrections) {
+                        $recipientBuyers[$customerId] = true;
+                    }
                     $item = $perItem[(int) $line->erp_item_id];
                     $buyers[] = [
                         'customer_id' => $customerId,
@@ -88,18 +116,23 @@ final class CampaignSalesResult
                         'net_value' => round((float) $line->net_value, 2),
                         'document_number' => $line->document_number,
                     ];
+                } else {
+                    $valueOthers += (float) $line->net_value;
+                    if (! $corrections) {
+                        $otherBuyers[$customerId ?? ('xl-'.$line->customer_xl_gid)] = true;
+                    }
                 }
-            } else {
-                $valueOthers += (float) $line->net_value;
-                $otherBuyers[$customerId ?? ('xl-'.$line->customer_xl_gid)] = true;
             }
         }
+        // kolejność dat jak dotąd (sortowanie stabilne — w tym samym dniu faktura przed korektą)
+        usort($buyers, static fn (array $a, array $b): int => (string) $a['sold_at'] <=> (string) $b['sold_at']);
+        $buyers = array_slice($buyers, 0, self::MAX_BUYERS);
 
         return [
             'from' => $from->toDateString(),
             'to' => $to->toDateString(),
             'days' => ErpCampaignSalesSync::WINDOW_DAYS,
-            'complete' => $to->lt(CarbonImmutable::today()),
+            'complete' => $to->lt(PolishTime::today()),
             'synced_at' => Cache::get(ErpCampaignSalesSync::SYNCED_AT_CACHE_KEY),
             'recipients_sent' => $recipients['sent'],
             // ilu odbiorców da się śledzić: klient XL albo adres, który jest na karcie kontrahenta XL
@@ -131,7 +164,11 @@ final class CampaignSalesResult
         if ($campaigns->isEmpty()) {
             return $out;
         }
-        $recipients = $this->recipientCustomers($campaigns->pluck('id')->map(static fn ($id): int => (int) $id)->all(), $this->emailToCustomers());
+        $startDays = [];
+        foreach ($campaigns as $campaign) {
+            $startDays[(int) $campaign->id] = (string) CampaignWindow::startDay($campaign)?->toDateString();
+        }
+        $recipients = $this->recipientCustomers($startDays);
         $itemsByCampaign = CampaignItem::query()->whereIn('campaign_id', $campaigns->pluck('id'))->whereNotNull('erp_item_id')
             ->get(['campaign_id', 'erp_item_id'])->groupBy('campaign_id');
 
@@ -140,7 +177,7 @@ final class CampaignSalesResult
             $customerIds = array_keys($recipients[(int) $campaign->id]['customers'] ?? []);
             $itemIds = ($itemsByCampaign[$campaign->id] ?? collect())->pluck('erp_item_id')->unique()->values()->all();
             if ($customerIds === [] || $itemIds === []) {
-                $out[(int) $campaign->id] = ['customers' => 0, 'net_value' => 0.0, 'complete' => $to->lt(CarbonImmutable::today())];
+                $out[(int) $campaign->id] = ['customers' => 0, 'net_value' => 0.0, 'complete' => $to->lt(PolishTime::today())];
 
                 continue;
             }
@@ -148,79 +185,115 @@ final class CampaignSalesResult
             $since = $recipients[(int) $campaign->id]['since'];
             $buyers = [];
             $value = 0.0;
-            foreach (ErpSaleLine::query()
+            $lines = ErpSaleLine::query()
                 ->whereIn('erp_item_id', $itemIds)
                 ->whereIntegerInRaw('erp_customer_id', $customerIds)
-                ->whereBetween('sold_at', [$from->toDateString(), $to->toDateString()])
-                ->get(['erp_customer_id', 'sold_at', 'net_value']) as $line) {
+                ->where('sold_at', '>=', $from->toDateString())
+                ->where('sold_at', '<', $to->addDay()->toDateString())
+                ->get(['id', 'document_type', 'document_id', 'line', 'erp_item_id', 'erp_customer_id', 'sold_at', 'quantity', 'net_value', 'corrects_document_type', 'corrects_document_id'])
+                ->all();
+            $byDocument = self::byDocument($lines);
+            $counted = [];
+            foreach ($lines as $line) {
                 $customerId = (int) $line->erp_customer_id;
-                if ($line->sold_at === null || $line->sold_at->toDateString() < $since[$customerId]) {
+                if (! CampaignAttribution::isSale((int) $line->document_type, (float) $line->quantity)
+                    || $line->sold_at === null || $line->sold_at->toDateString() < $since[$customerId]) {
                     continue;
                 }
+                $counted[$line->id] = true;
                 $buyers[$customerId] = true;
                 $value += (float) $line->net_value;
+            }
+            // korekta odejmuje tylko od policzonej pozycji z okna
+            foreach ($lines as $line) {
+                if (CampaignAttribution::isCorrection((int) $line->document_type)
+                    && ($root = self::correctedSale($line, $byDocument)) !== null && isset($counted[$root->id])) {
+                    $value += (float) $line->net_value;
+                }
             }
             $out[(int) $campaign->id] = [
                 'customers' => count($buyers),
                 'net_value' => round($value, 2),
-                'complete' => $to->lt(CarbonImmutable::today()),
+                'complete' => $to->lt(PolishTime::today()),
             ];
         }
 
         return $out;
     }
 
-    /** @return array{0: CarbonImmutable, 1: CarbonImmutable}|null */
+    /** @return array{0: CarbonImmutable, 1: CarbonImmutable}|null dzień startu i ostatni dzień okna (czas polski) */
     private function window(Campaign $campaign): ?array
     {
-        if ($campaign->sending_started_at === null) {
-            return null;
-        }
-        $from = CarbonImmutable::parse($campaign->sending_started_at)->startOfDay();
+        $from = CampaignWindow::startDay($campaign);
+        $to = CampaignWindow::endDay($campaign);
 
-        return [$from, $from->addDays(ErpCampaignSalesSync::WINDOW_DAYS)];
+        return $from === null || $to === null ? null : [$from, $to];
     }
 
     /**
-     * Klienci XL, do których mail wyszedł: odbiorca z XL wprost, odbiorca z grupy — gdy jego adres jest na karcie
-     * kontrahenta XL. customers: id klienta → adres, na który poszedł mail; since: id klienta → dzień pierwszego maila
-     * (Y-m-d; odbiorca dopisany później ma późniejszy); emails: dopasowane adresy odbiorców.
+     * Pozycje według dokumentu i towaru (najniższy numer pozycji) — do znalezienia pozycji korygowanej.
      *
-     * @param  list<int>  $campaignIds
-     * @param  array<string, list<int>>  $emailCustomers
-     * @return array<int, array{customers: array<int, string>, since: array<int, string>, emails: array<string, true>, sent: int}>
+     * @param  list<ErpSaleLine>  $lines
+     * @return array<string, ErpSaleLine>
      */
-    private function recipientCustomers(array $campaignIds, array $emailCustomers): array
+    private static function byDocument(array $lines): array
     {
         $out = [];
-        foreach (CampaignRecipient::query()->whereIn('campaign_id', $campaignIds)->where('status', CampaignRecipient::STATUS_SENT)
-            ->orderBy('id')->get(['campaign_id', 'email', 'erp_customer_id', 'sent_at']) as $r) {
-            $c = (int) $r->campaign_id;
-            $out[$c] ??= ['customers' => [], 'since' => [], 'emails' => [], 'sent' => 0];
-            $out[$c]['sent']++;
-            $email = mb_strtolower((string) $r->email);
-            $day = $r->sent_at?->toDateString() ?? '0000-00-00';
-            $ids = $r->erp_customer_id !== null ? [(int) $r->erp_customer_id] : ($emailCustomers[$email] ?? []);
-            foreach ($ids as $id) {
-                $out[$c]['customers'][$id] ??= $email;
-                $out[$c]['since'][$id] = min($out[$c]['since'][$id] ?? $day, $day);
-                $out[$c]['emails'][$email] = true;
+        foreach ($lines as $line) {
+            $key = $line->document_type.':'.$line->document_id.':'.$line->erp_item_id;
+            if (! isset($out[$key]) || $out[$key]->line > $line->line) {
+                $out[$key] = $line;
             }
         }
 
         return $out;
     }
 
-    /** @return array<string, list<int>> adres (małe litery) → klienci XL, którzy mają go na karcie */
-    private function emailToCustomers(): array
+    /**
+     * Faktura albo paragon, który korekta (także korekta korekty) koryguje — wśród pozycji z okna; null = brak.
+     *
+     * @param  array<string, ErpSaleLine>  $byDocument
+     */
+    private static function correctedSale(ErpSaleLine $line, array $byDocument): ?ErpSaleLine
     {
-        $map = [];
-        foreach (ErpCustomer::query()->whereNotNull('emails')->whereNull('removed_at')->get(['id', 'emails']) as $c) {
-            foreach (is_array($c->emails) ? $c->emails : [] as $email) {
-                $map[mb_strtolower((string) $email)][] = (int) $c->id;
+        for ($depth = 0; $depth < 5; $depth++) {
+            if (! CampaignAttribution::isCorrection((int) $line->document_type)) {
+                return CampaignAttribution::isSale((int) $line->document_type, (float) $line->quantity) ? $line : null;
             }
+            if ($line->corrects_document_type === null || $line->corrects_document_id === null) {
+                return null;
+            }
+            $next = $byDocument[$line->corrects_document_type.':'.$line->corrects_document_id.':'.$line->erp_item_id] ?? null;
+            if ($next === null || $next->id === $line->id) {
+                return null;
+            }
+            $line = $next;
         }
 
-        return $map;
+        return null;
+    }
+
+    /**
+     * Klienci XL, do których mail wyszedł (CampaignAttribution::recipientMatches: zamrożeni przy wysyłce, w starszych
+     * kampaniach — klient XL odbiorcy albo karta z jego adresem). customers: id klienta → adres, na który poszedł mail;
+     * since: id klienta → dzień pierwszego maila (Y-m-d, czas polski; odbiorca dopisany później ma późniejszy);
+     * emails: dopasowane adresy odbiorców.
+     *
+     * @param  array<int, string>  $startDays  id kampanii → dzień startu
+     * @return array<int, array{customers: array<int, string>, since: array<int, string>, emails: array<string, true>, sent: int}>
+     */
+    private function recipientCustomers(array $startDays): array
+    {
+        $out = [];
+        foreach ($this->attribution->recipientMatches($startDays) as $campaignId => $m) {
+            $row = ['customers' => [], 'since' => [], 'emails' => $m['emails'], 'sent' => $m['sent']];
+            foreach ($m['customers'] as $customerId => $entries) {
+                $row['customers'][$customerId] = $entries[0]['email'];
+                $row['since'][$customerId] = min(array_column($entries, 'day'));
+            }
+            $out[$campaignId] = $row;
+        }
+
+        return $out;
     }
 }

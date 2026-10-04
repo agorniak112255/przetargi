@@ -76,6 +76,8 @@ export type User = {
   }
   /** Marża, z którą startuje każda nowa odpowiedź na zapytanie (w procentach). */
   default_margin_percent?: number
+  /** Zakres raportu „Wynik kampanii” (CampaignReportScope); null = brak dostępu. */
+  campaign_report_scope?: 'own' | 'team' | 'all' | null
 }
 
 /**

@@ -135,6 +135,9 @@ final class ActivityActionResolver
             ['POST', '#^admin/roles$#', 'role.created', 'Utworzono rolę'],
             ['PUT', '#^admin/roles/[^/]+$#', 'role.updated', 'Zaktualizowano rolę'],
             ['DELETE', '#^admin/roles/[^/]+$#', 'role.deleted', 'Usunięto rolę'],
+            ['POST', '#^admin/teams$#', 'team.created', 'Utworzono zespół'],
+            ['PUT', '#^admin/teams/\d+$#', 'team.updated', 'Zaktualizowano zespół'],
+            ['DELETE', '#^admin/teams/\d+$#', 'team.deleted', 'Usunięto zespół'],
         ];
 
         foreach ($rules as [$ruleMethod, $pattern, $action, $label]) {

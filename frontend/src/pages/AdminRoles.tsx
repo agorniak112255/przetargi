@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { api } from '../lib/api'
+import { AdminTeams } from '../components/AdminTeams'
 
 type RoleRow = {
   id: number
@@ -372,6 +373,8 @@ export function AdminRoles() {
           </button>
         </>
       )}
+
+      <AdminTeams />
     </div>
   )
 }

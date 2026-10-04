@@ -8,6 +8,7 @@ use App\Models\Campaign;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\EmailSuppression;
+use App\Models\ErpItem;
 use App\Models\User;
 use App\Models\UserMailAccount;
 use App\Notifications\CampaignScheduleFailedNotification;
@@ -45,6 +46,8 @@ class CampaignSender
         private readonly CampaignRenderer $renderer,
         private readonly AudienceResolver $audience,
         private readonly CampaignItemPresenter $presenter,
+        // domyślna instancja — atrapy w testach tworzą Sendera z czterema zależnościami
+        private readonly RecipientCustomerFreezer $freezer = new RecipientCustomerFreezer,
     ) {}
 
     public static function pauseKey(int $userId): string
@@ -74,7 +77,8 @@ class CampaignSender
 
     /**
      * Start wysyłki: blokada kampanii, ponowne sprawdzenie statusu draft, walidacja (pozycje, temat, skrzynka autora,
-     * public_url, odbiorcy > 0), snapshoty pozycji, odbiorcy, status sending. Kopia do nadawcy po commit.
+     * public_url, odbiorcy > 0), snapshoty pozycji (z kosztem i datami towaru XL), odbiorcy z zamrożonymi klientami XL
+     * (RecipientCustomerFreezer), status sending. Kopia do nadawcy po commit.
      * $expectedChecksum — suma listy odbiorców z okna potwierdzenia; inna lista teraz = 422 i nic się nie zapisuje.
      */
     public function start(Campaign $campaign, User $actor, ?string $expectedChecksum = null): Campaign
@@ -91,10 +95,17 @@ class CampaignSender
             }
             [$items, $author] = $this->assertReady($locked);
 
+            // ile towar leżał w chwili startu (raport „Wynik kampanii”) — erp_items zmienia się po sprzedaży
+            $erpIds = $items->pluck('erp_item_id')->filter()->map(static fn ($id): int => (int) $id)->unique()->values()->all();
+            $erpItems = $erpIds === [] ? collect() : ErpItem::query()->whereIn('id', $erpIds)
+                ->get(['id', 'last_sale_at', 'oldest_lot_trade_at', 'oldest_lot_at'])->keyBy('id');
+
             // co dostał klient: zapis pozycji w chwili startu (późniejsze zmiany kart i stanów nie zmieniają historii)
             foreach ($this->presenter->presentMany($items, $author) as $i => $row) {
                 /** @var CampaignItem $item */
                 $item = $items[$i];
+                /** @var ErpItem|null $erp */
+                $erp = $item->erp_item_id !== null ? $erpItems->get((int) $item->erp_item_id) : null;
                 $item->forceFill([
                     'snap_name' => mb_substr($row['name'], 0, 300),
                     'snap_code' => mb_substr($row['code'], 0, 60),
@@ -106,6 +117,11 @@ class CampaignSender
                     // krótki opis i normy jak w mailu (opis przy pozycji albo wycinek karty)
                     'snap_description' => ($row['description'] ?? $row['card_excerpt']) !== null ? mb_substr((string) ($row['description'] ?? $row['card_excerpt']), 0, 300) : null,
                     'snap_norms' => $row['card_norms'] !== [] ? mb_substr(implode(', ', $row['card_norms']), 0, 300) : null,
+                    // koszt jednostki jak przy pozycji i daty z karty towaru XL; pozycja bez towaru XL — brak danych
+                    'snap_unit_cost' => $erp !== null ? $row['unit_cost'] : null,
+                    'snap_last_sale_at' => $erp?->last_sale_at?->toDateString(),
+                    'snap_oldest_lot_at' => ($erp?->oldest_lot_trade_at ?? $erp?->oldest_lot_at)?->toDateString(),
+                    'snap_source' => $erp !== null ? 'send' : null,
                 ])->save();
             }
 
@@ -113,6 +129,7 @@ class CampaignSender
             if ($count === 0) {
                 throw $this->invalid('Kampania nie ma odbiorców — wybierz grupę albo klientów z ERP XL.');
             }
+            $this->freezer->freeze($locked);
             $locked->forceFill([
                 'status' => Campaign::STATUS_SENDING,
                 'schedule_error' => null,
@@ -181,7 +198,7 @@ class CampaignSender
      * Dopisanie odbiorców do wysłanej (albo wysyłanej) kampanii: ci z bieżącego wyboru odbiorców, którzy nie są jeszcze
      * jej odbiorcami (AudienceResolver pomija obecnych), z sumą kontrolną z okna potwierdzenia. Kampania wraca do
      * wysyłki; pierwsze daty (sending_started_at, sent_at) i zapis pozycji z pierwszego startu zostają — od nich liczą
-     * się wyniki. Zwraca kampanię i liczbę dopisanych.
+     * się wyniki; dopisanym zamraża się klientów XL jak przy starcie. Zwraca kampanię i liczbę dopisanych.
      *
      * @return array{0: Campaign, 1: int}
      */
@@ -207,6 +224,7 @@ class CampaignSender
             if ($added <= 0) {
                 throw $this->invalid('Brak nowych odbiorców — wszyscy wybrani już są odbiorcami tej kampanii albo zostali pominięci.');
             }
+            $this->freezer->freeze($locked);
             $locked->forceFill([
                 'status' => Campaign::STATUS_SENDING,
                 'totals' => self::totals($locked),

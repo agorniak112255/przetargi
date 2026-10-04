@@ -6,7 +6,7 @@ import { can, canAny } from '../../lib/api'
 
 /** Samouczek „Raporty” — zakładki raportów (pages/Reports.tsx i pages/reports/*.tsx). */
 
-const TABS = ['Baza wiedzy', 'Źródła danych', 'Ruchy cen', 'Sprzedaż i oferty', 'Klienci ERP', 'Skuteczność przetargów', 'Cele handlowców']
+const TABS = ['Baza wiedzy', 'Źródła danych', 'Ruchy cen', 'Sprzedaż i oferty', 'Klienci ERP', 'Skuteczność przetargów', 'Cele handlowców', 'Wynik kampanii']
 
 const LEAD: Record<string, string> = {
   'Baza wiedzy': 'Jak kompletne są karty produktów, z których system dobiera wyroby do przetargów i zapytań.',
@@ -16,6 +16,7 @@ const LEAD: Record<string, string> = {
   'Klienci ERP': 'Aktywność klientów z Comarch ERP XL: kto kupuje, kto przestał i do ilu można napisać.',
   'Skuteczność przetargów': 'Ile części zamówień wygrywamy, dlaczego przegrywamy i z kim — według terminu składania ofert.',
   'Cele handlowców': 'Miesięczne cele sprzedaży handlowców i ich realizacja według faktur i paragonów z ERP XL.',
+  'Wynik kampanii': 'Ile pieniędzy zamrożonych w zalegającym towarze wróciło ze sprzedaży odbiorcom kampanii mailowych — według faktur i paragonów z ERP XL.',
 }
 
 /** Raporty z uwagą „dane odświeżane co 10 min” przy dacie (ReportCatalog, ReportSources, ReportPrices). */
@@ -108,7 +109,7 @@ export function ReportsHelp() {
       slides={[
         {
           action: 'Wybór raportu',
-          does: 'Raporty to zestawienia liczone z danych aplikacji, każde w swojej zakładce. Menu „Raporty” widzi tylko osoba z uprawnieniem do raportów, a w nim tylko zakładki z danymi, do których ma dostęp: Baza wiedzy i Ruchy cen — produkty, Źródła danych — cenniki albo konta B2B, Klienci ERP — kampanie, Skuteczność przetargów — przetargi, Cele handlowców — osobne uprawnienie „Cele handlowców” (na start ma je tylko administrator). Sprzedaż i oferty widać zawsze, ale tylko te części, do których masz uprawnienie. Większość raportów zaczyna się od ramki „Najważniejsze” albo jednego zdania z wnioskiem — policzonych z danych, same fakty.',
+          does: 'Raporty to zestawienia liczone z danych aplikacji, każde w swojej zakładce. Menu „Raporty” widzi tylko osoba z uprawnieniem do raportów, a w nim tylko zakładki z danymi, do których ma dostęp: Baza wiedzy i Ruchy cen — produkty, Źródła danych — cenniki albo konta B2B, Klienci ERP — kampanie, Skuteczność przetargów — przetargi, Cele handlowców — osobne uprawnienie „Cele handlowców” (na start ma je tylko administrator). Sprzedaż i oferty widać zawsze, ale tylko te części, do których masz uprawnienie. Wyjątek: „Wynik kampanii” widzi każdy, kto wysyła kampanie — także bez uprawnienia do raportów; wtedy menu „Raporty” ma tylko tę jedną zakładkę. Większość raportów zaczyna się od ramki „Najważniejsze” albo jednego zdania z wnioskiem — policzonych z danych, same fakty.',
           click: 'Menu „Raporty”, potem nazwa raportu w zakładkach u góry. Pod tytułem widać, czego dotyczy wybrany raport.',
           tone: 'blue',
           screen: (
@@ -498,6 +499,87 @@ export function ReportsHelp() {
                 </AppFrame>
               }
             />
+          ),
+        },
+        {
+          action: 'Wynik kampanii — jak liczymy',
+          does: 'Raport pokazuje, ile pieniędzy zamrożonych w zalegającym towarze wróciło ze sprzedaży odbiorcom kampanii mailowych. Pozycja faktury albo paragonu z ERP XL należy do kampanii, gdy klient dostał mail z tym towarem i kupił go w oknie kampanii: od dnia maila do 30. dnia po starcie wysyłki (czas polski). Gdy pasuje kilka kampanii, wygrywa ostatni mail przed zakupem — wcześniejsza kampania widzi tę sprzedaż jako „przejętą przez późniejszy mail”. Korekta liczy się w tej samej kampanii co korygowana faktura, w miesiącu swojej daty; korekta bez znalezionej faktury nie liczy się wcale. „Uwolnione pieniądze” to koszt zakupu sprzedanego towaru, który w dniu wysyłki był zalegający (co najmniej 180 dni bez sprzedaży albo nigdy niesprzedany, gdy partia leżała co najmniej 180 dni), najwyżej do stanu z dnia wysyłki — ten stan zmniejsza każda sprzedaż towaru po starcie (także innym klientom), więc dwie kampanie nie dostaną uwolnionych pieniędzy za ten sam zapas. Koszt bierzemy z ERP XL; gdy go brak — szacujemy z kosztu jednostki z dnia wysyłki i oznaczamy „szacunek”. Gdy kosztu nie ma wcale, marża jest „brak danych”, a nie zero. „Odzysk” mówi, ile klienci zapłacili za każde 100 zł kosztu zalegającego towaru. Kampanie wysłane przed wprowadzeniem raportu nie mają danych z dnia wysyłki, więc ich towar nie liczy się do uwolnionych.',
+          click: 'Wybierz miesiąc (bieżący i 11 poprzednich). Liczby miesiąca stają się ostateczne 7 dni po jego końcu — data jest w nagłówku. „Pobierz pozycje faktur (CSV)” zapisuje plik do Excela z każdą przypisaną pozycją: klientem, kosztem i jego źródłem, kampanią i dopasowaniem klienta — do sprawdzenia przed premią.',
+          tone: 'blue',
+          screen: (
+            <LivePage
+              nav="Raporty"
+              path="/reports?raport=campaigns"
+              page={<Reports />}
+              allowed={user?.campaign_report_scope != null}
+              mark="text=Pobierz pozycje faktur (CSV)"
+              fallback={
+                <AppFrame nav="Raporty">
+                  <ReportHead
+                    active="Wynik kampanii"
+                    toolbar={
+                      <span className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
+                        Miesiąc <span className="rounded-md border border-slate-300 bg-white px-2 py-0.5">Wrzesień 2026</span>
+                        <Mark>
+                          <span className="inline-block rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white">Pobierz pozycje faktur (CSV)</span>
+                        </Mark>
+                      </span>
+                    }
+                  />
+                  <Kpis
+                    items={[
+                      ['Uwolnione pieniądze', '48 tys. zł', 'towar leżał średnio 512 dni', null],
+                      ['Sprzedaż odbiorcom kampanii', '126 tys. zł', '38 kupujących klientów', null],
+                      ['Odzysk', '131 zł', 'za każde 100 zł kosztu', null],
+                      ['Marża', '31 tys. zł', '24,6% sprzedaży ze znanym kosztem', null],
+                    ]}
+                  />
+                </AppFrame>
+              }
+            />
+          ),
+        },
+        {
+          action: 'Wynik kampanii — kto co widzi',
+          does: 'Handlowiec widzi wynik swoich kampanii. Kierownik zespołu widzi także członków swoich zespołów: ranking osób (uwolnione pieniądze, sprzedaż, odzysk, marża i pozycje sprzedane poniżej kosztu) i może zawęzić raport do jednej osoby. Zarząd z uprawnieniem „Wynik kampanii — wszyscy pracownicy” widzi wszystkich. Niżej: „Towary, które najlepiej zeszły” — ile leżały przed mailem — oraz kampanie z rozwijaną listą towarów: czy towar zalegał w dniu wysyłki, stan i wartość w ofercie, cena z oferty wobec ceny uzyskanej, sprzedaż w miesiącu i w całym oknie, nadwyżka ponad stan. Na dole zastrzeżenia do danych tego miesiąca i reguła liczenia słowami.',
+          click: 'Kliknij osobę w rankingu albo wybierz ją na liście „Osoba”; „pokaż wszystkich” wraca do całości. Przy kampanii „Towary (…)” rozwija jej towary. Zespoły i kierowników ustawia administrator w Administracja → Role, w części „Zespoły”.',
+          tone: 'slate',
+          screen: (
+            <AppFrame nav="Raporty">
+              <ReportHead active="Wynik kampanii" toolbar={<Mark>Osoba: Cały mój zespół</Mark>} />
+              <Card className="p-3">
+                <h2 className="mb-2 text-xs font-semibold">Ranking osób</h2>
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b bg-slate-50">
+                      <Th>Osoba</Th>
+                      <Th>Kampanie</Th>
+                      <Th>Sprzedaż netto</Th>
+                      <Th>Uwolnione</Th>
+                      <Th>Odzysk na 100 zł</Th>
+                      <Th>Poniżej kosztu</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(
+                      [
+                        ['Anna Nowak', '3', '64 tys. zł', '27 tys. zł', '138 zł', 'żadnej pozycji'],
+                        ['Piotr Wiśniewski', '2', '41 tys. zł', '15 tys. zł', '96 zł', '2 pozycje'],
+                      ] as const
+                    ).map(([name, campaigns, sales, freed, recovery, below]) => (
+                      <tr key={name} className="border-b last:border-0">
+                        <td className="p-2 font-medium text-blue-700">{name}</td>
+                        <td className="p-2">{campaigns}</td>
+                        <td className="p-2">{sales}</td>
+                        <td className="p-2 font-semibold">{freed}</td>
+                        <td className="p-2">{recovery}</td>
+                        <td className="p-2">{below}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+            </AppFrame>
           ),
         },
       ]}

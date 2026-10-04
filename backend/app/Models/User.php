@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Services\Campaigns\CampaignReportScope;
 use App\Support\OfferPricing;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -73,7 +75,7 @@ class User extends Authenticatable
     }
 
     /**
-     * @return array{id: int, name: string, email: string, role: string, roles: list<string>, permissions: list<string>, ui_preferences: array{template: ?string, mode: ?string}, default_margin_percent: float}
+     * @return array{id: int, name: string, email: string, role: string, roles: list<string>, permissions: list<string>, ui_preferences: array{template: ?string, mode: ?string}, default_margin_percent: float, campaign_report_scope: 'all'|'team'|'own'|null}
      */
     public function toAuthArray(): array
     {
@@ -89,7 +91,21 @@ class User extends Authenticatable
             'permissions' => $this->getAllPermissions()->pluck('name')->values()->all(),
             'ui_preferences' => $this->normalizedUiPreferences(),
             'default_margin_percent' => $this->defaultMarginPercent(),
+            // zakres raportu „Wynik kampanii” (all/team/own); null = brak dostępu
+            'campaign_report_scope' => app(CampaignReportScope::class)->for($this)['mode'] ?? null,
         ];
+    }
+
+    /**
+     * Zespoły, do których należy użytkownik (pivot is_leader = kierownik zespołu).
+     *
+     * @return BelongsToMany<UserTeam, $this>
+     */
+    public function teams(): BelongsToMany
+    {
+        return $this->belongsToMany(UserTeam::class, 'user_team_members', 'user_id', 'team_id')
+            ->withPivot('is_leader')
+            ->withTimestamps();
     }
 
     /** Skrzynka SMTP, z której wychodzą kampanie użytkownika. */

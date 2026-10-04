@@ -1,8 +1,9 @@
 import { useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { canAny, type User } from '../lib/api'
+import { can, canAny, type User } from '../lib/api'
 import type { ReportKey } from '../lib/reports'
+import { ReportCampaigns } from './reports/ReportCampaigns'
 import { ReportCatalog } from './reports/ReportCatalog'
 import { ReportCustomers } from './reports/ReportCustomers'
 import { ReportEffectiveness } from './reports/ReportEffectiveness'
@@ -12,12 +13,15 @@ import { ReportSources } from './reports/ReportSources'
 import { ReportTargets } from './reports/ReportTargets'
 
 /**
- * Raporty (reports.view): zestawienia z danych aplikacji, każde w swojej zakładce (`?raport=`). Zakładkę widać
- * tylko z uprawnieniem do danych, z których raport powstaje — to samo sprawdza serwer (ReportController,
- * SalesTargetController). Zakładka z niezapisanymi zmianami (cele handlowców) pyta przed przejściem do innej.
+ * Raporty: zestawienia z danych aplikacji, każde w swojej zakładce (`?raport=`). Zakładki wymagają reports.view
+ * i uprawnienia do danych, z których raport powstaje — to samo sprawdza serwer (ReportController,
+ * SalesTargetController). Wyjątek: „Wynik kampanii” widać z samym zakresem campaign_report_scope (własne kampanie,
+ * zespół albo wszyscy — CampaignReportController), także bez reports.view. Zakładka z niezapisanymi zmianami (cele
+ * handlowców) pyta przed przejściem do innej.
  */
 
-const REPORTS: { key: ReportKey; label: string; lead: string; anyOf: string[] | null }[] = [
+/** anyOf null — wystarczy reports.view; campaignScope — zakładka zależy tylko od campaign_report_scope. */
+const REPORTS: { key: ReportKey; label: string; lead: string; anyOf: string[] | null; campaignScope?: true }[] = [
   {
     key: 'catalog',
     label: 'Baza wiedzy',
@@ -60,10 +64,19 @@ const REPORTS: { key: ReportKey; label: string; lead: string; anyOf: string[] | 
     lead: 'Miesięczne cele sprzedaży handlowców i ich realizacja według faktur i paragonów z ERP XL.',
     anyOf: ['reports.targets.manage'],
   },
+  {
+    key: 'campaigns',
+    label: 'Wynik kampanii',
+    lead: 'Ile pieniędzy zamrożonych w zalegającym towarze wróciło ze sprzedaży odbiorcom kampanii mailowych — według faktur i paragonów z ERP XL.',
+    anyOf: null,
+    campaignScope: true,
+  },
 ]
 
 function visibleReports(user: User | null) {
-  return REPORTS.filter((r) => r.anyOf === null || canAny(user, r.anyOf))
+  return REPORTS.filter((r) =>
+    r.campaignScope ? user?.campaign_report_scope != null : can(user, 'reports.view') && (r.anyOf === null || canAny(user, r.anyOf)),
+  )
 }
 
 export function Reports() {
@@ -113,6 +126,7 @@ export function Reports() {
       {active.key === 'sales' && <ReportSales />}
       {active.key === 'customers' && <ReportCustomers />}
       {active.key === 'effectiveness' && <ReportEffectiveness />}
+      {active.key === 'campaigns' && <ReportCampaigns />}
       {active.key === 'targets' && (
         <ReportTargets
           onDirtyChange={(d) => {

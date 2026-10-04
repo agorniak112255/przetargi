@@ -131,6 +131,15 @@ function PermissionGuard({
   return children
 }
 
+/** Raporty: reports.view albo sam zakres „Wynik kampanii” (handlowiec z kampaniami bez innych raportów). */
+function ReportsGuard({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return <p className="p-8 text-sm text-slate-500">Ładowanie…</p>
+  if (!user) return <Navigate to="/login" replace />
+  if (!can(user, 'reports.view') && user.campaign_report_scope == null) return <Navigate to="/" replace />
+  return children
+}
+
 /** Zarząd z samym raportem zapasów (bez pulpitu) trafia od razu na raport zamiast na pulpit, do którego nie ma danych. */
 function HomeIndex() {
   const { user } = useAuth()
@@ -289,9 +298,9 @@ export default function App() {
             <Route
               path="reports"
               element={
-                <PermissionGuard permission="reports.view">
+                <ReportsGuard>
                   <Reports />
-                </PermissionGuard>
+                </ReportsGuard>
               }
             />
 

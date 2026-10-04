@@ -15,9 +15,10 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Sprzedaż towarów z kampanii wysłanych w ostatnich WINDOW_DAYS + MARGIN_DAYS dniach: pozycje FS/PA od dnia
- * najwcześniejszej wysyłki (erp_sale_lines). Tylko te towary i ten okres — jedno krótkie zapytanie do XL w nocy.
- * Pozycje, których XL już nie zwraca (dokument anulowany), są kasowane w tym samym zakresie.
+ * Sprzedaż towarów z kampanii wysłanych w ostatnich WINDOW_DAYS + MARGIN_DAYS dniach: pozycje FS/PA i ich korekt
+ * (FSK/PAK, ilość i wartość ze znakiem, z dokumentem korygowanym) od dnia najwcześniejszej wysyłki (erp_sale_lines),
+ * z kosztem księgowym pozycji. Tylko te towary i ten okres — jedno krótkie zapytanie do XL w nocy.
+ * Pozycje, których XL już nie zwraca (dokument anulowany), są kasowane w tym samym zakresie (także korekty).
  */
 final class ErpCampaignSalesSync
 {
@@ -67,6 +68,8 @@ final class ErpCampaignSalesSync
             if ($itemId === null || $soldAt === null) {
                 continue;
             }
+            // koszt 0 = XL go nie podał (FS do WZ) — nieznany, nie zero
+            $cost = round($row['cost'], 2);
             $buffer[] = [
                 'document_type' => $row['document_type'],
                 'document_id' => $row['document_id'],
@@ -78,6 +81,9 @@ final class ErpCampaignSalesSync
                 'erp_item_id' => $itemId,
                 'quantity' => round($row['quantity'], 3),
                 'net_value' => round($row['net_value'], 2),
+                'cost_value' => $cost !== 0.0 ? $cost : null,
+                'corrects_document_type' => $row['corrects_type'],
+                'corrects_document_id' => $row['corrects_id'],
                 'synced_at' => $startedAt,
                 'created_at' => $startedAt,
                 'updated_at' => $startedAt,
@@ -108,7 +114,8 @@ final class ErpCampaignSalesSync
             return 0;
         }
         DB::table('erp_sale_lines')->upsert($rows, ['document_type', 'document_id', 'line'], [
-            'document_number', 'sold_at', 'customer_xl_gid', 'erp_customer_id', 'erp_item_id', 'quantity', 'net_value', 'synced_at', 'updated_at',
+            'document_number', 'sold_at', 'customer_xl_gid', 'erp_customer_id', 'erp_item_id', 'quantity', 'net_value', 'cost_value',
+            'corrects_document_type', 'corrects_document_id', 'synced_at', 'updated_at',
         ]);
 
         return count($rows);

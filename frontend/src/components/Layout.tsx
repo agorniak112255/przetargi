@@ -16,6 +16,8 @@ type NavLinkItem = {
   icon: NavIconName
   permission?: string
   anyOf?: string[]
+  /** Widoczne także bez uprawnienia, gdy użytkownik ma zakres raportu „Wynik kampanii”. */
+  orCampaignReport?: true
 }
 
 const links: NavLinkItem[] = [
@@ -29,7 +31,7 @@ const links: NavLinkItem[] = [
   { to: '/card-matches', label: 'Łączenie kart', icon: 'substitutes', permission: 'card_matches.view' },
   { to: '/price-lists', label: 'Cenniki', icon: 'price-lists', permission: 'price_lists.view' },
   { to: '/substitutes', label: 'Zamienniki', icon: 'substitutes', permission: 'products.view' },
-  { to: '/reports', label: 'Raporty', icon: 'reports', permission: 'reports.view' },
+  { to: '/reports', label: 'Raporty', icon: 'reports', permission: 'reports.view', orCampaignReport: true },
   { to: '/clients', label: 'Klienci', icon: 'clients', permission: 'clients.view' },
   { to: '/inquiries', label: 'Zapytania', icon: 'inquiries', permission: 'inquiries.use' },
   { to: '/czat', label: 'Czat', icon: 'chat', permission: CHAT_PERMISSION },
@@ -67,6 +69,7 @@ export function Layout() {
   }
 
   const visible = links.filter((l) => {
+    if (l.orCampaignReport && user?.campaign_report_scope != null) return true
     if (l.permission) return can(user, l.permission)
     if (l.anyOf) return canAny(user, l.anyOf)
     return true

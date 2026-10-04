@@ -46,6 +46,12 @@ final class ErpXlClient implements ErpXlGateway
     private const CUSTOMER_SALE_STATES = [3, 4, 5];
 
     /**
+     * Korekty FS (FSK 2041) i PA (PAK 2042) w wyniku kampanii — stany jak FS/PA, ilość i wartość ze znakiem; nagłówek
+     * korekty wskazuje dokument korygowany (TrN_ZwrTyp / TrN_ZwrNumer, sprawdzone na produkcji 04.10.2026).
+     */
+    private const CUSTOMER_SALE_CORRECTION_TYPES = [2041, 2042];
+
+    /**
      * Zakupy klienta w zakładce Klienci: FS, PA i FSE (2037, faktura eksportowa — Mittal w EUR, wartość księgowa w PLN).
      * 2036 to nie sprzedaż: seria 01K, kontrahenci-dostawcy (Ansell, Ardon, Malfini) — sprawdzone na produkcji 02.10.2026.
      */
@@ -495,31 +501,45 @@ final class ErpXlClient implements ErpXlGateway
 
     public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable
     {
-        [$where, $bindings] = $this->customerSaleFilter($fromClarionDate);
-        $prefixes = [2033 => 'FS', 2034 => 'PA'];
+        $sales = implode(',', self::CUSTOMER_SALE_TYPES);
+        $corrections = implode(',', self::CUSTOMER_SALE_CORRECTION_TYPES);
+        $states = implode(',', self::CUSTOMER_SALE_STATES);
+        $customer = self::CUSTOMER_TYPE;
+        // FS/PA z dodatnią ilością jak dotąd; korekty z każdą niezerową ilością albo wartością (ilość 0 = korekta ceny)
+        $where = "n.TrN_KntTyp = $customer AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ?"
+            ." AND ((n.TrN_GIDTyp IN ($sales) AND e.TrE_Ilosc > 0)"
+            ." OR (n.TrN_GIDTyp IN ($corrections) AND (e.TrE_Ilosc <> 0 OR e.TrE_KsiegowaNetto <> 0)))";
         // paczkami — lista towarów kampanii jest krótka, ale limit parametrów MS SQL to 2100
         foreach (array_chunk(array_values(array_unique($itemGids)), 500) as $chunk) {
             $in = implode(',', array_map('intval', $chunk));
             $sql = <<<SQL
                 SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, e.TrE_GIDLp AS line, n.TrN_TrNSeria AS series,
                        n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month, n.TrN_Data2 AS doc_date,
-                       n.TrN_KntNumer AS customer_gid, e.TrE_TwrNumer AS item_gid, e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value
+                       n.TrN_KntNumer AS customer_gid, e.TrE_TwrNumer AS item_gid, e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value,
+                       e.TrE_KosztKsiegowy AS cost, n.TrN_ZwrTyp AS corrects_type, n.TrN_ZwrNumer AS corrects_id
                 FROM CDN.TraElem e
                 JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
-                WHERE $where AND e.TrE_Ilosc > 0 AND e.TrE_TwrNumer IN ($in)
+                WHERE $where AND e.TrE_TwrNumer IN ($in)
                 SQL;
-            foreach ($this->db()->cursor($sql, $bindings) as $r) {
+            foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
                 $type = (int) $r->doc_type;
+                // dokument korygowany tylko z nagłówka korekty (0 = XL go nie podał)
+                $isCorrection = in_array($type, self::CUSTOMER_SALE_CORRECTION_TYPES, true);
+                $correctsType = $isCorrection && (int) $r->corrects_type > 0 ? (int) $r->corrects_type : null;
+                $correctsId = $isCorrection && (int) $r->corrects_id > 0 ? (int) $r->corrects_id : null;
                 yield [
                     'document_type' => $type,
                     'document_id' => (int) $r->document_id,
                     'line' => (int) $r->line,
-                    'document_number' => $this->documentNumber($prefixes[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
+                    'document_number' => $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
                     'date' => (int) $r->doc_date,
                     'customer_gid' => (int) $r->customer_gid,
                     'item_gid' => (int) $r->item_gid,
                     'quantity' => (float) $r->quantity,
                     'net_value' => (float) $r->net_value,
+                    'cost' => (float) ($r->cost ?? 0),
+                    'corrects_type' => $correctsType !== null && $correctsId !== null ? $correctsType : null,
+                    'corrects_id' => $correctsType !== null && $correctsId !== null ? $correctsId : null,
                 ];
             }
         }

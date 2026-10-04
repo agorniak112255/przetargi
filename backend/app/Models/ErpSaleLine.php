@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Pozycja faktury (FS) albo paragonu (PA) z ERP XL z towarem kampanii — do wyniku „kupili odbiorcy kampanii”.
+ * Pozycja faktury (FS), paragonu (PA) albo ich korekty (FSK 2041 / PAK 2042, ilość i wartość ze znakiem) z ERP XL z towarem kampanii — do wyniku „kupili odbiorcy kampanii”.
  * Zapis: App\Services\Erp\ErpCampaignSalesSync.
  */
 class ErpSaleLine extends Model
@@ -24,6 +24,9 @@ class ErpSaleLine extends Model
         'erp_item_id',
         'quantity',
         'net_value',
+        'cost_value',
+        'corrects_document_type',
+        'corrects_document_id',
         'synced_at',
     ];
 
@@ -37,6 +40,9 @@ class ErpSaleLine extends Model
             'customer_xl_gid' => 'integer',
             'quantity' => 'decimal:3',
             'net_value' => 'decimal:2',
+            'cost_value' => 'decimal:2',
+            'corrects_document_type' => 'integer',
+            'corrects_document_id' => 'integer',
             'synced_at' => 'datetime',
         ];
     }
