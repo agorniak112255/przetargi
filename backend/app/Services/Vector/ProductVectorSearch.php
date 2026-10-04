@@ -11,6 +11,13 @@ final class ProductVectorSearch
 {
     private const PREFETCH_LIMIT = 150;
 
+    /**
+     * Najwięcej zapytań w pamięci trafień. Pamięć służy jednemu wyszukiwaniu (prefetch fali → similar() tych samych
+     * tekstów); bez limitu długi przebieg CLI rośnie bez końca — erp:suggest (4.10.2026): 130 zapytań = 8 MB, przebieg
+     * 2000 towarów nie mieścił się w 128 MB.
+     */
+    private const HIT_CACHE_LIMIT = 256;
+
     /** @var array<string, list<array{id: int, score: float}>> */
     private array $hitCache = [];
 
@@ -46,6 +53,8 @@ final class ProductVectorSearch
         if ($texts === []) {
             return;
         }
+        // miejsce na całą falę z góry — jej wpisy nie wypadają, zanim similar() je przeczyta
+        $this->makeRoom(count($texts));
 
         try {
             $vectors = $this->embeddings->embedMany($texts);
@@ -91,6 +100,7 @@ final class ProductVectorSearch
         try {
             $vector = $this->embeddings->embed($query);
             $hits = $this->qdrant->search($vector, $limit);
+            $this->makeRoom(1);
             $this->hitCache[$query] = $hits;
 
             return $hits;
@@ -99,5 +109,15 @@ final class ProductVectorSearch
 
             return [];
         }
+    }
+
+    /** Usuwa najstarsze wpisy, żeby po dodaniu $incoming nowych pamięć nie przekroczyła limitu. */
+    private function makeRoom(int $incoming): void
+    {
+        $excess = count($this->hitCache) + $incoming - self::HIT_CACHE_LIMIT;
+        if ($excess <= 0) {
+            return;
+        }
+        $this->hitCache = $excess >= count($this->hitCache) ? [] : array_slice($this->hitCache, $excess, null, true);
     }
 }

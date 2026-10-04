@@ -12,6 +12,7 @@ use App\Models\ProductVariant;
 use App\Models\User;
 use App\Services\Erp\ErpItemMatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use ReflectionProperty;
 use Tests\TestCase;
 
 /** Przypadki z analizy XL ↔ katalog na danych produkcyjnych (29.09.2026). */
@@ -132,6 +133,31 @@ final class ErpItemMatcherTest extends TestCase
         $this->assertSame(2, $stats['auto']);
         $this->assertSame(ErpItemLink::METHOD_XL_CODE, ErpItemLink::query()->where('product_id', $helmet->id)->sole()->method);
         $this->assertSame(1, ErpItemLink::query()->where('product_id', $card->id)->count());
+    }
+
+    public function test_sku_index_holds_only_codes_of_xl_items(): void
+    {
+        // pełny indeks SKU kart i wariantów (4.10.2026: 253 tys. kodów, 70 MB) nie mieścił się w 128 MB PHP CLI
+        $card = $this->card('H9302-KARTA', 'ARDON', 'Spodnie ARDON 4TECH szwedzkie');
+        ProductVariant::query()->create([
+            'product_id' => $card->id, 'kind' => 'size', 'source' => 'b2b', 'remote_id' => 'r1', 'sku' => 'H9302/50',
+            'label' => '50', 'purchase_price' => 1.00, 'currency' => 'PLN',
+        ]);
+        ProductVariant::query()->create([
+            'product_id' => $card->id, 'kind' => 'size', 'source' => 'b2b', 'remote_id' => 'r2', 'sku' => 'H9302/52',
+            'label' => '52', 'purchase_price' => 1.00, 'currency' => 'PLN',
+        ]);
+        $this->card('9762.130', 'UVEX', 'Hełm Airwing B-WR, żółty 9762.130');
+        $this->item('ASPH930250', 'SPODNIE 4TECH SZWED H9302/50', suppliers: ['ARDON PREROV']);
+
+        $matcher = app(ErpItemMatcher::class);
+        $index = null;
+        $stats = $matcher->refresh(function () use ($matcher, &$index): void {
+            $index ??= (new ReflectionProperty($matcher, 'skuIndex'))->getValue($matcher);
+        });
+
+        $this->assertSame(1, $stats['auto']);
+        $this->assertSame(['H930250' => [$card->id]], $index);
     }
 
     public function test_human_decisions_are_kept_and_stale_automatic_links_removed(): void

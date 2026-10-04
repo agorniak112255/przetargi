@@ -75,6 +75,9 @@ final class ErpItemMatcher
     /** @var array<string, list<int>>|null kod → karty z products.sku i product_variants.sku */
     private ?array $skuIndex = null;
 
+    /** @var array<string, true>|null kody z towarów XL przebiegu — indeks SKU trzyma tylko je */
+    private ?array $neededCodes = null;
+
     /** @var array<string, string> słowo → klucz marki producenta ('' = nie marka) */
     private array $wordBrand = [];
 
@@ -102,6 +105,7 @@ final class ErpItemMatcher
         $this->cardNameIndex = null;
         $this->wordBrand = [];
         $this->knownBrands = null;
+        $this->neededCodes = $this->neededCodes();
 
         ErpItem::query()
             ->whereNull('removed_at')
@@ -132,8 +136,34 @@ final class ErpItemMatcher
             ->delete();
         $this->skuIndex = null;
         $this->cardNameIndex = null;
+        $this->neededCodes = null;
 
         return $stats;
+    }
+
+    /**
+     * Kody, których szukają towary przebiegu (te same, co matchBatch wyciąga przez extract()). Pełny indeks SKU kart
+     * i wariantów (4.10.2026: 253 tys. kodów, 70 MB) nie mieścił się z resztą przebiegu w 128 MB PHP CLI — po kodach
+     * towarów XL zostaje ok. 2 tys. kodów i 1 MB, z tym samym wynikiem dla każdego szukanego kodu.
+     *
+     * @return array<string, true>
+     */
+    private function neededCodes(): array
+    {
+        $codes = [];
+        ErpItem::query()
+            ->whereNull('removed_at')
+            ->where('archived', false)
+            ->select(['id', 'code', 'name', 'name1'])
+            ->chunkById(500, function (Collection $items) use (&$codes): void {
+                foreach ($items as $item) {
+                    foreach ($this->extract($item) as $c) {
+                        $codes[$c['code']] = true;
+                    }
+                }
+            });
+
+        return $codes;
     }
 
     /**
@@ -415,7 +445,7 @@ final class ErpItemMatcher
 
     /**
      * products.sku i product_variants.sku nie zawsze są w product_identifiers (karty ręczne, rozmiary) — indeks
-     * w pamięci budowany strumieniowo raz na przebieg.
+     * w pamięci budowany strumieniowo raz na przebieg, tylko dla kodów towarów przebiegu (neededCodes()).
      *
      * @return array<string, list<int>>
      */
@@ -424,17 +454,19 @@ final class ErpItemMatcher
         if ($this->skuIndex !== null) {
             return $this->skuIndex;
         }
+        $needed = $this->neededCodes;
         $index = [];
         foreach (DB::table('products')->select(['id', 'sku'])->whereNotNull('sku')->lazyById(5000) as $row) {
             $code = ProductIdentifierCode::code((string) $row->sku);
-            if ($code !== null) {
+            if ($code !== null && ($needed === null || isset($needed[$code]))) {
                 $index[$code][] = (int) $row->id;
             }
         }
         foreach (DB::table('product_variants')->select(['id', 'product_id', 'sku'])->whereNotNull('sku')
             ->whereNull('removed_at')->lazyById(5000) as $row) {
             $code = ProductIdentifierCode::code((string) $row->sku);
-            if ($code !== null && (! isset($index[$code]) || ! in_array((int) $row->product_id, $index[$code], true))) {
+            if ($code !== null && ($needed === null || isset($needed[$code]))
+                && (! isset($index[$code]) || ! in_array((int) $row->product_id, $index[$code], true))) {
                 $index[$code][] = (int) $row->product_id;
             }
         }
