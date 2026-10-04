@@ -315,10 +315,12 @@ final class BhpAttributeNormalizer
             .($context['sku'] ?? '');
         $katText = $identity.' '.($context['description'] ?? '');
         $assortment = new PpeAssortment;
-        // Mata z nazwy i maska do resuscytacji nie są ŚOI żadnej rodziny — model wpisywał im „drogi_oddechowe”
-        // (CEDERROTH 26604 „Maska oddechowa”, opis „resuscytacja usta-usta”) albo obuwie z „czyszczenia obuwia”.
+        // Mata z nazwy, maska do resuscytacji i osłona na brodę nie są ŚOI żadnej rodziny — model wpisywał im
+        // „drogi_oddechowe” (CEDERROTH 26604 „Maska oddechowa”, opis „resuscytacja usta-usta”) albo obuwie
+        // z „czyszczenia obuwia”, a opis osłony brody KleenGuard A10 („ochrona dróg oddechowych”) dawał typ FFP.
         $outsidePpe = $assortment->namesFloorMat((string) ($context['name'] ?? ''))
-            || $assortment->isResuscitationMask($identity, (string) ($context['description'] ?? ''));
+            || $assortment->isResuscitationMask($identity, (string) ($context['description'] ?? ''))
+            || $assortment->isBeardCover($identity);
 
         // Poza tym kategoria od modelu zostaje pierwsza: rzeczownik z nazwy przed nią psuł więcej, niż naprawiał
         // („Shoe cover”, „Low softshell footwear” — przegląd ręcznych cenników 22.09). Bez niej tożsamość, a na końcu
@@ -491,8 +493,9 @@ final class BhpAttributeNormalizer
             $family = $assortment->family($identity) ?? $assortment->familyFromDescription($typeBlob);
         }
         $nameSku = trim($name.' '.$sku);
-        // Typ z nazwy bije typ od modelu, a ten odczyt z całego tekstu: model dawał „kalosz” skórzanym
-        // trzewikom Canis („Ankle leather footwear … gumowa podeszwa”) i „ffp” masce do resuscytacji.
+        // Typ z nazwy bije odczyt z całego tekstu. Zapisanego `typ_wyrobu` nie czytamy: model go nie zwraca (nie ma
+        // go w schemacie odpowiedzi), więc w payloadzie leży nasze dawne wyliczenie i przeliczenie utrwalało jego
+        // błędy także po poprawce reguły („ffp” osłony brody KleenGuard A10, „apparatus” przelotki AlphaTec do SCBA).
         // Po nazwie kategoria-dowód (kolumna cennika, B2B, ręczna): „POWLEKANE” przy Polstar COVENT czy G-REX P01
         // to powlekane, a nie „welding” ze zdania „nie stosować przy pracach spawalniczych” w opisie. Kategoria
         // dobrana automatem tu nie dociera (context['category'] jest już bez niej) — z nią typ kłamał
@@ -504,7 +507,6 @@ final class BhpAttributeNormalizer
         $out['typ_wyrobu'] = $outsidePpe || $eyeFaceAccessory ? null : (
             $assortment->articleType($nameSku, $family)
             ?? $assortment->articleType($identity, $family)
-            ?? $this->nullableString($raw['typ_wyrobu'] ?? null)
             ?? $assortment->articleType($typeBlob, $family)
         );
         // Zapisanego `przeznaczenie` nie czytamy dla żadnej rodziny: model go nie zwraca (nie ma go w schemacie

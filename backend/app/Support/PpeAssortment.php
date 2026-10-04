@@ -237,6 +237,13 @@ final class PpeAssortment
     private const RESUSCITATION = '/\b(resuscyt\w*|usta\s+usta|cpr|sztuczn\w*\s+oddych\w*|pocket\s+mask)\b/u';
 
     /**
+     * Osłona na brodę to odzież higieniczna, nie ochrona dróg oddechowych — KleenGuard A10 „Beard Covers”
+     * z opisem „podstawowej ochrony dróg oddechowych” i „jednorazowa” dostawała rodzinę z opisu i typ FFP.
+     */
+    private const BEARD_COVER = '/\b(beard\s*(cover|guard|net|snood|mask|protector)s?'
+        .'|(oslon|ochraniacz|nakryci|siatk|maseczk|mask)\w*\s+(na\s+)?brod(a|e|y|zie))\b/u';
+
+    /**
      * Rzeczowniki rodzin, które są też nazwami modeli pisanymi wersalikami: Bollé „WELLINGTON – Unisex okulary…”
      * i „COVERALL – Przezroczyste okulary ochronne” to okulary, a pierwsze słowo robiło z nich kalosz i kombinezon.
      * Taki wyraz ustępuje innemu rzeczownikowi rodziny w tekście; sam („KALOSZE WELLINGTON PVC”) dalej się liczy.
@@ -574,6 +581,13 @@ final class PpeAssortment
         // „Noszaki do aparatów ochrony dróg oddechowych” to część (03.10.2026: noszak dostał aparat ProPak z 95).
         $apparatusAt = $this->firstWordOffset(self::BREATHING_APPARATUS, $t);
         $partAt = $this->apparatusPart($t)['at'] ?? null;
+        // Aparat, do którego wyrób pasuje („Kompatybilność: wszystkie aparaty SCBA”, „pasowały do … aparatów SCBA”),
+        // to nie ten wyrób: przelotka Ansell AlphaTec „AVNT PASSTHRU WHSTL” była przez to aparatem.
+        if ($apparatusAt !== null
+            && preg_match(self::APPARATUS_AS_COUNTERPART, substr($t, 0, $apparatusAt)) === 1) {
+            $partAt = $partAt === null ? $apparatusAt : min($partAt, $apparatusAt);
+            $apparatusAt = null;
+        }
         $kitAt = $apparatusAt === null ? $partAt : ($partAt === null ? $apparatusAt : min($apparatusAt, $partAt));
         if ($kitAt !== null && ($filterAt === null || $kitAt < $filterAt) && ($maskAt === null || $kitAt < $maskAt)) {
             return $kitAt === $partAt ? 'apparatus_part' : 'apparatus';
@@ -604,6 +618,12 @@ final class PpeAssortment
     /** Kompletny aparat oddechowy (autonomiczny, powietrzny, ucieczkowy, ochrony dróg oddechowych, SCBA) — tekst po normalize(). */
     private const BREATHING_APPARATUS = '/\b(aparat\w*\s+(autonomiczn|powietrzn|oddechow|ucieczkow)|autonomiczn\w*\s+aparat'
         .'|aparat\w*\s+ochron\w*\s+(drog|ukladu)\w*\s+oddech|scba|breathing\s+apparatus)\w*/u';
+
+    /**
+     * Koniec tekstu przed wzmianką o aparacie, gdy aparat jest tym, do czego wyrób pasuje: „do (aparatów)”, „dla”,
+     * „kompatybilny / pasujący / compatible … (do 6 słów)”. Tekst po normalize().
+     */
+    private const APPARATUS_AS_COUNTERPART = '/\b(?:(?:do|dla)\s+(?:aparat\w*\s+)?|(?:kompatybil|pasuj|pasowa[cl]|compatib)\w*\s+(?:\w+\s+){0,6})$/u';
 
     /**
      * Części aparatu oddechowego według rodzaju: noszak ≠ butla ≠ reduktor. Stelaż, plecak i uprząż tylko
@@ -1501,7 +1521,7 @@ final class PpeAssortment
         }
 
         $identity = $this->productIdentityText($product);
-        if ($this->isResuscitationMask($identity, (string) ($product->description ?? ''))) {
+        if ($this->isResuscitationMask($identity, (string) ($product->description ?? '')) || $this->isBeardCover($identity)) {
             return null;
         }
         // Z opisu bez klas obuwia: „S1”, „SB” w prozie to klasa ogniowa, oznaczenie wariantu albo cudzy wyrób.
@@ -1557,6 +1577,12 @@ final class PpeAssortment
         }
 
         return preg_match(self::RESUSCITATION, $id.' '.$this->normalize($description)) === 1;
+    }
+
+    /** Tożsamość nazywa osłonę na brodę (BEARD_COVER) i żadnej rodziny ŚOI — „Półmaska z osłoną brody” zostaje półmaską. */
+    public function isBeardCover(string $identity): bool
+    {
+        return preg_match(self::BEARD_COVER, $this->normalize($identity)) === 1 && $this->family($identity) === null;
     }
 
     /**
@@ -1657,10 +1683,11 @@ final class PpeAssortment
         if ($reqFamily === null) {
             return true;
         }
-        // Mata z nazwy i maska do resuscytacji nie są żadnym ŚOI — pusta rodzina nie może ich przepuścić
-        // pod wymaganie z rodziną („Nauszniki”, „Półmaska FFP2”), jak przepuszcza karty bez opisu.
+        // Mata z nazwy, maska do resuscytacji i osłona na brodę nie są żadnym ŚOI — pusta rodzina nie może ich
+        // przepuścić pod wymaganie z rodziną („Nauszniki”, „Półmaska FFP2”), jak przepuszcza karty bez opisu.
         if ($this->namesFloorMat((string) $product->name)
-            || $this->isResuscitationMask($this->productIdentityText($product), (string) ($product->description ?? ''))) {
+            || $this->isResuscitationMask($this->productIdentityText($product), (string) ($product->description ?? ''))
+            || $this->isBeardCover($this->productIdentityText($product))) {
             return false;
         }
 

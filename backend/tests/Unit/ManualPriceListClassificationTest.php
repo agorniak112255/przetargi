@@ -174,6 +174,50 @@ final class ManualPriceListClassificationTest extends TestCase
         $this->assertFalse($this->assortment->isResuscitationMask('Półmaska filtrująca FFP2', 'Do apteczek i szkoleń z resuscytacji.'));
     }
 
+    /** Karta #8645 z produkcji (04.10.2026): zapisany typ „ffp”, rodzina z opisu „dróg oddechowych”. */
+    public function test_beard_cover_is_not_a_filtering_half_mask(): void
+    {
+        $beard = $this->card(
+            'KLNGD A10 Beard Covers XL',
+            '66816',
+            'KleenGuard A10 Light Duty Beard Cover to jednorazowa osłona brody przeznaczona do podstawowej ochrony przed '
+                .'szkodliwym pyłem oraz zanieczyszczeniami w miejscu pracy. Idealny do codziennego użytku w warunkach '
+                .'wymagających podstawowej ochrony dróg oddechowych i higieny osobistej.',
+            null,
+            ['kategoria_bhp' => 'inne', 'typ_wyrobu' => 'ffp'],
+            ['use_cases' => ['Przetwórstwo żywności', 'Ochrona przed pyłem i zanieczyszczeniami'], 'features' => ['Jednorazowa osłona brody w rozmiarze XL']],
+        );
+        $attrs = $this->normalizer->forProduct($beard);
+
+        $this->assertNull($attrs['typ_wyrobu']);
+        $this->assertSame('inne', $attrs['kategoria_bhp']);
+        $this->assertNull($beard->ppe_family);
+        $this->assertFalse($this->assortment->compatibleProduct('Półmaska filtrująca FFP2 z zaworem', $beard));
+        $this->assertTrue($this->assortment->isBeardCover('Osłona na brodę z polipropylenu, op. 100 szt.'));
+        // półmaska z osłoną brody zostaje półmaską
+        $this->assertFalse($this->assortment->isBeardCover('Półmaska FFP2 z osłoną brody'));
+    }
+
+    /** Karta #9045 z produkcji (04.10.2026): zapisany typ „apparatus”, a aparaty SCBA to tylko to, do czego przelotka pasuje. */
+    public function test_breathing_air_passthrough_compatible_with_scba_is_apparatus_part(): void
+    {
+        $passthrough = $this->card(
+            'AVNT PASSTHRU WHSTL NO CONNECT',
+            'AC01P-00022-00-N00',
+            'Węże przyłączeniowe AlphaTec™ Connection Hoses są odporne na ścieranie, antystatyczne i zapewniają dobrą '
+                .'odporność chemiczną. Oferują różne złącza/końcówki, aby pasowały do różnych marek i modeli aparatów SCBA.',
+            null,
+            ['kategoria_bhp' => 'drogi_oddechowe', 'typ_wyrobu' => 'apparatus'],
+            ['specs' => ['Typ: przepust powietrza (airline passthrough)', 'Kompatybilność: wszystkie aparaty SCBA', 'Normy: EN 943-1, EN 943-2']],
+        );
+
+        $this->assertSame('apparatus_part', $this->normalizer->forProduct($passthrough)['typ_wyrobu']);
+        $this->assertSame('apparatus_part', $this->assortment->articleType('Węże przyłączeniowe pasujące do aparatów SCBA', PpeAssortment::FAMILY_RESPIRATORY));
+        $this->assertSame('apparatus_part', $this->assortment->articleType('Wąż sprężonego powietrza do aparatów powietrznych', PpeAssortment::FAMILY_RESPIRATORY));
+        // aparat nazwany pierwszy zostaje aparatem, choćby dalej był „kompatybilny z” maskami
+        $this->assertSame('apparatus', $this->assortment->articleType('Aparat powietrzny butlowy kompatybilny z maskami pełnotwarzowymi', PpeAssortment::FAMILY_RESPIRATORY));
+    }
+
     public function test_chemical_glove_for_pharmaceutical_industry_is_not_agriculture(): void
     {
         $glove = $this->card(
