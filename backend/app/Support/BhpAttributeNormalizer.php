@@ -318,9 +318,11 @@ final class BhpAttributeNormalizer
         // Mata z nazwy, maska do resuscytacji i osłona na brodę nie są ŚOI żadnej rodziny — model wpisywał im
         // „drogi_oddechowe” (CEDERROTH 26604 „Maska oddechowa”, opis „resuscytacja usta-usta”) albo obuwie
         // z „czyszczenia obuwia”, a opis osłony brody KleenGuard A10 („ochrona dróg oddechowych”) dawał typ FFP.
+        // Znak BHP też: „Stosuj aparat oddechowy” to oznakowanie, a dostawał typ „apparatus” z przedmiotu na znaku.
         $outsidePpe = $assortment->namesFloorMat((string) ($context['name'] ?? ''))
             || $assortment->isResuscitationMask($identity, (string) ($context['description'] ?? ''))
-            || $assortment->isBeardCover($identity);
+            || $assortment->isBeardCover($identity)
+            || $assortment->namesSafetySign((string) ($context['name'] ?? ''));
 
         // Poza tym kategoria od modelu zostaje pierwsza: rzeczownik z nazwy przed nią psuł więcej, niż naprawiał
         // („Shoe cover”, „Low softshell footwear” — przegląd ręcznych cenników 22.09). Bez niej tożsamość, a na końcu
@@ -504,7 +506,9 @@ final class BhpAttributeNormalizer
         // tym wyrobem — bez typu, zamiast typu wziętego z przedmiotu w nazwie albo z opisu (PpeAssortment).
         $eyeFaceAccessory = in_array($family, [PpeAssortment::FAMILY_EYES, PpeAssortment::FAMILY_FACE], true)
             && $assortment->namesEyeFaceAccessory($name);
-        $out['typ_wyrobu'] = $outsidePpe || $eyeFaceAccessory ? null : (
+        // Tak samo akcesorium sprzętu oddechowego (pas, torba, etui, uchwyt — PpeAssortment::namesRespiratoryAccessory).
+        $respiratoryAccessory = $family === PpeAssortment::FAMILY_RESPIRATORY && $assortment->namesRespiratoryAccessory($name);
+        $out['typ_wyrobu'] = $outsidePpe || $eyeFaceAccessory || $respiratoryAccessory ? null : (
             $assortment->articleType($nameSku, $family)
             ?? $assortment->articleType($identity, $family)
             ?? $assortment->articleType($typeBlob, $family)

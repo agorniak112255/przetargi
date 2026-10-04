@@ -218,6 +218,128 @@ final class ManualPriceListClassificationTest extends TestCase
         $this->assertSame('apparatus', $this->assortment->articleType('Aparat powietrzny butlowy kompatybilny z maskami pełnotwarzowymi', PpeAssortment::FAMILY_RESPIRATORY));
     }
 
+    /** Karty z backfillu 04.10.2026: akcesorium aparatu, półmaski albo systemu z wymuszonym przepływem dostawało typ wyrobu, do którego pasuje. */
+    public function test_respiratory_accessories_have_no_article_type(): void
+    {
+        $msaPart = 'Aparaty oddechowe na sprężone powietrze > Części i akcesoria do aparatów oddechowych';
+        $scbaText = 'MSA SCBA Accessories support and enhance the protection grade of your equipment, increase your comfort.';
+        $cards = [
+            // #66404
+            [$this->card('Wężowe aparaty powietrzne – Skórzany pasek biodrowy', 'D3043918',
+                'Wężowe aparaty oddechowe sprężonego powietrza są niezależne od otaczającej atmosfery.'),
+                'Aparaty oddechowe na sprężone powietrze > Wężowe aparaty oddechowe na sprężone powietrze'],
+            // #66439
+            [$this->card('SCBA Accessories – Halte-Fix AE/ESA/N alpha B, Demand Valve Holder for SCBA, accessory', '10078512', $scbaText), $msaPart],
+            // #66447
+            [$this->card('SCBA Accessories – RFID holder for steel cylinders, Ø 26-30 mm, pack of 10', '10146101', $scbaText), $msaPart],
+            // #67507
+            [$this->card('Torba dla Grupy Szybkiego Reagowania – Torba, wersja SL-Q', '10104598',
+                'Torba jest noszona przez strażaka i dostarcza powietrze osobom poszkodowanym. Jest zaopatrzona w system '
+                    .'pneumatyczny, który jest podłączony do butli.'), $msaPart],
+            // #66613
+            [$this->card('SingleLine SCOUT Integrated Monitoring Unit – SLS RFID Kit', '10189001',
+                'Podłączenie urządzenia do aparatu oddechowego strażackiego jest bardzo łatwe.'),
+                'Aparaty oddechowe na sprężone powietrze > Systemy monitorujące'],
+            // #66222
+            [$this->card('SavOx – Pouch antistatic SavOx Industr(p. of 3)', '10120086',
+                'SavOx jest zapakowany próżniowo, w nierdzewny i stalowy pojemnik.'),
+                'Aparaty oddechowe na sprężone powietrze > Urządzenia ucieczkowe z masą tlenotwórczą'],
+            // #40372
+            [$this->card('3M™ Łatwoczyszczący pas, TR-627', '7100222674',
+                'Pasy i zespoły pasów do systemów z wymuszonym przepływem powietrza 3M™. Projektanci zadbali o to, aby aparat '
+                    .'można było wygodnie nosić przez cały dzień, korzystając z aparatu oddechowego.'), 'Ochrona układu oddechowego'],
+            // #40414
+            [$this->card('Etui do przechowywania 3M™ PV-938 systemu z wymuszonym przepływem powietrza PV-300E, 1 szt./opakowanie', '7100265303',
+                'Torby, futerały i woreczki do przechowywania systemów z wymuszonym przepływem powietrza 3M™ to wygodne '
+                    .'rozwiązanie do przechowywania i transportu aparatów oddechowych z wymuszonym przepływem powietrza.'), ''],
+            // #260 — dawniej „fullface”
+            [$this->card('Walizka transportowa 3M™ 108, po 2 sztuki na walizkę', '108',
+                'Walizka transportowa 3M™ 108 to praktyczne etui przeznaczone do bezpiecznego przechowywania i przenoszenia '
+                    .'wielorazowych masek oddechowych 3M, w tym półmasek i masek pełnotwarzowych.'), 'Środki ochrony indywidualnej'],
+            // #175 — dawniej „ffp”
+            [$this->card('Pokrywa zaworu wydechowego', 'S5621220',
+                'Pokrywa zaworu wydechowego to element konstrukcyjny przeznaczony do półmasek ochronnych Secura 3000.', null,
+                ['kategoria_bhp' => 'drogi_oddechowe'], ['use_cases' => ['Wymiana elementu w półmaskach przeciwpyłowych']]), ''],
+            // #40978 — dawniej „ffp”
+            [$this->card('Roztwór do testowania dopasowania 3M™, słodki, 55 ml, FT-12', '7100335089',
+                'Produktów można używać do sprawdzania szczelności między twarzą a maską na dowolnej jednorazowej masce lub '
+                    .'półmasce, w ramach programu ochrony dróg oddechowych.', null, ['kategoria_bhp' => 'drogi_oddechowe']), ''],
+        ];
+        foreach ($cards as [$card, $category]) {
+            $card->setAttribute('category', $category);
+            $this->assertNull($this->normalizer->forProduct($card)['typ_wyrobu'], (string) $card->name);
+        }
+
+        // akcesorium jako wyposażenie kompletu nie robi z kompletu akcesorium
+        $this->assertFalse($this->assortment->namesRespiratoryAccessory('Aparat powietrzny AirMaXX z pasem biodrowym i torbą'));
+        $this->assertFalse($this->assortment->namesRespiratoryAccessory('Noszak aparatu z pasem biodrowym'));
+        $this->assertFalse($this->assortment->namesRespiratoryAccessory('Półmaska 3M 7502 w etui'));
+        $this->assertTrue($this->assortment->namesRespiratoryAccessory('Pas biodrowy do aparatu powietrznego'));
+        $this->assertTrue($this->assortment->namesRespiratoryAccessory('Adapter do ilościowych testów dopasowania 3M™ Secure Click™, FF-800-06'));
+        // linia akcesoriów (#67253, #67244): bateria i ładowarka OptimAir dostawały „fullface” z opisu
+        $battery = $this->card('OptimAir® 3000 Accessories – OptiBat E, OptimAir 3000, long duration battery', '10022473',
+            'Akumulator do aparatu oczyszczającego OptimAir 3000 z maską pełnotwarzową 3S.', null, ['kategoria_bhp' => 'drogi_oddechowe']);
+        $this->assertNull($this->normalizer->forProduct($battery)['typ_wyrobu']);
+        // …ale maska sprzedawana w linii akcesoriów zostaje maską; maska „do” której część pasuje — nie (#59678)
+        $this->assertFalse($this->assortment->namesRespiratoryAccessory('3S Accessories – 3S maska pełnotwarzowa, EPDM'));
+        $this->assertTrue($this->assortment->namesRespiratoryAccessory('Opti-Fit Accessories 1715070 – OPTIFIT i PANORAMASQUE: Klaps do maski wewnętrznej'));
+        $this->assertTrue($this->assortment->namesRespiratoryAccessory('SCBA Accessories – Rescue Handle for SCBA, Pack Of 4, accessory'));
+        $this->assertTrue($this->assortment->namesRespiratoryAccessory('Nebulizator 3M™, FT-13'));
+        $apparatus = $this->card('Aparat powietrzny AirMaXX z pasem biodrowym', 'AMX-1', 'Butlowy aparat powietrzny z noszakiem.',
+            null, ['kategoria_bhp' => 'drogi_oddechowe']);
+        $this->assertSame('apparatus', $this->normalizer->forProduct($apparatus)['typ_wyrobu']);
+    }
+
+    /** #14315 i #14357 z produkcji: znak BHP to oznakowanie, a nie aparat czy maska z rysunku. */
+    public function test_safety_sign_is_outside_ppe(): void
+    {
+        foreach ([
+            ['Znak BHP Stosuj aparat oddechowy 200x300mm F (M047/1)', 'IM/047/1/C1/F',
+                'Znak BHP Stosuj aparat oddechowy to tablica informacyjna stosowana w miejscach, gdzie istnieje ryzyko '
+                    .'wystąpienia niebezpiecznych substancji w powietrzu.'],
+            ['Znak BHP Stosuj maskę przeciwpyłową 200x300mm P (M016/1)', 'IM/016/1/C1/P',
+                'Tablica informacyjna stosowana w miejscach, gdzie występuje wysokie stężenie pyłu, mająca na celu ochronę '
+                    .'dróg oddechowych pracowników.'],
+        ] as [$name, $sku, $description]) {
+            $sign = $this->card($name, $sku, $description, null, ['kategoria_bhp' => 'drogi_oddechowe']);
+            $sign->setAttribute('category', '03/WGK - BHP');
+            $attrs = $this->normalizer->forProduct($sign);
+
+            $this->assertNull($attrs['typ_wyrobu'], $name);
+            $this->assertSame('inne', $attrs['kategoria_bhp'], $name);
+        }
+        $this->assertTrue($this->assortment->namesSafetySign('TABLICA MATERIAŁY TOKSY. CHROŃ DROGI oddechowe'));
+        $this->assertTrue($this->assortment->namesSafetySign('Naklejka – znak bezpieczeństwa Uwaga pies'));
+        // #18069: arkusz naklejek z kodem przed nazwą, bez słowa „znak”
+        $this->assertTrue($this->assortment->namesSafetySign('GJ016 Nakaz stosowania maski przeciwpyłowej - arkusz 12 naklejek'));
+        $this->assertFalse($this->assortment->namesSafetySign('Półmaska 3M 6200 ze znakiem CE'));
+    }
+
+    /** #64633 i #59403 z produkcji: przymiotnik „filtrujący / jednorazowy” bez maski to nie FFP. */
+    public function test_filtering_adjective_without_mask_noun_is_not_ffp(): void
+    {
+        // kategoria MSA „Sprzęt filtrujący (APR) > Półmaski” przy półmasce wielokrotnego użytku
+        $advantage = $this->card('Advantage® 200 LS – Advantage 200 LS, mały', '430357',
+            'O respirador semifacial Advantage 200LS foi desenvolvido para oferecer a melhor combinação entre maciez e ajuste.',
+            null, ['kategoria_bhp' => 'drogi_oddechowe']);
+        $advantage->setAttribute('category', 'Sprzęt filtrujący (APR) > Półmaski');
+        $this->assertSame('reusable_half', $this->normalizer->forProduct($advantage)['typ_wyrobu']);
+
+        // „jednorazowy wizjer” hełmu do śrutowania z doprowadzeniem powietrza
+        $helmet = $this->card('Commander A133230-00 – COMMANDER: Hełm do śrutowania', 'A133230-00',
+            'Rozwiązanie zapewniające bezpieczeństwo i komfort podczas śrutowania • przepływomierz: ze wskaźnikiem '
+                .'zwiększającym bezpieczeństwo. • jednorazowy wizjer: chroniący główny wizjer. Norma EN 14594',
+            null, ['kategoria_bhp' => 'drogi_oddechowe']);
+        $helmet->setAttribute('category', 'Respiratory › Supplied Air Respirators (Sar)');
+        $this->assertNotSame('ffp', $this->normalizer->forProduct($helmet)['typ_wyrobu']);
+
+        $respiratory = PpeAssortment::FAMILY_RESPIRATORY;
+        $this->assertSame('ffp', $this->assortment->articleType('Półmaska filtrująca FFP2 z zaworem', $respiratory));
+        $this->assertSame('ffp', $this->assortment->articleType('Maska przeciwpyłowa jednorazowa', $respiratory));
+        $this->assertSame('ffp', $this->assortment->articleType('Jednorazowa półmaska 3M 8710', $respiratory));
+        $this->assertSame('ffp', $this->assortment->articleType('Półmaski filtrujące jednorazowego użytku', $respiratory));
+    }
+
     public function test_chemical_glove_for_pharmaceutical_industry_is_not_agriculture(): void
     {
         $glove = $this->card(

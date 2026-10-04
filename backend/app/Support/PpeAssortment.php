@@ -244,6 +244,14 @@ final class PpeAssortment
         .'|(oslon|ochraniacz|nakryci|siatk|maseczk|mask)\w*\s+(na\s+)?brod(a|e|y|zie))\b/u';
 
     /**
+     * Znak / tablica BHP to oznakowanie, nie środek ochrony — „Znak BHP Stosuj aparat oddechowy” dostawał typ
+     * „apparatus”, a „Stosuj maskę przeciwpyłową” typ „ffp” z przedmiotu na znaku. Nazwa po normalize().
+     */
+    private const SAFETY_SIGN_NAME = '/^\s*(znak|znaki|tablica|tablice|tabliczka)\b'
+        .'|\bznak\w*\s+(bhp|bezpieczenstw|ewakuac|ppoz|przeciwpoz|ostrzegawcz|nakazu|zakazu|informac)'
+        .'|\b(nakaz|zakaz)\w*\s+(stosowania|uzywania|noszenia)|\barkusz\w*\s+\d+\s+naklejek/u';
+
+    /**
      * Rzeczowniki rodzin, które są też nazwami modeli pisanymi wersalikami: Bollé „WELLINGTON – Unisex okulary…”
      * i „COVERALL – Przezroczyste okulary ochronne” to okulary, a pierwsze słowo robiło z nich kalosz i kombinezon.
      * Taki wyraz ustępuje innemu rzeczownikowi rodziny w tekście; sam („KALOSZE WELLINGTON PVC”) dalej się liczy.
@@ -602,7 +610,14 @@ final class PpeAssortment
         if (preg_match('/\b(pelnotwarz|full\s*face)\w*/u', $t) === 1) {
             return 'fullface';
         }
-        if (preg_match('/\b(ffp[123]?|jednorazow|przeciwpyl|filtrujac)\w*/u', $t) === 1) {
+        // „Jednorazowa / przeciwpyłowa / filtrująca” to FFP tylko przy rzeczowniku maski: sama kategoria „Sprzęt
+        // filtrujący (APR) > Półmaski” robiła FFP z półmaski wielokrotnego użytku MSA Advantage 200 LS, a opis
+        // hełmu do śrutowania Honeywell COMMANDER czy roztworu do testu dopasowania 3M FT-12 — z samego przymiotnika.
+        if (preg_match(
+            '/\bffp[123]?\w*|\b(polmask|mask|maseczk|respirator)\w*\s+(\w+\s+){0,2}?(jednorazow|przeciwpyl|filtrujac)'
+            .'|\b(jednorazow|przeciwpyl|filtrujac)\w*\s+(polmask|mask|maseczk|respirator)/u',
+            $t
+        ) === 1) {
             return 'ffp';
         }
         if (preg_match('/\b(polmask|czesci?\s+twarzow|elastomer|silikon)\w*/u', $t) === 1) {
@@ -669,6 +684,54 @@ final class PpeAssortment
         $have = $this->apparatusPart($this->normalize($productText))['kind'] ?? null;
 
         return $need !== null && $have !== null && $need !== $have;
+    }
+
+    /**
+     * Akcesorium sprzętu oddechowego po rzeczowniku z nazwy: pas, torba, etui, uchwyt, walizka, roztwór do testu
+     * dopasowania. Przedmiot, do którego pasuje (aparat, półmaska, system z wymuszonym przepływem), nie jest tym
+     * wyrobem. Tekst po normalize().
+     */
+    private const RESPIRATORY_ACCESSORY = '/\b(pas|pasy|pasa|pasem|pasek|paska|paski|torb\w*|etui|pudelk\w*|walizk\w*'
+        .'|futeral\w*|pokrowi\w*|woreczek|woreczk\w*|saszetk\w*|skrzyn\w*|uchwyt\w*|wieszak\w*|roztwor\w*|nebulizator\w*|pokryw\w*|adapter\w*'
+        .'|akcesori\w*|belts?|bags?|cases?|pouch\w*|holders?|brackets?|box|boxes|rfid|accessor\w*)\b/u';
+
+    /** Rzeczowniki tego, czym wyrób oddechowy bywa — akcesorium liczy się tylko przed nimi. Tekst po normalize(). */
+    private const RESPIRATORY_ARTICLE_NOUN = '/\b(polmask|mask|maseczk|ffp|pelnotwarz|respirator|kaptur|helm|przylbic'
+        .'|pochlaniacz|filtropochlaniacz|filtr)\w*/u';
+
+    /**
+     * Nazwa akcesorium sprzętu oddechowego: rzeczownik akcesorium (RESPIRATORY_ACCESSORY) stoi przed aparatem, jego
+     * częścią, maską i filtrem. Liczy się człon po ostatnim „ – ”: MSA nazywa karty „Linia – Wyrób” („Wężowe aparaty
+     * powietrzne – Skórzany pasek biodrowy”, „SCBA Accessories – RFID holder for steel cylinders”). Akcesorium po
+     * „z / w / i / with” to wyposażenie kompletu („Aparat … z pasem biodrowym”), nie wyrób. Z samego tekstu o aparacie
+     * pas TR-627, torba SL-Q i etui 3M dostawały typ „apparatus”, walizka 3M 108 „fullface”, a pokrywa zaworu „ffp”.
+     * Linia nazwana akcesoriami („OptimAir® 3000 Accessories – OptiBat E…”) mówi to samo, o ile człon wyrobu nie
+     * nazywa maski, filtra, aparatu ani jego części — bateria i ładowarka OptimAir dostawały „fullface” z opisu.
+     * Przedmiot po „do / dla / na / for” to to, do czego akcesorium pasuje („Klaps do maski wewnętrznej”, „Rescue
+     * Handle for SCBA, accessory”), więc z rzeczownikiem akcesorium nie konkuruje.
+     */
+    public function namesRespiratoryAccessory(string $name): bool
+    {
+        $segments = preg_split('/\s[–—]\s/u', $name) ?: [$name];
+        $item = $this->normalize((string) array_pop($segments));
+        $namesArticle = static function (string $t): bool {
+            $t = (string) preg_replace('/\b(do|dla|na|for)\s+\w+/u', ' ', $t);
+            foreach ([self::BREATHING_APPARATUS, self::RESPIRATORY_ARTICLE_NOUN, ...array_values(self::APPARATUS_PARTS)] as $pattern) {
+                if (preg_match($pattern, $t) === 1) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+        if (preg_match(self::RESPIRATORY_ACCESSORY, $item, $m, PREG_OFFSET_CAPTURE) !== 1) {
+            $accessoriesLine = preg_match('/\b(akcesori|accessor)\w*/u', $this->normalize(implode(' ', $segments))) === 1;
+
+            return $accessoriesLine && ! $namesArticle($item);
+        }
+        $before = substr($item, 0, (int) $m[0][1]);
+
+        return preg_match('/\b(z|ze|w|we|i|oraz|with|in|and|plus)\s+$/u', $before) !== 1 && ! $namesArticle($before);
     }
 
     private function gloveType(string $t): ?string
@@ -1583,6 +1646,12 @@ final class PpeAssortment
     public function isBeardCover(string $identity): bool
     {
         return preg_match(self::BEARD_COVER, $this->normalize($identity)) === 1 && $this->family($identity) === null;
+    }
+
+    /** Nazwa karty nazywa znak albo tablicę BHP (SAFETY_SIGN_NAME) — wyrób spoza ŚOI, choćby przedstawiał maskę czy aparat. */
+    public function namesSafetySign(string $name): bool
+    {
+        return preg_match(self::SAFETY_SIGN_NAME, $this->normalize($name)) === 1;
     }
 
     /**
