@@ -693,7 +693,14 @@ final class PpeAssortment
      */
     private const RESPIRATORY_ACCESSORY = '/\b(pas|pasy|pasa|pasem|pasek|paska|paski|torb\w*|etui|pudelk\w*|walizk\w*'
         .'|futeral\w*|pokrowi\w*|woreczek|woreczk\w*|saszetk\w*|skrzyn\w*|uchwyt\w*|wieszak\w*|roztwor\w*|nebulizator\w*|pokryw\w*|adapter\w*'
-        .'|akcesori\w*|belts?|bags?|cases?|pouch\w*|holders?|brackets?|box|boxes|rfid|accessor\w*)\b/u';
+        // „Box of 10”, „Pack of 20” to opakowanie wyrobu (SpringFit FFP3 - Box of 10), nie akcesorium
+        .'|akcesori\w*|belts?|bags?|cases?|pouch\w*|holders?|brackets?|box|boxes|wallbox\w*|covers?|rfid|accessor\w*)\b(?!\s+of\b)/u';
+
+    /**
+     * Angielski rzeczownik akcesorium stoi na końcu frazy: „SCBA Cylinder Cover”, „SCBA wall box”, „Demand Valve Holder”
+     * — aparat czy butla przed nim to przydawka, nie wyrób.
+     */
+    private const RESPIRATORY_ACCESSORY_EN = '/^(belts?|bags?|cases?|pouch\w*|holders?|brackets?|box|boxes|wallbox\w*|covers?|rfid|accessor\w*)$/u';
 
     /** Rzeczowniki tego, czym wyrób oddechowy bywa — akcesorium liczy się tylko przed nimi. Tekst po normalize(). */
     private const RESPIRATORY_ARTICLE_NOUN = '/\b(polmask|mask|maseczk|ffp|pelnotwarz|respirator|kaptur|helm|przylbic'
@@ -712,7 +719,7 @@ final class PpeAssortment
      */
     public function namesRespiratoryAccessory(string $name): bool
     {
-        $segments = preg_split('/\s[–—]\s/u', $name) ?: [$name];
+        $segments = $this->nameSegments($name);
         $item = $this->normalize((string) array_pop($segments));
         $namesArticle = static function (string $t): bool {
             $t = (string) preg_replace('/\b(do|dla|na|for)\s+\w+/u', ' ', $t);
@@ -730,8 +737,56 @@ final class PpeAssortment
             return $accessoriesLine && ! $namesArticle($item);
         }
         $before = substr($item, 0, (int) $m[0][1]);
+        if (preg_match('/\b(z|ze|w|we|i|oraz|with|in|and|plus)\s+$/u', $before) === 1) {
+            return false;
+        }
 
-        return preg_match('/\b(z|ze|w|we|i|oraz|with|in|and|plus)\s+$/u', $before) !== 1 && ! $namesArticle($before);
+        return preg_match(self::RESPIRATORY_ACCESSORY_EN, $m[0][0]) === 1 || ! $namesArticle($before);
+    }
+
+    /** @return non-empty-list<string> Człony nazwy rozdzielone „ – ” / „ — ” (MSA, Honeywell: „Linia – Wyrób”). */
+    private function nameSegments(string $name): array
+    {
+        $segments = preg_split('/\s[–—]\s/u', $name);
+
+        return $segments === false || $segments === [] ? [$name] : $segments;
+    }
+
+    /** Człon wyrobu z nazwy „Linia – Wyrób” (po ostatnim „ – ”); null, gdy nazwa nie ma członu linii. */
+    public function lineItem(string $name): ?string
+    {
+        $segments = $this->nameSegments($name);
+
+        return count($segments) > 1 ? trim((string) end($segments)) : null;
+    }
+
+    /**
+     * Typ dróg oddechowych karty „Linia – Wyrób”: najpierw z członu wyrobu, potem z liścia ścieżki kategorii, na końcu
+     * typ z całej karty. Nazwa linii („Wężowe aparaty powietrzne”, „AutoMaXX”), dział ścieżki („Aparaty oddechowe na
+     * sprężone powietrze > …”) i opis linii mówią o aparacie, a nie o tym wyrobie — reduktor, wąż, automat oddechowy,
+     * oprogramowanie alphaCONTROL czy moduł motionSCOUT dostawały przez nie „apparatus”. Aparat spoza członu wyrobu
+     * robi więc z karty część aparatu, chyba że liść ścieżki to urządzenia ucieczkowe (SSR 90, SavOx, PremAire Escape
+     * są kompletnymi urządzeniami nazwanymi samym modelem). Goła „półmaska” w członie wyrobu nie przebija FFP z całej
+     * karty: „5185 FFP1 NR D … – 5185 - Półmaska bez zaworu” to półmaska filtrująca.
+     */
+    public function respiratoryLineItemType(string $item, string $sku, string $category, ?string $wholeCardType): ?string
+    {
+        $path = preg_split('/\s*[>›]\s*/u', trim($category)) ?: [];
+        $leaf = trim((string) end($path));
+        $itemText = trim($item.' '.$sku);
+        $type = $this->articleType($itemText, self::FAMILY_RESPIRATORY)
+            ?? ($leaf === '' ? null : $this->articleType($leaf, self::FAMILY_RESPIRATORY))
+            ?? $wholeCardType;
+        if ($type === 'reusable_half' && $wholeCardType === 'ffp' && ! $this->showsReusableHalfMask($this->normalize($itemText))) {
+            return 'ffp';
+        }
+        if ($type === 'apparatus'
+            && $this->firstWordOffset(self::BREATHING_APPARATUS, $this->normalize($item)) === null
+            && preg_match('/\burzadzen\w*\s+ucieczkow/u', $this->normalize($leaf)) !== 1) {
+            return 'apparatus_part';
+        }
+
+        return $type;
     }
 
     private function gloveType(string $t): ?string

@@ -290,6 +290,58 @@ final class ManualPriceListClassificationTest extends TestCase
         $this->assertSame('apparatus', $this->normalizer->forProduct($apparatus)['typ_wyrobu']);
     }
 
+    /**
+     * Karty MSA i Honeywell „Linia – Wyrób” z produkcji (04.10.2026): nazwa linii, dział ścieżki kategorii i opis linii
+     * mówią o aparacie, a typ ma wynikać z członu wyrobu i liścia ścieżki.
+     */
+    public function test_line_named_respiratory_cards_take_type_from_item(): void
+    {
+        $hoseLine = 'Aparaty oddechowe na sprężone powietrze > Wężowe aparaty oddechowe na sprężone powietrze';
+        $hoseText = 'Wężowe aparaty oddechowe sprężonego powietrza są niezależne od otaczającej atmosfery.';
+        $parts = 'Aparaty oddechowe na sprężone powietrze > Części i akcesoria do aparatów oddechowych';
+        $cases = [
+            // #66378, #66407, #66395 — część linii wężowej
+            ['Wężowe aparaty powietrzne – Reduktor ciśnienia', 'D4075911', $hoseText, $hoseLine, 'apparatus_part'],
+            ['Wężowe aparaty powietrzne – Wąż sprężonego powietrza,10 m', 'D4075914', $hoseText, $hoseLine, 'apparatus_part'],
+            ['Wężowe aparaty powietrzne – Automatyczny zawór przełączający', 'D4075940', $hoseText, $hoseLine, 'apparatus_part'],
+            // #66373 — wkład oczyszczający to filtr
+            ['Wężowe aparaty powietrzne – Wkład oczyszczający AB/St węża powietrza', 'D4075915', $hoseText, $hoseLine, 'filter'],
+            // #66166 — automat oddechowy z linii AutoMaXX, liść „Części i akcesoria do aparatów”
+            ['AutoMaXX – AutoMaXX-AS', '10023866', 'Automat oddechowy AutoMaXX do aparatów powietrznych MSA.', $parts, 'apparatus_part'],
+            // #66272 — oprogramowanie, liść bez typu, aparat tylko w dziale ścieżki i opisie
+            ['MSA A2 Software – alphaCONTROL 2 - Oprogramowanie', '10111111', 'Oprogramowanie do aparatów oddechowych MSA.',
+                'Aparaty oddechowe na sprężone powietrze > A2 Software', 'apparatus_part'],
+            // #59959 — człon wyrobu nazywa maskę pełnotwarzową
+            ['Fenzy Aeris Mini Self Contained Breathing Apparatus 1728753 – PANO Rd40 CL2: Pełnotwarzowa maska', '1728753',
+                'Aparat oddechowy Fenzy Aeris Mini.', 'Respiratory › Self Contained Breathing Apparatus (Scba)', 'fullface'],
+            // #67554 — urządzenie ucieczkowe nazwane samym modelem zostaje aparatem
+            ['SSR 90 (K 60) – SSR 90 (K 60)', '10011111', 'Aparat ucieczkowy z masą tlenotwórczą, czas ochrony 60 minut.',
+                'Aparaty oddechowe na sprężone powietrze > Urządzenia ucieczkowe z masą tlenotwórczą', 'apparatus'],
+            // #58722 — aparat w członie wyrobu
+            ['Airvisor 2 MV 1013935 – AIRVISOR II: Aparat oddechowy zasilany sprężonym powietrzem z linii', '1013935',
+                'Aparat oddechowy zasilany sprężonym powietrzem.', 'Respiratory › Supplied Air Respirators (Sar)', 'apparatus'],
+            // #58634 — goła „półmaska” w członie wyrobu nie przebija FFP1 z prefiksu
+            ['5185 FFP1 NR D (SELF-SERVICE PPE) 1030343 – 5185 - Półmaska bez zaworu: opakowanie 20 szt.', '1030343',
+                'Półmaska filtrująca FFP1 NR D.', 'Respiratory › Disposable Respirators', 'ffp'],
+            // #64633 — liść ścieżki „Półmaski”
+            ['Advantage® 200 LS – Advantage 200 LS, mały', '430357', 'O respirador semifacial Advantage 200LS.',
+                'Sprzęt filtrujący (APR) > Półmaski', 'reusable_half'],
+            // #67471, #67534 — angielski rzeczownik akcesorium na końcu frazy
+            ['Storage and Transportation – SCBA wall box Type A', '10040000', 'Skrzynka ścienna na aparat SCBA.', $parts, null],
+            ['Osłona na butle sprężone powietrze – SCBA Cylinder Cover Basic, 6-6.9l, Black', '10150000',
+                'Osłona butli aparatu.', $parts, null],
+        ];
+        foreach ($cases as [$name, $sku, $description, $category, $expected]) {
+            $card = $this->card($name, $sku, $description, null, ['kategoria_bhp' => 'drogi_oddechowe']);
+            $card->setAttribute('category', $category);
+            $this->assertSame($expected, $this->normalizer->forProduct($card)['typ_wyrobu'], $name);
+        }
+
+        // „Box of 10” to opakowanie (#19420), nie akcesorium
+        $this->assertFalse($this->assortment->namesRespiratoryAccessory('SpringFit™ FFP3 431ML - Box of 10 - Individually Wrapped'));
+        $this->assertTrue($this->assortment->namesRespiratoryAccessory('Half Mask Storage Bag Portwest B940'));
+    }
+
     /** #14315 i #14357 z produkcji: znak BHP to oznakowanie, a nie aparat czy maska z rysunku. */
     public function test_safety_sign_is_outside_ppe(): void
     {

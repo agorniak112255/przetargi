@@ -508,11 +508,16 @@ final class BhpAttributeNormalizer
             && $assortment->namesEyeFaceAccessory($name);
         // Tak samo akcesorium sprzętu oddechowego (pas, torba, etui, uchwyt — PpeAssortment::namesRespiratoryAccessory).
         $respiratoryAccessory = $family === PpeAssortment::FAMILY_RESPIRATORY && $assortment->namesRespiratoryAccessory($name);
-        $out['typ_wyrobu'] = $outsidePpe || $eyeFaceAccessory || $respiratoryAccessory ? null : (
+        $type = $outsidePpe || $eyeFaceAccessory || $respiratoryAccessory ? null : (
             $assortment->articleType($nameSku, $family)
             ?? $assortment->articleType($identity, $family)
             ?? $assortment->articleType($typeBlob, $family)
         );
+        // Karta oddechowa „Linia – Wyrób” (MSA, Honeywell): typ z członu wyrobu i liścia ścieżki kategorii, nie z linii.
+        $lineItem = $family === PpeAssortment::FAMILY_RESPIRATORY ? $assortment->lineItem($name) : null;
+        $out['typ_wyrobu'] = $outsidePpe || $eyeFaceAccessory || $respiratoryAccessory || $lineItem === null
+            ? $type
+            : $assortment->respiratoryLineItemType($lineItem, $sku, (string) ($context['category'] ?? ''), $type);
         // Zapisanego `przeznaczenie` nie czytamy dla żadnej rodziny: model go nie zwraca (nie ma go w schemacie
         // odpowiedzi), więc w payloadzie leży nasze dawne wyliczenie — „electric” przy butach antystatycznych czy
         // „agriculture” z „farmaceutycznego” przyklejały się na zawsze, także po poprawce reguły (odrzucane
