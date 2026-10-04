@@ -324,6 +324,7 @@ final class BhpAttributeNormalizer
             || $assortment->isResuscitationMask($identity, (string) ($context['description'] ?? ''))
             || $assortment->isBeardCover($identity)
             || $assortment->namesSafetySign((string) ($context['name'] ?? ''))
+            || $assortment->isSafetySignCategory((string) ($context['category'] ?? ''))
             || $assortment->namesGasDevice((string) ($context['name'] ?? ''));
 
         // Poza tym kategoria od modelu zostaje pierwsza: rzeczownik z nazwy przed nią psuł więcej, niż naprawiał
@@ -513,10 +514,13 @@ final class BhpAttributeNormalizer
             && $assortment->namesEyeFaceAccessory($name);
         // Tak samo akcesorium sprzętu oddechowego (pas, torba, etui, uchwyt — PpeAssortment::namesRespiratoryAccessory).
         $respiratoryAccessory = $family === PpeAssortment::FAMILY_RESPIRATORY && $assortment->namesRespiratoryAccessory($name);
+        // PAPR tylko z nazwy: opis i tabelka 3M („Rodzaj produktu: zestaw systemu z wymuszonym przepływem…”) stoją też przy
+        // wskaźnikach przepływu, osłonach i ładowarkach do systemu.
+        $fromText = $assortment->articleType($typeBlob, $family);
         $type = $outsidePpe || $eyeFaceAccessory || $respiratoryAccessory ? null : (
             $assortment->articleType($nameSku, $family)
             ?? $assortment->articleType($identity, $family)
-            ?? $assortment->articleType($typeBlob, $family)
+            ?? ($fromText === 'papr' ? null : $fromText)
         );
         // Karta oddechowa „Linia – Wyrób” (MSA, Honeywell): typ z członu wyrobu i liścia ścieżki kategorii, nie z linii.
         $lineItem = $family === PpeAssortment::FAMILY_RESPIRATORY ? $assortment->lineItem($name) : null;

@@ -386,6 +386,56 @@ final class ManualPriceListClassificationTest extends TestCase
         $this->assertSame('S3L', $attrs['klasa_ochrony']);
     }
 
+    /** Części 3M Scott i Versaflo bez „Linia – Wyrób” (produkcja 04.10.2026): aparat po rzeczowniku części to aparat, do którego część należy. */
+    public function test_3m_scott_parts_and_papr_systems(): void
+    {
+        $respiratory = PpeAssortment::FAMILY_RESPIRATORY;
+        // #40186, #40262, #40337, #40342, #40354
+        foreach ([
+            'Blok i O-Ring zaworu nadmiarowego ciśnienia 3M™ Scott™ do autonomicznego butlowego aparatu ucieczkowego ELSA, 1029995/061.335.97',
+            'Śruba regulacji przepływu 3M™ Scott™ autonomiczny butlowy aparat ucieczkowy ELSA 2000, 1021711/030.256.99',
+            'Zespół gwizdka 3M™ Scott™ 55 barów do zestawu SCBA, zielony, 1023232/035.091.95',
+            'Zestaw serwisowy 3M™ Scott™ na 5 lat do autonomicznego butlowego aparatu ucieczkowego ELSA, 2002408',
+            'Automat dawkujący i wąż 3M™ Scott™ SCBA Tempest, 1029102/060.300.99',
+        ] as $name) {
+            $this->assertSame('apparatus_part', $this->assortment->articleType($name, $respiratory), $name);
+        }
+        // kompletne aparaty zostają aparatami (#40572, #40142)
+        $this->assertSame('apparatus', $this->assortment->articleType('Aparat wężowy sprężonego powietrza 3M™ Versaflo™, V-500E', $respiratory));
+        $this->assertSame('apparatus', $this->assortment->articleType(
+            'Autonomiczny butlowy aparat ucieczkowy 3M™ Scott™ ELSA Muster z maską, 15 minut, 200 barów, stal, złącze CEN', $respiratory));
+        // zawór półmaski — bez aparatu w tekście reguła części aparatu nie działa
+        $this->assertNotSame('apparatus_part', $this->assortment->articleType('Zawór wydechowy do półmaski 3M 6000', $respiratory));
+
+        // #40192, #40526 — akcesoria bez typu
+        $this->assertTrue($this->assortment->namesRespiratoryAccessory('Formowane opakowanie transportowe na autonomiczny aparat powietrzny 3M™ Scott™, 2014810'));
+        $this->assertTrue($this->assortment->namesRespiratoryAccessory('3M™ Versaflo™ Zestaw do czyszczenia i przechowywania, TR-653'));
+
+        // PAPR: system nazwany w nazwie to „papr” (#40531, #40564), system po „do / w / z” to to, do czego część pasuje
+        $this->assertSame('papr', $this->assortment->articleType('Zestaw startowy systemu z wymuszonym przepływem powietrza Versaflo™ 3M™, TR-315E+', $respiratory));
+        $this->assertSame('papr', $this->assortment->articleType('3M™ System z wymuszonym przepływem powietrza, PF-602E-ASB', $respiratory));
+        $this->assertNull($this->assortment->articleType('Zestaw części zamiennych 3M™ PF-940 do systemów z wymuszonym przepływem powietrza PF-600E', $respiratory));
+        $this->assertNull($this->assortment->articleType('Wskaźnik przepływu powietrza w systemie z wymuszonym przepływem powietrza 3M™ Adflo™ 838020', $respiratory));
+        // #40500 — PAPR tylko w tabelce dostawcy, nie w nazwie
+        $indicator = $this->card('3M™ Versaflo™ Wskaźnik natężenia przepływu powietrza, TR-971', '7000002297', 'Wskaźnik do jednostek Versaflo.',
+            null, ['kategoria_bhp' => 'drogi_oddechowe']);
+        $indicator->setAttribute('shop_fields_summary', 'Rodzaj produktu: zestaw systemu z wymuszonym przepływem powietrza i aparaty wężowe sprężonego powietrza');
+        $this->assertNull($this->normalizer->forProduct($indicator)['typ_wyrobu']);
+
+        // #20963, #22356 — znaki SignProject rozpoznane po ścieżce kategorii
+        foreach ([
+            ['PA203 Aparatowy', 'PA203', 'Tablice informacyjne różne › Tablice informacyjne - oznaczenie pomieszczeń'],
+            ['TP030 Self contained breathing apparatus', 'TP030', 'Znaki morskie › Postery'],
+        ] as [$name, $sku, $category]) {
+            $sign = $this->card($name, $sku, 'Znak informacyjny wskazujący miejsce aparatu oddechowego.', null, ['kategoria_bhp' => 'drogi_oddechowe']);
+            $sign->setAttribute('category', $category);
+            $attrs = $this->normalizer->forProduct($sign);
+            $this->assertSame('inne', $attrs['kategoria_bhp'], $name);
+            $this->assertNull($attrs['typ_wyrobu'], $name);
+        }
+        $this->assertFalse($this->assortment->isSafetySignCategory('Ochrona dróg oddechowych > Aparaty powietrzne'));
+    }
+
     /** #14315 i #14357 z produkcji: znak BHP to oznakowanie, a nie aparat czy maska z rysunku. */
     public function test_safety_sign_is_outside_ppe(): void
     {

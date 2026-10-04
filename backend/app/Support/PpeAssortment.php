@@ -612,7 +612,24 @@ final class PpeAssortment
             $partAt = $partAt === null ? $apparatusAt : min($partAt, $apparatusAt);
             $apparatusAt = null;
         }
+        // Rzeczownik części przed wzmianką o aparacie: „Blok i O-Ring zaworu … ELSA”, „Śruba regulacji przepływu … aparat
+        // ucieczkowy”, „Zespół gwizdka … do zestawu SCBA” to części 3M Scott, a nie aparat.
+        $genericPartAt = $apparatusAt === null ? null : $this->firstWordOffset(self::APPARATUS_GENERIC_PART, substr($t, 0, $apparatusAt));
+        if ($genericPartAt !== null) {
+            $partAt = $partAt === null ? $genericPartAt : min($partAt, $genericPartAt);
+            $apparatusAt = null;
+        }
         $kitAt = $apparatusAt === null ? $partAt : ($partAt === null ? $apparatusAt : min($apparatusAt, $partAt));
+        // System z wymuszonym przepływem (PAPR) nazwany pierwszy to osobny typ: zestawy Versaflo TR-300E+ / TR-600E były
+        // „filtrem”, a tabelka 3M „Rodzaj produktu: zestaw systemu z wymuszonym przepływem powietrza i aparaty wężowe”
+        // robiła z zestawów PF-600E / PV-300E aparat. System po „do / dla / w / na” to to, do czego część pasuje
+        // („Wskaźnik przepływu … w systemie z wymuszonym…”, „Zestaw części zamiennych do systemów…”) — wtedy bez typu.
+        $paprAt = $this->firstWordOffset('/\b(wymuszon\w*\s+przeplyw|papr\b|powered\s+air)\w*/u', $t);
+        if ($paprAt !== null && array_filter([$kitAt, $filterAt, $maskAt], static fn (?int $at): bool => $at !== null && $at < $paprAt) === []) {
+            return preg_match('/\b(do|dla|w|we|na|z|ze|for|to|with)\s+(system|zestaw|jednost|urzadzen)\w*\s+(\w+\s+){0,2}z\s+$/u', substr($t, 0, $paprAt)) === 1
+                ? null
+                : 'papr';
+        }
         if ($kitAt !== null && ($filterAt === null || $kitAt < $filterAt) && ($maskAt === null || $kitAt < $maskAt)) {
             return $kitAt === $partAt ? 'apparatus_part' : 'apparatus';
         }
@@ -647,13 +664,22 @@ final class PpeAssortment
     }
 
     /** Kompletny aparat oddechowy (autonomiczny, powietrzny, ucieczkowy, ochrony dróg oddechowych, SCBA) — tekst po normalize(). */
-    private const BREATHING_APPARATUS = '/\b(aparat\w*\s+(autonomiczn|powietrzn|oddechow|ucieczkow)|autonomiczn\w*\s+aparat'
+    private const BREATHING_APPARATUS = '/\b(aparat\w*\s+(autonomiczn|powietrzn|oddechow|ucieczkow|wezow)|autonomiczn\w*\s+aparat'
         .'|aparat\w*\s+ochron\w*\s+(drog|ukladu)\w*\s+oddech|scba|breathing\s+apparatus)\w*/u';
 
     /**
      * Koniec tekstu przed wzmianką o aparacie, gdy aparat jest tym, do czego wyrób pasuje: „do (aparatów)”, „dla”,
      * „kompatybilny / pasujący / compatible … (do 6 słów)”. Tekst po normalize().
      */
+    /**
+     * Rzeczownik części albo osprzętu aparatu bez znanego rodzaju (APPARATUS_PARTS) — liczy się tylko przed wzmianką
+     * o aparacie w tym samym tekście: „Zawór wydechowy do półmaski” aparatu nie wspomina i zostaje poza tą regułą.
+     * Tekst po normalize().
+     */
+    private const APPARATUS_GENERIC_PART = '/\b(blok\w*|o\s*ring\w*|srub\w*|uszczelk\w*|zawor\w*|gwizd\w*|zespol\w*|w[ae]z(a|em|y|ow)?'
+        .'|przewod\w*|manometr\w*|zlacz\w*|szybkozlacz\w*|koncowk\w*|podgrzew\w*|regulator\w*|membran\w*|sprezyn\w*'
+        .'|nakretk\w*|pierscien\w*|zestaw\w*\s+(serwisow|podlaczeniow|naprawcz)\w*)\b/u';
+
     private const APPARATUS_AS_COUNTERPART = '/\b(?:(?:do|dla)\s+(?:aparat\w*\s+)?|(?:kompatybil|pasuj|pasowa[cl]|compatib)\w*\s+(?:\w+\s+){0,6})$/u';
 
     /**
@@ -667,7 +693,7 @@ final class PpeAssortment
         // rzeczownik „butla”, nie przymiotnik: „Butlowy aparat powietrzny” to aparat
         'cylinder' => '/\bbutl(?:a|e|i|y|ami|ach|om)?\b/u',
         'reducer' => '/\breduktor\w*/u',
-        'demand_valve' => '/\bautomat\w*\s+(oddechow|plucn)\w*/u',
+        'demand_valve' => '/\bautomat\w*\s+(oddechow|plucn|dawkuj)\w*/u',
         'hose' => '/\bw[ae]z\w*\s+(\w+\s+)?sredni\w*\s+cisnien\w*/u',
     ];
 
@@ -710,6 +736,8 @@ final class PpeAssortment
     private const RESPIRATORY_ACCESSORY = '/\b(pas|pasy|pasa|pasem|pasek|paska|paski|torb\w*|etui|pudelk\w*|walizk\w*'
         .'|futeral\w*|pokrowi\w*|woreczek|woreczk\w*|saszetk\w*|skrzyn\w*|uchwyt\w*|wieszak\w*|roztwor\w*|nebulizator\w*|pokryw\w*|adapter\w*'
         // „Box of 10”, „Pack of 20” to opakowanie wyrobu (SpringFit FFP3 - Box of 10), nie akcesorium
+        // opakowanie transportowe na aparat ELSA, zestaw do czyszczenia i przechowywania Versaflo TR-653
+        .'|opakowani\w*\s+transportow\w*|zestaw\w*\s+do\s+(czyszcz|przechow|konserw)\w*'
         .'|akcesori\w*|belts?|bags?|cases?|pouch\w*|holders?|brackets?|box|boxes|wallbox\w*|covers?|rfid|accessor\w*)\b(?!\s+of\b)/u';
 
     /**
@@ -1724,6 +1752,22 @@ final class PpeAssortment
     public function namesGasDevice(string $name): bool
     {
         return preg_match(self::GAS_DEVICE_NAME, $this->normalize($name)) === 1 && $this->family($name) === null;
+    }
+
+    /**
+     * Człon ścieżki kategorii to znaki, tablice, piktogramy, oznakowanie, naklejki albo postery — katalog SignProject
+     * nazywa karty samym kodem i treścią („PA203 Aparatowy”, „TP030 Self contained breathing apparatus” w „Znaki
+     * morskie › Postery”), więc nazwa znaku nie zdradza.
+     */
+    public function isSafetySignCategory(string $category): bool
+    {
+        foreach (preg_split('/\s*[>›]\s*/u', $category) ?: [] as $segment) {
+            if (preg_match('/^\s*(znak|tablic|tabliczk|piktogram|oznakowan|naklejk|poster|plakat)/u', $this->normalize($segment)) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Nazwa karty nazywa znak albo tablicę BHP (SAFETY_SIGN_NAME) — wyrób spoza ŚOI, choćby przedstawiał maskę czy aparat. */

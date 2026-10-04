@@ -42,6 +42,7 @@ final class ProductCrossRefFilters
         'filter' => 'pochłaniacz / filtr',
         'apparatus' => 'aparat oddechowy',
         'apparatus_part' => 'część aparatu oddechowego',
+        'papr' => 'system z wymuszonym przepływem (PAPR)',
         'kalosz' => 'kalosz',
         'trzewik' => 'trzewik',
         'polbut' => 'półbut',
