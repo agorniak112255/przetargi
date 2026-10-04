@@ -1554,10 +1554,13 @@ final class BhpAttributeNormalizer
      * zapisach — zostaje ten z objaśnieniem. NormCode::dedupe tego nie zwija, bo zapisu
      * z nawiasem w ogóle nie uznaje za oznaczenie normy, a `array_unique` widzi dwa różne teksty.
      *
-     * Rok, poprawkę i poziomy zwija NormCode — tutaj zwijamy WYŁĄCZNIE dopisek w nawiasie.
-     * Sam prefiks nie wystarczy: „EN 374” i „EN 374-1” to różne wymagania w przetargu,
-     * a „EN 1497” tylko zaczyna się jak „EN 149”. „EN 374-1 (Typ A)” i „EN 374-1 (Typ B)”
-     * nie są swoimi prefiksami i zostają obie.
+     * Rok, poprawkę i poziomy zwija NormCode — tutaj zwijamy dopisek w nawiasie oraz goły numer
+     * obok tego numeru z częścią NA TEJ SAMEJ KARCIE: „EN 1149” przy „EN 1149-5” niczego nie dodaje
+     * (zapisany skrót z dawnego odczytu tekstu wracał przy każdym przeliczeniu). W wymaganiu przetargu
+     * „EN 374” i „EN 374-1” dalej są różne — tego ta lista nie dotyczy, a wyszukiwanie i filtry
+     * zamienników biorą z niej sam numer. Sam prefiks nie wystarczy: „EN 1497” tylko zaczyna się jak
+     * „EN 149”, a „EN 374” nie zwija się w „EN ISO 374-1” (inny człon ISO). „EN 374-1 (Typ A)”
+     * i „EN 374-1 (Typ B)” nie są swoimi prefiksami i zostają obie.
      *
      * @param  list<string>  $items
      * @return list<string>
@@ -1587,8 +1590,24 @@ final class BhpAttributeNormalizer
             }
         }
 
-        return array_values($out);
+        $withPart = [];
+        foreach ($out as $text) {
+            if (preg_match(self::NORM_NUMBER_WITH_PART, $text, $m) === 1) {
+                $withPart[mb_strtoupper(preg_replace('/\s+/u', '', $m[1]) ?? '').$m[2]] = true;
+            }
+        }
+
+        return array_values(array_filter($out, static function (string $text) use ($withPart): bool {
+            return preg_match(self::BARE_NORM_NUMBER, $text, $m) !== 1
+                || ! isset($withPart[mb_strtoupper(preg_replace('/\s+/u', '', $m[1]) ?? '').$m[2]]);
+        }));
     }
+
+    /** Goły numer normy, bez części, roku i poziomów: „EN 1149”, „EN ISO 13982”, „PN-EN 361”. */
+    private const BARE_NORM_NUMBER = '/^(?:PN[\s\-]+)?EN(\s*ISO)?\s*(\d{3,5})$/iu';
+
+    /** Numer normy z częścią na początku zapisu: „EN 1149-5”, „EN ISO 13982-1:2004+A1:2010”. */
+    private const NORM_NUMBER_WITH_PART = '/^(?:PN[\s\-]+)?EN(\s*ISO)?\s*(\d{3,5})-\d/iu';
 
     /** Czy `$zObjasnieniem` to `$goly` z dopiskiem w nawiasie („EN 407” → „EN 407 (poziom 1)”). */
     private function normWithGloss(string $goly, string $zObjasnieniem): bool

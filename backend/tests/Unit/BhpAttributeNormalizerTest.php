@@ -487,8 +487,10 @@ final class BhpAttributeNormalizerTest extends TestCase
     }
 
     /**
-     * Podobny początek to nie ten sam kod: „EN 1497” tylko zaczyna się jak „EN 149”,
-     * a część normy („EN 374-1” wobec „EN 374”) i typ badania to w przetargu różne wymagania.
+     * Podobny początek to nie ten sam kod: „EN 1497” tylko zaczyna się jak „EN 149”, a różne części
+     * („EN 374-1”, „EN 374-5”) i typy badania zostają osobno. Goły „EN 374” obok swojej części na tej samej
+     * karcie zwija się od 04.10.2026 (prośba właściciela: skrót niczego nie dodaje, wracał z dawnego odczytu
+     * tekstu) — w wymaganiu przetargu „EN 374” i „EN 374-1” dalej są różne, a ta lista ich nie rozstrzyga.
      */
     public function test_different_norms_with_shared_prefix_are_kept_apart(): void
     {
@@ -502,10 +504,10 @@ final class BhpAttributeNormalizerTest extends TestCase
             ['sku' => 'TEST-1', 'name' => 'Wyrób testowy']
         );
 
-        // „EN 374-1” wchłania się w pierwszy zapis z dopiskiem, bo sam z siebie nic nie wnosi;
-        // „EN 374” i „EN 374-5” to inne części normy i zostają osobno.
+        // „EN 374-1” wchłania się w pierwszy zapis z dopiskiem, bo sam z siebie nic nie wnosi; goły „EN 374” zwija się
+        // w swoje części, a „EN 374-5” to inna część normy i zostaje osobno.
         $this->assertSame(
-            ['EN 149', 'EN 1497', 'EN 374', 'EN 374-1 (Typ A)', 'EN 374-5', 'EN 374-1 (Typ B)'],
+            ['EN 149', 'EN 1497', 'EN 374-1 (Typ A)', 'EN 374-5', 'EN 374-1 (Typ B)'],
             $attrs['normy_en']
         );
     }
@@ -954,5 +956,15 @@ final class BhpAttributeNormalizerTest extends TestCase
         // poziomy i sklejone numery innych norm
         $this->assertSame(['EN 511'], $n->detectNormsFromText('EN 511-111'));
         $this->assertSame(['EN 361'], $n->detectNormsFromText('EN 361-358-813'));
+    }
+
+    /** Zapisany skrót z dawnego odczytu („EN 1149”) wracał przy każdym przeliczeniu obok „EN 1149-5” (BIG, AJ GROUP, SECURA). */
+    public function test_bare_norm_number_collapses_into_the_same_number_with_part(): void
+    {
+        $normy = (new BhpAttributeNormalizer)->normalize(['normy_en' => [
+            'EN 1149', 'EN 1149-5', 'EN ISO 13982', 'EN ISO 13982-1:2004+A1:2010', 'EN 374', 'EN ISO 374-1:2016', 'EN 149', 'EN 1497', 'EN 388',
+        ]])['normy_en'];
+
+        $this->assertSame(['EN 1149-5', 'EN ISO 13982-1:2004+A1:2010', 'EN 374', 'EN ISO 374-1:2016', 'EN 149', 'EN 1497', 'EN 388'], $normy);
     }
 }
