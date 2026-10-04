@@ -61,6 +61,31 @@ final class BhpAttributeNormalizer
         .'|(?<![\p{L}\d])SNR(?![\p{L}\d])[^0-9]{0,12}(?<![\p{L}\d])(\d{2,3})(?!\d)(?:\s*dB)?)/iu';
 
     /**
+     * Materiały, które opisy wymieniają w przeczeniu („bez lateksu”, „nie zawiera silikonu ani lateksu”, „latex-free”)
+     * albo przy uczuleniu („dla osób uczulonych na lateks”) — klucz => rdzenie słów po normalizeText (małe litery,
+     * bez polskich znaków). Wyraz z rdzeniem w takiej frazie nie jest materiałem wyrobu: rękawica HPPE „bezlateksowa”
+     * dostawała lateks i rodzinę „lateks”, a różna rodzina wyklucza zamiennik (ProductCrossRefService).
+     * „gumka” to nie guma, „skorupa” to nie skóra.
+     */
+    private const NEGATABLE_MATERIALS = [
+        'lateks' => 'lateks|latex',
+        'nitryl' => 'nitryl|nitril|nbr',
+        'silikon' => 'silikon|silicon',
+        'pvc' => 'pvc|winyl|vinyl',
+        'neopren' => 'neopren',
+        'guma' => 'gum(?!k)|rubber|kauczuk',
+        'poliuretan' => 'poliuretan|polyurethan',
+        'hppe' => 'hppe|dyneema',
+        'skora' => 'skor(?!up)|leather',
+        'bawelna' => 'bawel|cotton',
+        'nylon' => 'nylon|poliamid|polyamid',
+        'spandex' => 'spandex|elastan|lycra',
+    ];
+
+    /** @var list<string>|null wzorce fraz przeczących materiał — patrz materialNegationPatterns */
+    private ?array $materialNegationPatterns = null;
+
+    /**
      * @return array{
      *     kategoria_bhp: ?string,
      *     kod_producenta: ?string,
@@ -146,6 +171,8 @@ final class BhpAttributeNormalizer
                 'specs' => $this->stringList($payload['specs'] ?? null),
                 'certificates' => $this->stringList($payload['certificates'] ?? null),
                 'use_cases' => $useCases,
+                // Tylko jako tekst do przeczeń materiałów — reszta normalize cech nie czyta.
+                'features' => $features,
                 'category' => $categoryEvidence,
                 'sku' => (string) ($product->sku ?? ''),
                 'name' => (string) ($product->name ?? ''),
@@ -165,8 +192,9 @@ final class BhpAttributeNormalizer
     /**
      * Pola, które karta w panelu i opis na sklep biorą z przeliczenia (forProduct): te mają hierarchię źródeł
      * (producent, cennik, nazwa, tabelka dostawcy biją opis), a zapisane w payloadzie bywają cudzym wariantem.
-     * Reszta zostaje zapisana: przeliczone materiały czy typ wyrobu to odczyt z całej prozy, razem ze zdaniami
-     * przeczącymi („bez lateksu” → lateks, karta 11202000).
+     * Reszta zostaje zapisana: przeliczone materiały czy typ wyrobu to odczyt z całej prozy. Przeczeń materiałów
+     * („bez lateksu” → lateks, karta 11202000) przeliczenie już nie czyta (splitMaterialNegations), ale zapisane
+     * `materialy` i `rodzina_materialu` sprzed poprawki poprawia dopiero products:backfill-bhp-attributes --force.
      */
     private const DISPLAY_RECOMPUTED = ['klasa_ochrony', 'oznaczenia', 'poziomy_en388', 'kod_producenta', 'przeznaczenie'];
 
@@ -251,6 +279,8 @@ final class BhpAttributeNormalizer
      *     norms?: list<string>,
      *     specs?: list<string>,
      *     certificates?: list<string>,
+     *     use_cases?: list<string>,
+     *     features?: list<string>,
      *     category?: string,
      *     sku?: string,
      *     name?: string,
@@ -319,8 +349,30 @@ final class BhpAttributeNormalizer
             $this->stringList($raw['materialy'] ?? null),
             $this->stringList($context['materials'] ?? null),
         )));
-        $primary = $this->nullableString($priceList['material'] ?? null)
-            ?? $this->nullableString($raw['material'] ?? null);
+        // Materiał z listy modelu albo z payloadu, któremu tekst karty przeczy („bezlateksowy”, „nie zawiera lateksu ani
+        // silikonu”), wypada razem z wpisami będącymi samym przeczeniem („bez lateksu”). Materiał z cennika zostaje:
+        // to dokument producenta, a jednocześnie dowód pozytywny dla wpisów modelu.
+        $priceListMaterial = $this->nullableString($priceList['material'] ?? null);
+        $rawMaterial = $this->nullableString($raw['material'] ?? null);
+        $keptClaims = $this->withoutNegatedMaterials(
+            array_values(array_unique(array_merge($rawMaterial === null ? [] : [$rawMaterial], $materials))),
+            implode("\n", [
+                $identity,
+                (string) ($context['norms_column'] ?? ''),
+                (string) ($context['shop_fields'] ?? ''),
+                (string) ($context['description'] ?? ''),
+                ...$this->stringList($context['specs'] ?? null),
+                ...$this->stringList($context['certificates'] ?? null),
+                ...$this->stringList($context['use_cases'] ?? null),
+                ...$this->stringList($context['features'] ?? null),
+            ]),
+            $priceListMaterial ?? '',
+        );
+        $materials = array_values(array_filter($materials, static fn (string $m): bool => in_array($m, $keptClaims, true)));
+        if ($rawMaterial !== null && ! in_array($rawMaterial, $keptClaims, true)) {
+            $rawMaterial = null;
+        }
+        $primary = $priceListMaterial ?? $rawMaterial;
         if ($primary !== null && ! in_array($primary, $materials, true)) {
             array_unshift($materials, $primary);
         }
@@ -479,7 +531,8 @@ final class BhpAttributeNormalizer
         if (trim($text) === '') {
             return [];
         }
-        $t = $this->normalizeText($text);
+        // „bez lateksu”, „latex-free”, „uczulonych na lateks” nie czynią lateksu materiałem wyrobu
+        $t = $this->splitMaterialNegations($this->normalizeText($text))['text'];
         $found = [];
         $map = [
             'nitryl' => 'nitryl',
@@ -1280,7 +1333,10 @@ final class BhpAttributeNormalizer
      */
     private function materialFamily(?string $primary, array $materials, string $text): ?string
     {
-        $blob = $this->normalizeText(implode(' ', array_filter([$primary, ...$materials, $text])));
+        // Frazy przeczące materiał wycięte: „nie zawiera lateksu ani silikonu” przy rękawicy HPPE to rodzina „cut”.
+        $blob = $this->splitMaterialNegations(
+            $this->normalizeText(implode(' ', array_filter([$primary, ...$materials, $text])))
+        )['text'];
         // kalosz / Purofort zanim „PU w podeszwie” skórzanego trzewika
         if (preg_match('/\b(purofort|kalosz|wellington|gumowc|gumiak)\w*/u', $blob) === 1) {
             return 'guma';
@@ -1311,6 +1367,133 @@ final class BhpAttributeNormalizer
         }
 
         return null;
+    }
+
+    /**
+     * Wpisy listy materiałów bez tych, którym tekst karty przeczy. Wpis będący samym przeczeniem („bez lateksu”,
+     * „nie zawiera silikonu ani lateksu”) wypada zawsze, a jego materiały liczą się jako przeczone. Wpis z materiałem
+     * („lateks”, „Lateks naturalny”) wypada, gdy każdy jego materiał jest przeczony (w tekście albo wpisem-przeczeniem)
+     * i po wycięciu fraz przeczących nie występuje ani w tekście, ani w $nonProse (kolumna materiału z cennika).
+     * Wpis bez materiału z NEGATABLE_MATERIALS albo z materiałem nieprzeczonym zostaje bez zmian — bez przeczenia
+     * w tekście nic nie wypada, więc karta bez opisu zachowuje listę od modelu.
+     *
+     * @param  list<string>  $entries
+     * @return list<string>
+     */
+    private function withoutNegatedMaterials(array $entries, string $text, string $nonProse): array
+    {
+        if ($entries === []) {
+            return [];
+        }
+        $split = $this->splitMaterialNegations($this->normalizeText($text));
+        $negated = $split['negated'];
+        /** @var list<array{0: string, 1: list<string>}> $claims */
+        $claims = [];
+        foreach ($entries as $entry) {
+            $own = $this->splitMaterialNegations($this->normalizeText($entry));
+            if ($own['negated'] !== [] && preg_match('/[\p{L}\d]/u', $own['text']) !== 1) {
+                array_push($negated, ...$own['negated']);
+
+                continue;
+            }
+            $claims[] = [$entry, $this->materialKeys($own['text'])];
+        }
+        $positive = $this->materialKeys($split['text'].' '.$this->normalizeText($nonProse));
+        $kept = [];
+        foreach ($claims as [$entry, $keys]) {
+            if ($keys === [] || array_diff($keys, $negated) !== [] || array_intersect($keys, $positive) !== []) {
+                $kept[] = $entry;
+            }
+        }
+
+        return $kept;
+    }
+
+    /**
+     * Klucze NEGATABLE_MATERIALS wymienione w tekście po normalizeText.
+     *
+     * @return list<string>
+     */
+    private function materialKeys(string $normalized): array
+    {
+        $keys = [];
+        foreach (self::NEGATABLE_MATERIALS as $key => $stems) {
+            if (preg_match('/\b(?:'.$stems.')/u', $normalized) === 1) {
+                $keys[] = $key;
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
+     * Tekst po normalizeText bez fraz, w których materiał nie jest materiałem wyrobu, i klucze materiałów z tych fraz.
+     * Wycięta fraza zostawia spację, więc słowa po obu stronach się nie sklejają.
+     *
+     * @return array{text: string, negated: list<string>}
+     */
+    private function splitMaterialNegations(string $normalized): array
+    {
+        $negated = [];
+        $text = $normalized;
+        foreach ($this->materialNegationPatterns() as $pattern) {
+            $replaced = preg_replace_callback($pattern, function (array $m) use (&$negated): string {
+                array_push($negated, ...$this->materialKeys($m[0]));
+
+                return ' ';
+            }, $text);
+            // błąd PCRE (limit nawrotów) — tekst zostaje, zamiast zniknąć razem z materiałami
+            if ($replaced !== null) {
+                $text = $replaced;
+            }
+        }
+
+        return ['text' => $text, 'negated' => array_values(array_unique($negated))];
+    }
+
+    /**
+     * Wzorce fraz przeczących materiał (na tekście po normalizeText):
+     * - złożenia: „bezlateksowy”, „bez-silikonowe”, „nielateksowe”;
+     * - „bez”, „nie zawiera”, „wolny od”, „brak” + materiał („bez lateksu”, „nie zawiera lateksu ani silikonu”) albo
+     *   do czterech słów i materiał w dopełniaczu („nie zawiera ftalanów, silikonu i lateksu”, „bez pudru i lateksu”),
+     *   z wyliczeniem dalszych materiałów w dopełniaczu po przecinku, „i”, „ani”, „oraz”, „lub”. Okno nie przechodzi
+     *   przez kropkę ani „z”, „ale”, „a”, „tylko”: „bez lateksu i z nitrylem”, „bez szwów, powlekane lateksem” —
+     *   nitryl i lateks zostają (narzędnik i przymiotnik w mianowniku to nowe twierdzenie, nie ciąg przeczenia);
+     * - angielskie: „latex-free”, „latex free”, „free of/from latex”, „no latex”, „without latex”, „non-latex”,
+     *   „does not contain latex”;
+     * - uczulenie: „dla osób uczulonych na lateks”, „alergia na lateks”, „latex allergy”, „sensitive to latex”;
+     * - wartość w tabelce: „Lateks: nie”, „Zawartość lateksu: brak”.
+     *
+     * @return list<string>
+     */
+    private function materialNegationPatterns(): array
+    {
+        if ($this->materialNegationPatterns !== null) {
+            return $this->materialNegationPatterns;
+        }
+        $stem = '(?:'.implode('|', self::NEGATABLE_MATERIALS).')';
+        $any = '\b'.$stem.'\w*';
+        // W wyliczeniu i za oknem słów tylko dopełniacz („lateksu”, „gumy”, „lateksowej”): mianownik, miejscownik,
+        // narzędnik i przymiotnik w mianowniku („lateks”, „lateksem”, „lateksowa”, „pvc”) to już twierdzenie.
+        $gen = '\b(?!'.$stem.'(?:\w*?(?:a|e|em|ami|owy|owym|owymi))?\b)'.$stem.'\w*';
+        $mods = '(?:(?:dodatku|zawartosci|udzialu|uzycia|domieszki|sladow|naturalnego|naturalnej|syntetycznego|kauczuku)[ \t]+)*';
+        $list = '(?:[ \t]*(?:,|\bi\b|\bani\b|\boraz\b|\blub\b|\bczy\b)[ \t]*(?:ani[ \t]+)?'.$mods.$gen.')*';
+        $word = '[ \t,]+(?!(?:z|ze|a|ale|lecz|jednak|natomiast|tylko|wylacznie)\b)[\p{L}\d®-]+';
+        $rubber = '(?:natural[ \t]+rubber[ \t]+)?';
+
+        return $this->materialNegationPatterns = [
+            '/\b(?:bez|nie)-?'.$stem.'\w*/u',
+            '/(?:\bbez|\bnie[ \t]+zawier\w*|\bniezawier\w*|\bwoln\w*[ \t]+od|\bbrak\w*)'
+                .'(?:[ \t]+'.$mods.$any.'|(?:'.$word.'){1,4}?[ \t,]+'.$mods.$gen.')'.$list.'/u',
+            '/\b(?:free[ \t]+(?:of|from)|no|without|non|zero|(?:does|do)[ \t]+not[ \t]+contain(?:[ \t]+any)?)[ \t-]+'
+                .$rubber.$any.'(?:[ \t]+(?:and|or|nor)[ \t]+'.$rubber.$any.')*/u',
+            '/'.$any.'[ \t]*-?[ \t]*free\b/u',
+            '/\b(?:uczul\w*|alergi\w*|nadwrazliw\w*|allerg\w*|sensitiv\w*)(?:[ \t]+\p{L}+){0,2}?[ \t]+(?:na|to|on)[ \t]+'
+                .'(?:naturalny[ \t]+)?'.$rubber.$any.'/u',
+            '/'.$any.'[ \t-]*(?:allerg\w*|sensitiv\w*|alergi\w*|uczul\w*)/u',
+            '/(?:\bzawartosc\w*[ \t]+|\bzawiera\w*[ \t]+|\bcontains?[ \t]+)?'.$any
+                .'[ \t]*:[ \t]*(?:nie|brak|no|none)\b(?=[ \t]*(?:[|,;.\r\n]|$))/u',
+        ];
     }
 
     private function detectRozmiar(

@@ -30,7 +30,8 @@ final class EnrichmentMissingDataListItemsTest extends TestCase
             'materials' => ['tkanina', 'Materiał podeszwy: brak informacji'],
             'use_cases' => ['magazyny', 'Branże: nie podano'],
             'norms' => ['EN ISO 20345:2011', 'brak danych w źródle'],
-            'certificates' => ['CE'],
+            // CE to oznakowanie, nie certyfikat (CertificateLabels, 04.10.2026) — zostaje certyfikat z numerem
+            'certificates' => ['CE', 'Certyfikat badania typu UE nr 0598/2020'],
         ];
 
         // ta sama kolejność co w enrichProduct: bezpiecznik, potem składanie list
@@ -51,7 +52,7 @@ final class EnrichmentMissingDataListItemsTest extends TestCase
         $this->assertSame(['tkanina'], $lists['materials']);
         $this->assertSame(['magazyny'], $lists['use_cases']);
         $this->assertSame(['EN ISO 20345:2011'], $lists['norms']);
-        $this->assertSame(['CE'], $lists['certificates']);
+        $this->assertSame(['Certyfikat badania typu UE nr 0598/2020'], $lists['certificates']);
     }
 
     public function test_json_contract_example_does_not_suggest_zero_confidence(): void

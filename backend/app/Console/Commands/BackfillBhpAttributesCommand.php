@@ -6,6 +6,7 @@ namespace App\Console\Commands;
 
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Services\PriceListCards;
 use App\Support\BhpAttributeNormalizer;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
@@ -198,13 +199,14 @@ final class BackfillBhpAttributesCommand extends Command
 
                 return null;
             }
-            $listIds = array_values(array_unique(array_map('intval', $priceList->product_ids ?? [])));
+            // ostatni import i karty ze slotem ceny z tego cennika — sam product_ids gubi karty z wcześniejszych wgrań
+            $listIds = app(PriceListCards::class)->ids($priceList);
             if ($listIds === []) {
                 $this->error('Ten cennik nie ma zapisanych produktów (stary import).');
 
                 return null;
             }
-            $query->whereIn('id', $listIds);
+            $query->whereIntegerInRaw('id', $listIds);
         }
         $onlyIds = array_values(array_filter(array_map('intval', (array) $this->option('id'))));
         if ($onlyIds !== []) {

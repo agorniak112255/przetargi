@@ -28,8 +28,10 @@ use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\B2b\B2bDocumentText;
 use App\Services\B2b\B2bSupplementContext;
 use App\Services\Presta\PrestaCategoryRewriteService;
+use App\Services\PriceListCards;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\CertificateLabels;
 use App\Support\EnrichmentDescriptionTemplates;
 use App\Support\ManufacturerNormFacts;
 use App\Support\NormCode;
@@ -177,7 +179,8 @@ final class ProductEnrichmentService
         bool $force = false,
         bool $dispatchJobs = true,
     ): array {
-        $ids = array_values(array_unique(array_map('intval', $priceList->product_ids ?? [])));
+        // product_ids to karty ostatniego importu — karty z wcześniejszych aktualizacji (slot ceny z tego pliku) też
+        $ids = app(PriceListCards::class)->ids($priceList);
         if ($ids === []) {
             throw new RuntimeException('Ten cennik nie ma zapisanych produktów do wzbogacenia (stary import?).');
         }
@@ -1322,16 +1325,13 @@ final class ProductEnrichmentService
                     );
                 }
             }
-            foreach ($savedDocs as $document) {
-                if ($document->kind !== ProductDocument::KIND_CERTIFICATE) {
-                    continue;
-                }
-                $label = str_contains(mb_strtolower((string) $document->source_url), '/doc/')
-                    ? 'Deklaracja zgodności UE'
-                    : 'Certyfikat producenta';
-                $payload['certificates'][] = $label;
-            }
-            $payload['certificates'] = array_values(array_unique($payload['certificates']));
+            // Etykieta pliku tylko z tego, co mówi jego nazwa i adres: deklaracja to nie certyfikat, a nierozpoznany
+            // plik (deklaracja opakowania PPWR, certyfikat wykonawcy) zostaje w plikach karty bez wpisu na liście.
+            // Dawne „Certyfikat producenta” przy każdym pliku — 456 kart Ansella, 04.10.2026.
+            $payload['certificates'] = CertificateLabels::relabel(
+                $this->stringList($payload['certificates'] ?? null),
+                $savedDocs,
+            );
             $payload['document_urls'] = array_values(array_filter(array_map(
                 static fn ($d): ?string => is_string($d->source_url) ? $d->source_url : null,
                 $savedDocs
@@ -1644,13 +1644,17 @@ final class ProductEnrichmentService
             $this->images->downloadMany($product, $imageUrls, 1);
         }
         $docUrls = is_array($payload['document_urls'] ?? null) ? $payload['document_urls'] : [];
+        $cacheDocs = [];
         if ($docUrls !== []) {
-            $this->documents->downloadMany(
+            $cacheDocs = $this->documents->downloadMany(
                 $product,
                 array_values(array_filter($docUrls, static fn ($u): bool => is_string($u))),
                 3
             );
         }
+        // Wpis cache sprzed 04.10.2026 niesie „Certyfikat producenta” i „CE” — etykiety od nowa z plików tej karty,
+        // jak w pełnym przebiegu (CertificateLabels::relabel).
+        $payload['certificates'] = CertificateLabels::relabel($this->stringList($payload['certificates'] ?? null), $cacheDocs);
 
         // kolumna norm za opisem z cache, jak w pełnym przebiegu — wcześniej ta ścieżka jej nie pisała wcale
         $this->writeNormsColumn($product, $this->stringList($payload['norms'] ?? null));
@@ -5174,7 +5178,10 @@ SYS,
             NormCode::dedupe($this->stringList($extracted['norms'] ?? null)),
             $product->manufacturer_norms
         );
-        $certificates = NormCode::dedupe($this->stringList($extracted['certificates'] ?? null));
+        // Do normalizatora idzie lista ze źródła („Kategoria III” to dowód klasy ŚOI), na kartę — bez oznakowania
+        // CE, kategorii i samego rozporządzenia: to nie certyfikaty (CertificateLabels::filter).
+        $certificateEvidence = NormCode::dedupe($this->stringList($extracted['certificates'] ?? null));
+        $certificates = CertificateLabels::filter($certificateEvidence);
         $materials = ProductDescriptionText::dropDuplicatedListItems(
             $this->stringList($extracted['materials'] ?? null),
             $description
@@ -5194,7 +5201,7 @@ SYS,
                 'materials' => $materials,
                 'norms' => $norms,
                 'specs' => $specs,
-                'certificates' => $certificates,
+                'certificates' => $certificateEvidence,
                 // kategoria-dowód, jak w BhpAttributeNormalizer::forProduct
                 'category' => $product->categoryAsEvidence(),
                 'sku' => (string) $product->sku,

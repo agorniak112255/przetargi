@@ -310,6 +310,9 @@ export function Products() {
   // Karty z cennika konta B2B (link z Cenników) — dystrybutor sprzedaje cudze marki, więc nie filtr producenta.
   const b2bAccount = searchParams.get('b2b_account') ?? ''
   const b2bAccountLabel = searchParams.get('b2b_label') ?? ''
+  // Karty z cennika z pliku (link z Cenników) — karty z listy ostatniego wgrania i ze slotem ceny tego cennika.
+  const priceList = searchParams.get('price_list') ?? ''
+  const priceListLabel = searchParams.get('price_list_label') ?? ''
   const [statusFilter, setStatusFilter] = useState('')
   const [hasAccessories, setHasAccessories] = useState(false)
   /** Tylko karty powiązane z towarem ERP XL (pewne albo potwierdzone powiązanie). */
@@ -456,6 +459,7 @@ export function Products() {
     if (debouncedQ) params.set('q', debouncedQ)
     if (manufacturer) params.set('manufacturer', manufacturer)
     if (b2bAccount) params.set('b2b_account', b2bAccount)
+    if (priceList) params.set('price_list', priceList)
     if (statusFilter) params.set('enrichment_status', statusFilter)
     if (hasAccessories) params.set('has_accessories', '1')
     if (erpLinkedOnly) params.set('erp_linked', '1')
@@ -491,7 +495,7 @@ export function Products() {
       })
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer/status
-  }, [debouncedQ, manufacturer, b2bAccount, statusFilter, hasAccessories, erpLinkedOnly, supplierSpecialOnly, canSupplierSpecial, page, perPage, sort, dir, aiMode])
+  }, [debouncedQ, manufacturer, b2bAccount, priceList, statusFilter, hasAccessories, erpLinkedOnly, supplierSpecialOnly, canSupplierSpecial, page, perPage, sort, dir, aiMode])
 
   async function runAiSearch(web = false, raw = aiQuery) {
     const query = raw.trim()
@@ -1111,6 +1115,22 @@ export function Products() {
               title="Pokaż wszystkie karty, nie tylko z tego cennika B2B"
             >
               Cennik B2B: {b2bAccountLabel || `konto #${b2bAccount}`} ×
+            </button>
+          )}
+          {priceList && (
+            <button
+              type="button"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams)
+                next.delete('price_list')
+                next.delete('price_list_label')
+                setSearchParams(next)
+                setPage(1)
+              }}
+              className="rounded border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-100"
+              title="Pokaż wszystkie karty, nie tylko z tego cennika"
+            >
+              Cennik: {priceListLabel || `cennik #${priceList}`} ×
             </button>
           )}
         </div>

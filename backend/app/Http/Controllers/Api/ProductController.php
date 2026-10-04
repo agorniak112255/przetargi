@@ -15,6 +15,7 @@ use App\Models\B2bProductLink;
 use App\Models\ErpItemLink;
 use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductShopCard;
@@ -26,6 +27,7 @@ use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\Erp\ErpCardStock;
 use App\Services\Erp\ErpCodeSearch;
 use App\Services\NbpExchangeRateService;
+use App\Services\PriceListCards;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Pricing\SourcePriceComparison;
 use App\Services\Pricing\SupplierSpecialMask;
@@ -126,6 +128,18 @@ class ProductController extends Controller
             $query->whereIn('id', B2bProductLink::query()
                 ->where('b2b_account_id', $request->integer('b2b_account'))
                 ->select('product_id'));
+        }
+        // Karty cennika z pliku — ostatni import i karty ze slotem ceny z tego cennika (PriceListCards), nie producent:
+        // cennik wielomarkowy (Canis) ma karty wielu marek. Nieznany cennik = pusta lista. Liczby wpisane wprost
+        // (whereIntegerInRaw) — duży cennik nie dochodzi do limitu parametrów zapytania.
+        if ($request->filled('price_list')) {
+            $priceList = PriceList::query()->find($request->integer('price_list'));
+            $listIds = $priceList !== null ? app(PriceListCards::class)->ids($priceList) : [];
+            if ($listIds === []) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->whereIntegerInRaw('id', $listIds);
+            }
         }
 
         $status = trim((string) $request->string('enrichment_status'));

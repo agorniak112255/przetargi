@@ -152,6 +152,23 @@ function b2bLockedTitle(account: PriceListB2bAccount): string {
   return `Cennik konta B2B (${label}${account.username}) — aby go usunąć, najpierw usuń konto w zakładce Cenniki → B2B.`
 }
 
+/**
+ * Skutki usunięcia cennika — GET /price-lists/{id}?deletion_preview=1 (klucz deletion_preview).
+ * Zachowane karty liczone w pierwszym pasującym powodzie, suma z products_to_delete = products_total.
+ */
+type PriceListDeletionPreview = {
+  products_total: number
+  products_to_delete: number
+  kept_other_price_lists: number
+  kept_b2b: number
+  kept_other_slots: number
+  kept_tenders: number
+  not_in_last_import: number
+  to_delete_with_erp_links: number
+  to_delete_with_substitutes: number
+  to_delete_with_images: number
+}
+
 /** Rabaty cen z cennika z pliku — GET/PUT /price-lists/{id}/discounts. */
 type PriceListDiscounts = {
   groups: Array<{ id: number; name: string; discount_percent: number; product_count: number }>
@@ -508,6 +525,11 @@ export function PriceLists() {
   const [deleteConfirm, setDeleteConfirm] = useState<PriceList | null>(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [deleteConfirmError, setDeleteConfirmError] = useState('')
+  // skutki usunięcia dla otwartego okna; numer zapytania odrzuca spóźnioną odpowiedź po zmianie cennika
+  const [deletionPreview, setDeletionPreview] = useState<PriceListDeletionPreview | null>(null)
+  const [deletionPreviewLoading, setDeletionPreviewLoading] = useState(false)
+  const [deletionPreviewError, setDeletionPreviewError] = useState('')
+  const deletionPreviewRequest = useRef(0)
   const [editId, setEditId] = useState<number | null>(null)
   const [editManufacturer, setEditManufacturer] = useState('')
   const [editVersion, setEditVersion] = useState('')
@@ -752,13 +774,44 @@ export function PriceLists() {
     setDeleteConfirm(row)
     setDeleteConfirmText('')
     setDeleteConfirmError('')
+    void loadDeletionPreview(row)
+  }
+
+  // Liczy po stronie serwera, które karty znikną, a które zostaną — bez zapisu. Błąd nie blokuje usuwania.
+  async function loadDeletionPreview(row: PriceList) {
+    const requestId = ++deletionPreviewRequest.current
+    setDeletionPreview(null)
+    setDeletionPreviewError('')
+    setDeletionPreviewLoading(true)
+    try {
+      const res = await api<{ deletion_preview?: PriceListDeletionPreview }>(
+        `/price-lists/${row.id}?deletion_preview=1`,
+      )
+      if (requestId !== deletionPreviewRequest.current) return
+      if (res.deletion_preview) {
+        setDeletionPreview(res.deletion_preview)
+      } else {
+        setDeletionPreviewError('Nie udało się policzyć skutków usunięcia.')
+      }
+    } catch (ex) {
+      if (requestId !== deletionPreviewRequest.current) return
+      setDeletionPreviewError(
+        `Nie udało się policzyć skutków usunięcia${ex instanceof Error && ex.message ? `: ${ex.message}` : '.'}`,
+      )
+    } finally {
+      if (requestId === deletionPreviewRequest.current) setDeletionPreviewLoading(false)
+    }
   }
 
   function closeDeleteConfirm() {
     if (deleteBusyId !== null) return
+    deletionPreviewRequest.current++
     setDeleteConfirm(null)
     setDeleteConfirmText('')
     setDeleteConfirmError('')
+    setDeletionPreview(null)
+    setDeletionPreviewError('')
+    setDeletionPreviewLoading(false)
   }
 
   async function deletePriceList(row: PriceList) {
@@ -777,8 +830,12 @@ export function PriceLists() {
         return next
       })
       if (expandedHistory?.id === row.id) setExpandedHistory(null)
+      deletionPreviewRequest.current++
       setDeleteConfirm(null)
       setDeleteConfirmText('')
+      setDeletionPreview(null)
+      setDeletionPreviewError('')
+      setDeletionPreviewLoading(false)
     } catch (ex) {
       setDeleteConfirmError(ex instanceof Error ? ex.message : 'Błąd usuwania cennika')
     } finally {
@@ -2234,10 +2291,10 @@ export function PriceLists() {
                         to={
                           r.b2b_account
                             ? `/products?b2b_account=${r.b2b_account.id}&b2b_label=${encodeURIComponent(r.manufacturer)}`
-                            : `/products?manufacturer=${encodeURIComponent(r.manufacturer)}`
+                            : `/products?price_list=${r.id}&price_list_label=${encodeURIComponent(r.manufacturer)}`
                         }
                         className="font-medium text-blue-700 hover:underline"
-                        title={r.b2b_account ? `Pokaż karty z cennika B2B: ${r.manufacturer}` : `Pokaż produkty: ${r.manufacturer}`}
+                        title={r.b2b_account ? `Pokaż karty z cennika B2B: ${r.manufacturer}` : `Pokaż karty z cennika: ${r.manufacturer}`}
                       >
                         {r.manufacturer}
                       </Link>
@@ -2743,14 +2800,90 @@ export function PriceLists() {
             </p>
             {(() => {
               const count = priceListProductCount(deleteConfirm, historyCache[deleteConfirm.id])
+              const preview = deletionPreview
+              const kept = preview
+                ? preview.kept_other_price_lists + preview.kept_b2b + preview.kept_other_slots + preview.kept_tenders
+                : 0
+              const keptReasons = preview
+                ? [
+                    { label: 'w innych cennikach', value: preview.kept_other_price_lists },
+                    { label: 'z kontem B2B', value: preview.kept_b2b },
+                    { label: 'z ceną z innego źródła', value: preview.kept_other_slots },
+                    { label: 'użyte w przetargach', value: preview.kept_tenders },
+                  ].filter((x) => x.value > 0)
+                : []
+              const warnings = preview
+                ? [
+                    {
+                      value: preview.not_in_last_import,
+                      text: 'karty spoza ostatniego wgrania (mają cenę z tego cennika, ale nie było ich w ostatnim pliku)',
+                    },
+                    { value: preview.to_delete_with_erp_links, text: 'powiązane z towarem ERP (powiązanie zostanie bez karty)' },
+                    { value: preview.to_delete_with_substitutes, text: 'mają zamienniki (zamienniki zostaną usunięte)' },
+                  ].filter((x) => x.value > 0)
+                : []
               return (
                 <>
-                <p className="mt-2 text-xs text-slate-600">
-                  To jest <b>cały katalog tego producenta</b>, nie jedna aktualizacja: cennik ma jeden
-                  wpis niezależnie od liczby wgrań. Zostaną usunięte produkty powiązane wyłącznie z nim
-                  {count > 0 ? <> (do <b>{count}</b> pozycji)</> : null}; te z innych cenników i z kont
-                  B2B zostaną zachowane. <b>Tej operacji nie można cofnąć.</b>
-                </p>
+                {preview ? (
+                  <p className="mt-2 text-xs text-slate-600">
+                    To jest <b>cały katalog tego producenta</b>, nie jedna aktualizacja: cennik ma jeden
+                    wpis niezależnie od liczby wgrań. <b>Tej operacji nie można cofnąć.</b>
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-600">
+                    To jest <b>cały katalog tego producenta</b>, nie jedna aktualizacja: cennik ma jeden
+                    wpis niezależnie od liczby wgrań. Zostaną usunięte produkty powiązane wyłącznie z nim
+                    {count > 0 ? <> (do <b>{count}</b> pozycji)</> : null}; te z innych cenników i z kont
+                    B2B zostaną zachowane. <b>Tej operacji nie można cofnąć.</b>
+                  </p>
+                )}
+                {deletionPreviewLoading && (
+                  <p className="mt-2 text-xs text-slate-500">Liczę skutki…</p>
+                )}
+                {deletionPreviewError && (
+                  <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                    {deletionPreviewError}
+                  </p>
+                )}
+                {preview && (
+                  <div className="mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-700">
+                    {preview.products_total === 0 ? (
+                      <p>Cennik nie ma żadnych kart — zostanie usunięty tylko sam cennik.</p>
+                    ) : (
+                      <>
+                        <p className="text-sm font-semibold text-red-700">
+                          Zostanie usuniętych kart: {preview.products_to_delete}
+                          {preview.to_delete_with_images > 0 && (
+                            <span className="ml-1 text-xs font-normal text-slate-600">
+                              (w tym ze zdjęciami: {preview.to_delete_with_images})
+                            </span>
+                          )}
+                        </p>
+                        <p className="mt-1">
+                          Zostaną (tylko bez ceny z tego pliku): <b>{kept}</b>
+                        </p>
+                        {keptReasons.length > 0 && (
+                          <ul className="ml-4 list-disc">
+                            {keptReasons.map((x) => (
+                              <li key={x.label}>
+                                {x.label}: {x.value}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {warnings.length > 0 && (
+                          <ul className="mt-2 space-y-0.5 text-amber-800">
+                            {warnings.map((x) => (
+                              <li key={x.text}>
+                                Uwaga — {x.text}: <b>{x.value}</b>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
                 <p className="mt-2 text-xs text-amber-800">
                   Chcesz cofnąć tylko ostatnie wgranie? Zamknij to okno i użyj „Cofnij” przy wybranej
                   pozycji w kolumnie <b>Aktualizacje</b>.

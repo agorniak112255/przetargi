@@ -201,7 +201,7 @@ Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"d
   "features": ["krótkie korzyści — nie zdania z description"],
   "specs": ["parametr: wartość (nr art./SKU, typ, materiał, powłoka, opakowanie, rozmiary)"],
   "norms": ["EN … z poziomami, jeśli podane w źródłach", "EN ISO …"],
-  "certificates": ["certyfikaty, kat. PPE, CE"],
+  "certificates": ["tylko certyfikaty wymienione w źródłach, np. certyfikat badania typu UE z numerem jednostki notyfikowanej; nie znak CE, nie kategoria ŚOI, nie deklaracja zgodności; brak w źródłach → []"],
   "materials": ["materiały / powłoki"],
   "use_cases": ["zastosowania / branże / warunki pracy"],
   "attributes": {

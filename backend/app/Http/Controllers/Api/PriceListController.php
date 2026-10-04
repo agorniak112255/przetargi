@@ -13,6 +13,7 @@ use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountPriceList;
 use App\Services\B2b\B2bDescriptionSource;
+use App\Services\PriceListCards;
 use App\Services\PriceListDeletionService;
 use App\Services\PriceListDiscountService;
 use App\Services\Pricing\ProductEffectivePrice;
@@ -36,6 +37,7 @@ class PriceListController extends Controller
         private readonly B2bDescriptionSource $b2bDescriptions,
         private readonly PriceListDiscountService $discounts,
         private readonly ProductEffectivePrice $effectivePrices,
+        private readonly PriceListCards $cards,
     ) {}
 
     public function index(): JsonResponse
@@ -53,13 +55,15 @@ class PriceListController extends Controller
             ->map(static fn ($rows): array => $rows->pluck('source')->unique()->sort()->values()->all());
         $owners = $this->b2bLists->owners($lists);
 
+        // karty cennika = ostatni import (product_ids) i karty ze slotem ceny z pliku tego cennika (PriceListCards)
+        $cardsByList = $this->cards->idsByList($lists);
         $allIds = [];
-        foreach ($lists as $list) {
-            foreach ($list->product_ids ?? [] as $id) {
-                $allIds[] = (int) $id;
+        foreach ($cardsByList as $ids) {
+            foreach ($ids as $id) {
+                $allIds[$id] = true;
             }
         }
-        $allIds = array_values(array_unique(array_filter($allIds)));
+        $allIds = array_keys($allIds);
 
         $statusSets = [
             Product::ENRICHMENT_DONE => [],
@@ -126,8 +130,9 @@ class PriceListController extends Controller
             $latestBatchMsg,
             $owners,
             $sources,
+            $cardsByList,
         ): array {
-            $ids = array_map('intval', $list->product_ids ?? []);
+            $ids = $cardsByList[(int) $list->id] ?? [];
             $countStatus = static function (array $set) use ($ids): int {
                 $n = 0;
                 foreach ($ids as $id) {
@@ -170,8 +175,14 @@ class PriceListController extends Controller
             $details = $this->withoutPrices($details);
         }
 
+        // skutki „Usuń cennik” liczone tylko na żądanie okna usuwania — przejście po wszystkich kartach cennika
+        $preview = $request->boolean('deletion_preview')
+            ? ['deletion_preview' => $this->deletion->preview($priceList)]
+            : [];
+
         return response()->json([
             ...$details,
+            ...$preview,
             'b2b_account' => $owner !== null ? $this->b2bLists->ownerPayload($owner) : null,
             // historia aktualizacji tego producenta — wpis jest jeden, przebiegów wiele
             'imports' => $priceList->imports()->with('importer:id,name')->get()->map(
@@ -489,12 +500,15 @@ class PriceListController extends Controller
 
         return response()->json([
             'message' => sprintf(
-                'Usunięto cennik %s / %s. Produktów usuniętych: %d%s.',
+                'Usunięto cennik %s / %s. Produktów usuniętych: %d%s%s.',
                 $result['manufacturer'],
                 $result['version'],
                 $result['products_deleted'],
                 $result['products_kept_shared'] > 0
-                    ? ', zachowanych (w innych cennikach): '.$result['products_kept_shared']
+                    ? ', zachowanych (zostają bez ceny z tego cennika): '.$result['products_kept_shared']
+                    : '',
+                $result['products_kept_tenders'] > 0
+                    ? ' (w tym użytych w przetargach: '.$result['products_kept_tenders'].')'
                     : ''
             ),
             ...$result,
