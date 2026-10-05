@@ -37,18 +37,24 @@ final class ProductImageRetry
 
     private const MAX_URLS = 5;
 
-    public function __construct(private readonly ProductImageDownloader $images) {}
+    /** W stanie karty: sklepy już sprawdzone — jedno zapytanie do wyszukiwarki na kartę, nie przy każdej próbie. */
+    private const SHOPS_TRIED = 'shops_tried';
+
+    public function __construct(
+        private readonly ProductImageDownloader $images,
+        private readonly ProductEnrichmentService $enrichment,
+    ) {}
 
     /**
      * @param  list<string>  $urls
-     * @return array{urls: list<string>, attempts: int}
+     * @return array{urls: list<string>, attempts: int, shops_tried?: true}
      */
-    public static function fresh(array $urls): array
+    public static function fresh(array $urls, bool $shopsTried = false): array
     {
         return [
             'urls' => array_slice(array_values(array_unique($urls)), 0, self::MAX_URLS),
             'attempts' => 0,
-        ];
+        ] + ($shopsTried ? [self::SHOPS_TRIED => true] : []);
     }
 
     /** Karty czekające na ponowienie. */
@@ -157,22 +163,34 @@ final class ProductImageRetry
 
         $saved = $this->images->downloadMany($product, $urls, 1);
         $attempts = (int) ($state['attempts'] ?? 0) + 1;
+        $from = 'manufacturer';
+        // przed kartami sklepów — ich downloadMany czyści listy producenta
+        $still = $this->images->lastRetryLaterUrls();
+        $failures = $this->images->lastFailures();
+        $shopsTried = ($state[self::SHOPS_TRIED] ?? false) === true;
+        if ($saved === [] && ! $shopsTried) {
+            // Zapora ansell.com puszcza dziś kilka plików na sto — zdjęcie wyrobu z karty sklepu (wybór użytkownika
+            // 05.10.2026), tymi samymi bramkami co przy przebiegu opisu: potwierdzona karta, weryfikator zdjęć.
+            $saved = $this->enrichment->imageFromShopCards($product);
+            $shopsTried = true;
+            $from = 'shop';
+        }
         if ($saved !== []) {
             $this->finish($product, clearError: true);
             Log::info('Product image retry saved', [
                 'product_id' => $product->id,
                 'url' => $saved[0]->source_url,
                 'attempt' => $attempts,
+                'from' => $from,
             ]);
 
             return 'saved';
         }
 
-        $still = $this->images->lastRetryLaterUrls();
         Log::info('Product image retry failed', [
             'product_id' => $product->id,
             'attempt' => $attempts,
-            'failures' => $this->images->lastFailures(),
+            'failures' => $failures,
         ]);
         if ($still === [] || $attempts >= self::MAX_ATTEMPTS) {
             // Ostatnia próba albo odmowa już nie chwilowa (404, usunięte z karty) — koniec ponawiania.
@@ -190,13 +208,13 @@ final class ProductImageRetry
             return $written ? 'gave_up' : 'skipped';
         }
 
-        $written = $this->writeIfUnchanged($product, static function (Product $card) use ($still, $attempts): void {
+        $written = $this->writeIfUnchanged($product, static function (Product $card) use ($still, $attempts, $shopsTried): void {
             $payload = is_array($card->enrichment_payload) ? $card->enrichment_payload : [];
             $payload[self::PAYLOAD_KEY] = [
                 'urls' => $still,
                 'attempts' => $attempts,
                 'last_at' => now()->toIso8601String(),
-            ];
+            ] + ($shopsTried ? [self::SHOPS_TRIED => true] : []);
             $card->enrichment_payload = $payload;
         });
 

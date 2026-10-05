@@ -59,6 +59,9 @@ class HybridWebSearchService
     /** Tyle cudzych oznaczeń modeli w treści zdradza listę katalogową, nie kartę produktu. */
     private const LISTING_FOREIGN_CODES = 3;
 
+    /** Serwisy aukcyjne i porównywarki — zdjęcie wystawcy, nie karta sklepu (shopCardsForImage). */
+    private const MARKETPLACE_HOSTS = '~(?:^|\.)(?:allegro|ceneo|amazon|ebay|aliexpress|empik|olx|temu)\.[a-z.]+$~i';
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly OpenAiCompatibleClient $llm,
@@ -1414,6 +1417,56 @@ class HybridWebSearchService
         );
 
         return $found['results'];
+    }
+
+    /**
+     * Karty sklepów z tym wyrobem — tylko po zdjęcie, gdy plik producenta zasłania zapora (ansell.com, 05.10.2026:
+     * 27 plików na ~1400 prób, z innego adresu IP też strona Incapsuli). Zwykłe szukanie kończy na karcie producenta,
+     * a „HyFlex 11-840 Ansell” zwraca w połowie ansell.com; z „-site:ansell.com” — same sklepy (glovex, icd, cerva…).
+     * Tavily operatora może nie znać, więc adresy producenta i tak odpadają tutaj. Bez serwisów aukcyjnych
+     * i porównywarek: zdjęcie wystawcy to nie packshot wyrobu.
+     * Wyczerpany limit wyszukiwarki to tu „brak sklepów”: opis karty jest już zapisany i nie może przez zdjęcie przepaść.
+     *
+     * @param  list<string>  $mfrDomains
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function shopCardsForImage(Product $product, array $mfrDomains): array
+    {
+        $phrase = $this->identity->primaryQueries($product)[0] ?? '';
+        if ($phrase === '') {
+            $phrase = $this->identity->productNameWithManufacturer($product);
+        }
+        if ($phrase === '') {
+            return [];
+        }
+        $exclude = [];
+        foreach ($mfrDomains as $domain) {
+            $bare = preg_replace('/^www\./', '', mb_strtolower(trim((string) $domain))) ?? '';
+            if ($bare !== '' && ! in_array($bare, $exclude, true)) {
+                $exclude[] = $bare;
+            }
+        }
+        $query = trim($phrase.' '.implode(' ', array_map(
+            static fn (string $host): string => '-site:'.$host,
+            array_slice($exclude, 0, 3)
+        )));
+
+        $profile = $this->settings->tavilySearchProfile();
+        $errors = [];
+        try {
+            $found = $this->cachedTavilySearch($product, $query, [], $profile, $profile->mode, 'industry', 'image-shops', $errors);
+        } catch (TavilyQuotaExceededException $e) {
+            $this->attemptLog()->add('err', '„'.$query.'”: '.$e->getMessage());
+
+            return [];
+        }
+        $shops = array_values(array_filter(
+            $this->dropListingResults($found['results'], $product),
+            fn (array $row): bool => ! $this->manufacturers->isManufacturerUrl((string) ($row['url'] ?? ''), $product, $mfrDomains)
+                && preg_match(self::MARKETPLACE_HOSTS, (string) (parse_url((string) ($row['url'] ?? ''), PHP_URL_HOST) ?? '')) !== 1
+        ));
+
+        return array_slice($this->codedThenNamed($shops, $this->resultsCarryProductCode($shops, $product), $product), 0, 8);
     }
 
     /**

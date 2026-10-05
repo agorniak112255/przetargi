@@ -6,12 +6,14 @@ namespace Tests\Feature;
 
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductImageRetry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -26,6 +28,10 @@ final class ProductImageRetryTest extends TestCase
     private const PRIMARY = 'https://www.ansell.com/-/media/projects/ansell/website/pim/product-assets/ringers/r-074/ringers074.ashx?rev=6dd6124447874cdeb6f5bfc23ad23498&mh=872&h=871&w=1016&la=en&hash=5DB3483F1682D9DA3810853CEAFDAF86';
 
     private const BARRELS = 'https://www.ansell.com/-/media/projects/ansell/website/pim/product-assets/ringers/r-074/ringers-074-chemical-application---examining-barrels.ashx?rev=7cc96bad7f0a4a61a7d5ee83fb21ce6e&mh=872&h=359&w=479&la=en&hash=D16D2D98B1CCC341A1F0624A9310396A';
+
+    private const SHOP = 'https://hurtownia.example/rekawice-ansell-ringers-r074';
+
+    private const SHOP_IMAGE = 'https://hurtownia.example/img/ringers-r074-packshot.jpg';
 
     private const INCAPSULA = '<html><head><META NAME="robots" CONTENT="noindex,nofollow"><script src="/_Incapsula_Resource?SWJIYLWA=5074a744e2e3d891814e9a2dace20bd4"></script><body></body></html>';
 
@@ -194,6 +200,81 @@ final class ProductImageRetryTest extends TestCase
         $this->assertSame(0, ProductImage::query()->where('product_id', $product->id)->count());
     }
 
+    /** 05.10.2026: zapora puszcza kilka plików ansell.com na sto — przy ponowieniu zdjęcie z karty sklepu. */
+    public function test_blocked_manufacturer_file_takes_image_from_shop_card(): void
+    {
+        $product = $this->product(retry: [self::PRIMARY], attempts: 1);
+        $asked = $this->fakeShopSearch([['url' => self::SHOP, 'title' => 'Rękawice Ansell RINGERS R074', 'snippet' => '']]);
+        $page = '<html><head><title>Ansell RINGERS R074 rękawice ochronne</title>'
+            .'<meta property="og:image" content="'.self::SHOP_IMAGE.'"></head><body><h1>Ansell RINGERS R074</h1>'
+            .'<img src="'.self::SHOP_IMAGE.'" alt="RINGERS R074">'
+            .'<div class="product-description">'.str_repeat('Rękawice Ansell RINGERS R074 powlekane PVC, wodoodporne, odporne chemicznie. ', 12).'</div>'
+            .'</body></html>';
+        Http::fake(function (Request $request) use ($page) {
+            $url = $request->url();
+
+            return match (true) {
+                str_starts_with($url, self::SHOP_IMAGE) => Http::response($this->jpeg(), 200, ['Content-Type' => 'image/jpeg']),
+                str_starts_with($url, self::SHOP) => Http::response($page, 200, ['Content-Type' => 'text/html']),
+                str_contains($url, 'r.jina.ai') => Http::response(self::JINA_TEXT, 200, ['Content-Type' => 'text/plain']),
+                default => Http::response(self::INCAPSULA, 200, ['Content-Type' => 'text/html']),
+            };
+        });
+
+        $this->assertSame('saved', app(ProductImageRetry::class)->retry($product));
+
+        $this->assertSame(1, $asked->count);
+        $product->refresh();
+        $this->assertArrayNotHasKey(ProductImageRetry::PAYLOAD_KEY, $product->enrichment_payload);
+        $this->assertNull($product->enrichment_error);
+        $this->assertSame(self::SHOP_IMAGE, $product->images()->sole()->source_url);
+    }
+
+    /** Sklepy pytamy raz na kartę — kolejne próby co 3 h idą już tylko do pliku producenta. */
+    public function test_shop_cards_are_asked_once_per_card(): void
+    {
+        $product = $this->product(retry: [self::PRIMARY], attempts: 0);
+        $this->fakeFirewall();
+        $asked = $this->fakeShopSearch([]);
+        $retry = app(ProductImageRetry::class);
+
+        $this->assertSame('waiting', $retry->retry($product));
+        $state = $product->refresh()->enrichment_payload[ProductImageRetry::PAYLOAD_KEY];
+        $this->assertTrue($state['shops_tried']);
+        $this->assertSame(1, $state['attempts']);
+
+        $this->assertSame('waiting', $retry->retry($product));
+        $state = $product->refresh()->enrichment_payload[ProductImageRetry::PAYLOAD_KEY];
+        $this->assertTrue($state['shops_tried']);
+        $this->assertSame(2, $state['attempts']);
+        $this->assertSame(1, $asked->count);
+    }
+
+    /** Przebieg opisu sprawdził już sklepy (stan z fresh(…, shopsTried: true)) — ponawianie ich nie powtarza. */
+    public function test_card_whose_enrichment_already_tried_shops_goes_to_manufacturer_only(): void
+    {
+        $product = $this->product(retry: [self::PRIMARY], attempts: 0);
+        $payload = $product->enrichment_payload;
+        $payload[ProductImageRetry::PAYLOAD_KEY] = ProductImageRetry::fresh([self::PRIMARY], shopsTried: true);
+        $product->forceFill(['enrichment_payload' => $payload])->save();
+        $this->fakeFirewall();
+        $asked = $this->fakeShopSearch([]);
+
+        $this->assertSame('waiting', app(ProductImageRetry::class)->retry($product));
+        $this->assertSame(0, $asked->count);
+    }
+
+    /** 404 u producenta kończy ponawianie — ale najpierw sklepy, bo karta i tak nie ma zdjęcia. */
+    public function test_permanent_failure_still_tries_shop_cards_before_giving_up(): void
+    {
+        $product = $this->product(retry: [self::PRIMARY], attempts: 0);
+        Http::fake(['*' => Http::response('Not found', 404, ['Content-Type' => 'text/html'])]);
+        $asked = $this->fakeShopSearch([]);
+
+        $this->assertSame('gave_up', app(ProductImageRetry::class)->retry($product));
+        $this->assertSame(1, $asked->count);
+    }
+
     public function test_permanent_failure_stops_retrying_at_once(): void
     {
         $product = $this->product(retry: [self::PRIMARY], attempts: 0);
@@ -317,6 +398,27 @@ final class ProductImageRetryTest extends TestCase
             'enrichment_payload' => $payload,
             'enrichment_error' => $error,
         ]);
+    }
+
+    /**
+     * @param  list<array<string, string>>  $cards
+     */
+    private function fakeShopSearch(array $cards): object
+    {
+        $asked = new class
+        {
+            public int $count = 0;
+        };
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('moreCatalogHits')->zeroOrMoreTimes()->andReturn([]);
+        $search->shouldReceive('shopCardsForImage')->zeroOrMoreTimes()->andReturnUsing(static function () use ($asked, $cards): array {
+            $asked->count++;
+
+            return $cards;
+        });
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        return $asked;
     }
 
     private function fakeFirewall(): void

@@ -1325,7 +1325,8 @@ final class ProductEnrichmentService
                     $product,
                     $searchResults,
                     $sourceUrls,
-                    $mfrDomains
+                    $mfrDomains,
+                    sourceRefused: $imageRetryUrls !== [],
                 );
             }
             if ($savedImages === []) {
@@ -1438,7 +1439,8 @@ final class ProductEnrichmentService
             $product->refresh();
             $productPayload = $payload;
             if ($retryImages) {
-                $productPayload[ProductImageRetry::PAYLOAD_KEY] = ProductImageRetry::fresh($imageRetryUrls);
+                // sklepy ten przebieg już sprawdził (tryImagesFromOtherCards ze sourceRefused) — ponawianie ich nie powtarza
+                $productPayload[ProductImageRetry::PAYLOAD_KEY] = ProductImageRetry::fresh($imageRetryUrls, shopsTried: true);
             }
             if ($priceListSources !== null) {
                 $productPayload['price_list_sources'] = $priceListSources;
@@ -1883,7 +1885,40 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Zdjęcie z karty sklepu dla ponawiania (products:retry-images): plik producenta nadal zasłania zapora,
+     * a opis karty już jest — szukamy tylko zdjęcia, bez nowego przebiegu opisu.
+     *
+     * @return list<object>
+     */
+    public function imageFromShopCards(Product $product): array
+    {
+        // „Tylko producent i strony cennika” — sklepów spoza listy nie bierzemy, także po zdjęcie.
+        if (app(PriceListCards::class)->sourceSettingsFor($product)?->onlyMode()) {
+            return [];
+        }
+        // Dziennik przebiegu żyje w zakresie polecenia, a nie karty — bez tego kroki kart zlewałyby się do limitu.
+        $this->attemptLog()->reset();
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $sourceUrls = array_values(array_filter(
+            (array) ($payload['source_urls'] ?? []),
+            static fn ($url): bool => is_string($url) && $url !== ''
+        ));
+
+        return $this->tryImagesFromOtherCards(
+            $product,
+            [],
+            $sourceUrls,
+            $this->manufacturers->domainsFor($product),
+            sourceRefused: true,
+        );
+    }
+
+    /**
      * Gdy pierwsza karta nie da ściągalnego zdjęcia — do 5 innych sklepów, bez zrzutu strony.
+     *
+     * Źródło odmówiło pliku (zapora ansell.com, 403/429) — wyniki wyszukiwania kończą wtedy zwykle na karcie
+     * producenta i sklepów w nich nie ma. Kolejne partie, każda tylko gdy poprzednia nie dała zdjęcia: karty sklepów
+     * z lokalnego indeksu, potem jedno zapytanie o sklepy bez domeny producenta.
      *
      * @param  list<array{url?: string, title?: string, snippet?: string}>  $searchResults
      * @param  list<string>  $usedPageUrls
@@ -1895,6 +1930,7 @@ final class ProductEnrichmentService
         array $searchResults,
         array $usedPageUrls,
         array $mfrDomains,
+        bool $sourceRefused = false,
     ): array {
         $tried = [];
         foreach ($usedPageUrls as $url) {
@@ -1904,9 +1940,49 @@ final class ProductEnrichmentService
             }
         }
 
+        $batches = [
+            'wyniki wyszukiwania' => fn (): array => $searchResults,
+        ];
+        // „Tylko producent i strony cennika”: sklepy z indeksu i wyszukiwarki są spoza listy cennika
+        if ($sourceRefused && ! $this->listSources?->onlyMode()) {
+            $batches['indeks sklepów'] = fn (): array => $this->search->moreCatalogHits($product, array_keys($tried));
+            $batches['sklepy bez strony producenta'] = fn (): array => $this->search->shopCardsForImage($product, $mfrDomains);
+        }
+        foreach ($batches as $label => $rows) {
+            $candidates = $this->shopImageCandidates($product, $rows(), $mfrDomains, $tried);
+            if ($candidates === []) {
+                continue;
+            }
+            $saved = $this->imageFromCandidateCards($product, $candidates);
+            if ($saved !== []) {
+                if ($sourceRefused) {
+                    $this->attemptLog()->add(
+                        'image',
+                        'zdjęcie z karty sklepu ('.$label.') — plik producenta zablokowany',
+                        urls: [(string) ($saved[0]->source_url ?? '')]
+                    );
+                }
+
+                return $saved;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Do 5 kart sklepów spoza $tried — bez producenta, wykluczonych hostów (nasz sklep), obrazków i PDF-ów.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @param  list<string>  $mfrDomains
+     * @param  array<string, true>  $tried  uzupełniane o wybrane adresy
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    private function shopImageCandidates(Product $product, array $rows, array $mfrDomains, array &$tried): array
+    {
         $candidates = [];
         // po drugiej próbie $searchResults niesie też karty z indeksu i sklepów — bez filtra wykluczonych hostów
-        foreach ($this->dropBlockedSourceHosts($searchResults, $product) as $row) {
+        foreach ($this->dropBlockedSourceHosts($rows, $product) as $row) {
             $url = (string) ($row['url'] ?? '');
             $key = mb_strtolower($url);
             if ($url === '' || isset($tried[$key]) || ! str_starts_with($url, 'http')) {
@@ -1930,6 +2006,15 @@ final class ProductEnrichmentService
             }
         }
 
+        return $candidates;
+    }
+
+    /**
+     * @param  list<array{url: string, title: string, snippet: string}>  $candidates
+     * @return list<object>
+     */
+    private function imageFromCandidateCards(Product $product, array $candidates): array
+    {
         foreach ($candidates as $row) {
             $fetched = $this->pages->fetch([$row], (string) $product->sku, 1, [], $product);
             $pages = $this->keepConfirmedCardPages($product, $fetched['pages']);
