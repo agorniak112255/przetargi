@@ -176,7 +176,7 @@ export function OffersHelp() {
         {
           action: 'Ceny w ofercie',
           does: 'Przy każdej pozycji widzisz stan magazynu, koszt zakupu (średni koszt partii towaru z ERP XL, a dla karty bez towaru w XL — cenę zakupu karty) i cenę sugerowaną = koszt zakupu + Twoja domyślna marża z Moje konto → Oferty → „Domyślna marża”. Cena sugerowana wpisuje się sama jako „Cena netto w ofercie” przy dodaniu pozycji — możesz ją zmienić, a „wstaw sugerowaną” przywraca ją jednym kliknięciem. Gdy kosztu brak, pole jest puste i trzeba wpisać cenę ręcznie: bez ceny przy każdej pozycji oferty nie da się wysłać ani skopiować. Cena niższa od kosztu zakupu dostaje ostrzeżenie, ale nie blokuje wysyłki. Kolejne produkty dodasz też przyciskiem „+ Dodaj produkt” w samej ofercie: otwiera duże okno z wyszukiwarką (każde słowo zawęża listę), podglądem karty ze zdjęciem i opisem — wybierz kartę i „Dodaj … do oferty”; okno zostaje otwarte, więc dodasz kilka produktów pod rząd (wymaga uprawnienia „Produkty — podgląd”); kolejność pozycji w mailu zmieniasz strzałkami w górę i w dół.',
-          click: 'Kliknij w pole „Cena netto w ofercie” i wpisz kwotę. Nowy produkt: „+ Dodaj produkt” nad tabelą — wpisz nazwę lub kod, kliknij kartę i „Dodaj … do oferty”.',
+          click: 'Kliknij w pole „Cena netto w ofercie” i wpisz kwotę. Pozycje bez ceny mają też pole kwoty nad podglądem maila — tam uzupełnisz brakującą cenę bez przewijania do tabeli. Nowy produkt: „+ Dodaj produkt” nad tabelą — wpisz nazwę lub kod, kliknij kartę i „Dodaj … do oferty”.',
           tone: 'amber',
           screen: (
             <AppFrame nav="Oferty">

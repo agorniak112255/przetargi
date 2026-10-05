@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import {
@@ -348,6 +348,15 @@ function Editor({ initial }: { initial: Offer }) {
           loading={previewLoading}
           error={previewErr}
           onRefresh={() => void refreshPreview()}
+          missingPrices={
+            <MissingPrices
+              items={offer.items}
+              onPatch={(item, price) =>
+                mutate(() => updateOfferItem(offerId, item.id, { price_net: price }), 'Nie udało się zapisać pozycji.')
+              }
+              onInvalid={setErr}
+            />
+          }
         />
       </div>
 
@@ -379,6 +388,13 @@ function Editor({ initial }: { initial: Offer }) {
 }
 
 /* ---------- Produkty ---------- */
+
+const ITEMS_SECTION_ID = 'offer-items'
+
+/** Pozycja trafia do maila i nie ma ceny — ta sama reguła co blokada wysyłki (SendSection). */
+function lacksPrice(item: OfferItem): boolean {
+  return item.price_net == null && (item.erp_item_id != null || item.product_id != null)
+}
 
 function ItemsSection({
   offer,
@@ -438,7 +454,7 @@ function ItemsSection({
   const noImage = items.filter((i) => i.warnings.no_image).length
 
   return (
-    <div className="rounded-xl bg-white shadow-sm">
+    <div id={ITEMS_SECTION_ID} className="scroll-mt-4 rounded-xl bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5">
         <div className="flex flex-wrap items-baseline gap-2">
           <h2 className="app-card-title text-sm font-semibold text-slate-900">Produkty w ofercie</h2>
@@ -999,12 +1015,15 @@ function PreviewSection({
   loading,
   error,
   onRefresh,
+  missingPrices,
 }: {
   preview: OfferPreview | null
   fresh: boolean
   loading: boolean
   error: string
   onRefresh: () => void
+  /** Pola cen pozycji bez ceny — przy podglądzie, bo tu widać, że w mailu brakuje ceny. */
+  missingPrices: ReactNode
 }) {
   return (
     <div className="rounded-xl bg-white p-4 text-xs shadow-sm">
@@ -1018,6 +1037,7 @@ function PreviewSection({
         </span>
       </div>
       {error && <ErrorBar message={error} />}
+      {missingPrices}
       {preview && (
         <div className="mb-2 space-y-1.5">
           {preview.from === '' && (
@@ -1033,13 +1053,6 @@ function PreviewSection({
             <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-900">
               Brak publicznego adresu aplikacji — w mailu nie będzie zdjęć ani baneru, a wysyłka jest zablokowana. Ustawia
               go administrator.
-            </p>
-          )}
-          {preview.missing_prices.length > 0 && (
-            <p className="rounded border border-red-200 bg-red-50 px-2 py-1.5 text-red-800">
-              {preview.missing_prices.length}{' '}
-              {plural(preview.missing_prices.length, 'pozycja nie ma', 'pozycje nie mają', 'pozycji nie ma')} ceny — uzupełnij
-              ją, zanim wyślesz albo skopiujesz ofertę.
             </p>
           )}
         </div>
@@ -1066,6 +1079,70 @@ function PreviewSection({
       ) : (
         !error && <p className="text-slate-500">Przygotowuję podgląd…</p>
       )}
+    </div>
+  )
+}
+
+/**
+ * Pozycje bez ceny z polem kwoty przy podglądzie maila — pole ceny w tabeli „Produkty w ofercie” jest wysoko nad
+ * podglądem i łatwo go nie zauważyć (zgłoszenie użytkownika 05.10.2026). Zapis taki sam jak w tabeli; pozycja znika
+ * z listy, gdy dostanie cenę. Wszystkie ceny (także już wpisane) zmienia się w tabeli.
+ */
+function MissingPrices({
+  items,
+  onPatch,
+  onInvalid,
+}: {
+  items: OfferItem[]
+  onPatch: (item: OfferItem, price: number | null) => Promise<Offer | null>
+  onInvalid: (message: string) => void
+}) {
+  const missing = items.filter(lacksPrice)
+  const showTable = () => document.getElementById(ITEMS_SECTION_ID)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  return (
+    <div className="mb-2 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-slate-700">
+      {missing.length > 0 && (
+        <>
+          <p className="font-medium text-red-800">
+            {missing.length} {plural(missing.length, 'pozycja nie ma', 'pozycje nie mają', 'pozycji nie ma')} ceny — wpisz
+            cenę netto, zanim wyślesz albo skopiujesz ofertę:
+          </p>
+          <ul className="mt-1.5 space-y-1.5">
+            {missing.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <span className="min-w-0 flex-1">
+                  <span className="text-slate-900">{item.name || <span className="italic text-slate-500">bez nazwy</span>}</span>
+                  {item.code && <span className="ml-1.5 font-mono text-[11px] text-slate-500">{item.code}</span>}
+                </span>
+                <span className="inline-flex items-center gap-2">
+                  {item.suggested_price != null && (
+                    <button
+                      type="button"
+                      className="text-[11px] text-blue-600 hover:underline"
+                      onClick={() => void onPatch(item, item.suggested_price)}
+                    >
+                      wstaw sugerowaną {formatPln(item.suggested_price)}
+                    </button>
+                  )}
+                  <MoneyInput
+                    value={item.price_net}
+                    label={`Cena netto w ofercie: ${item.name}`}
+                    onCommit={(v) => onPatch(item, v).then(Boolean)}
+                    onInvalid={() => onInvalid('Cena netto: wpisz kwotę, np. 89,00.')}
+                  />
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className={missing.length > 0 ? 'mt-1.5 text-[11px] text-slate-500' : 'text-[11px] text-slate-500'}>
+        {missing.length > 0 ? 'Pozostałe ceny' : 'Ceny pozycji'} zmienisz w tabeli{' '}
+        <button type="button" className="text-blue-600 hover:underline" onClick={showTable}>
+          „Produkty w ofercie” ↑
+        </button>{' '}
+        — kolumna „Cena netto w ofercie”.
+      </p>
     </div>
   )
 }
