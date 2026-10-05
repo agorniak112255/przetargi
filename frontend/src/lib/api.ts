@@ -963,8 +963,13 @@ export type ErpAdminItem = {
   outcome: ErpOutcome
   /** Kod z XL, którym próbowano łączyć (także przy no_match). */
   match_value: string | null
+  /** Kto i kiedy połączył towar z kartą (najnowsze potwierdzenie, bez niego automat); null = niepołączony. */
+  linked: { auto: boolean; by: string | null; at: string | null } | null
   links: ErpAdminLink[]
 }
+
+/** Kto ile towarów połączył: key = wartość filtra linked_by ('auto' = automat, id osoby; null = osoba usunięta). */
+export type ErpAdminLinker = { key: string | null; name: string; count: number }
 
 /** Liczniki ekranu powiązań — tylko towary aktywne (bez archiwalnych i usuniętych z XL). */
 export type ErpAdminSummary = {
@@ -974,6 +979,8 @@ export type ErpAdminSummary = {
   unlinked_sold_12m: number
   unlinked_in_stock: number
   groups: { group: string; total: number; linked: number }[]
+  /** Wszyscy, którzy łączyli (automat pierwszy) — opcje filtra „Połączył”. */
+  linkers: ErpAdminLinker[]
 }
 
 /** Magazyn towaru na stronie Zapasy; value = wartość księgowa netto partii w PLN (null = brak z XL). */

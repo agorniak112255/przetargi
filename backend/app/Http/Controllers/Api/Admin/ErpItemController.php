@@ -8,8 +8,12 @@ use App\Http\Controllers\Controller;
 use App\Models\ErpItem;
 use App\Models\ErpItemLink;
 use App\Models\Product;
+use App\Models\User;
 use App\Services\Erp\ErpLinkDecisions;
+use App\Support\PolishTime;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -45,6 +49,36 @@ class ErpItemController extends Controller
         'name' => 'name',
     ];
 
+    /** Sortowania po wartościach z powiązań (podzapytania) — towary bez wartości zawsze na końcu. */
+    private const LINK_SORTS = ['status', 'card', 'linked_at', 'linked_by'];
+
+    /** Kolejność statusów przy sortowaniu: połączone, do decyzji, bez karty, bez kodu, odrzucone, nie przeliczone. */
+    private const OUTCOME_RANK = [
+        'confirmed' => 0,
+        'auto' => 1,
+        'suggested' => 2,
+        'ambiguous' => 2,
+        'name_suggested' => 2,
+        'search_suggested' => 2,
+        'no_match' => 3,
+        'family_conflict' => 3,
+        'no_code' => 4,
+        'rejected' => 5,
+    ];
+
+    /** „Połączył” w filtrze i zestawieniu: automat zamiast osoby. */
+    private const LINKER_AUTO = 'auto';
+
+    /**
+     * Wartości powiązania łączącego towar (linking()): kiedy — potwierdzenie człowieka albo założenie przez automat;
+     * kto — id osoby, 0 = automat, -1 = potwierdzenie osoby usuniętej z systemu.
+     */
+    private const LINKED_AT_SQL = "case when pl.status = 'confirmed' then coalesce(pl.decided_at, pl.created_at) else pl.created_at end";
+
+    private const LINKER_SQL = "case when pl.status = 'confirmed' then coalesce(pl.decided_by, -1) else 0 end";
+
+    private const LINKER_NAME_SQL = "case when pl.status = 'confirmed' then coalesce((select u.name from users u where u.id = pl.decided_by), '') else 'Automat' end";
+
     private const OUTCOMES = ['auto', 'confirmed', 'suggested', 'ambiguous', 'name_suggested', 'search_suggested', 'no_match', 'family_conflict', 'no_code', 'rejected'];
 
     private const LINK_ORDER = [
@@ -65,7 +99,10 @@ class ErpItemController extends Controller
             'sold_months' => ['nullable', 'integer', Rule::in([3, 6, 12])],
             'supplier' => ['nullable', 'string', 'max:100'],
             'search' => ['nullable', 'string', 'max:150'],
-            'sort' => ['nullable', 'string', Rule::in(array_keys(self::SORTS))],
+            'linked_by' => ['nullable', 'string', 'regex:/^(auto|[1-9]\d{0,9})$/'],
+            'linked_from' => ['nullable', 'date_format:Y-m-d'],
+            'linked_to' => ['nullable', 'date_format:Y-m-d', ...($request->filled('linked_from') ? ['after_or_equal:linked_from'] : [])],
+            'sort' => ['nullable', 'string', Rule::in([...array_keys(self::SORTS), ...self::LINK_SORTS])],
             'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
@@ -104,10 +141,27 @@ class ErpItemController extends Controller
                 ->orWhere('name1', 'like', $like)
                 ->orWhereHas('links.product', fn (Builder $p) => $p->where('sku', 'like', $like)));
         }
+        if (! empty($v['linked_from'])) {
+            $query->where($this->linking(self::LINKED_AT_SQL), '>=', $this->polishDayStart((string) $v['linked_from']));
+        }
+        if (! empty($v['linked_to'])) {
+            $query->where($this->linking(self::LINKED_AT_SQL), '<', $this->polishDayStart((string) $v['linked_to'], 1));
+        }
+        // zestawienie „kto ile połączył” dla tych samych filtrów, bez filtra osoby — widać wszystkich w okresie
+        $linkers = $this->linkers(clone $query);
+        $linkedBy = (string) ($v['linked_by'] ?? '');
+        if ($linkedBy !== '') {
+            $query->where($this->linking(self::LINKER_SQL), '=', $linkedBy === self::LINKER_AUTO ? 0 : (int) $linkedBy);
+        }
 
-        $column = self::SORTS[$v['sort'] ?? 'stock'];
+        $sort = (string) ($v['sort'] ?? 'stock');
+        $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+        if (in_array($sort, self::LINK_SORTS, true)) {
+            $this->orderByLinkValue($query, $sort, $dir);
+        } else {
+            $query->orderBy(self::SORTS[$sort], $dir);
+        }
         $page = $query
-            ->orderBy($column, ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc')
             ->orderBy('id')
             ->with(['links.product:id,sku,name,manufacturer', 'links.decider:id,name'])
             ->paginate((int) ($v['per_page'] ?? 50));
@@ -119,6 +173,7 @@ class ErpItemController extends Controller
                 'last_page' => $page->lastPage(),
                 'per_page' => $page->perPage(),
                 'total' => $page->total(),
+                'linkers' => $linkers,
             ],
         ]);
     }
@@ -154,6 +209,7 @@ class ErpItemController extends Controller
             'unlinked_sold_12m' => $unlinked()->where('last_sale_at', '>=', now()->subMonths(12)->toDateString())->count(),
             'unlinked_in_stock' => $unlinked()->where('stock_trade', '>', 0)->count(),
             'groups' => array_values($groups),
+            'linkers' => $this->linkers($this->active()),
         ]);
     }
 
@@ -202,6 +258,137 @@ class ErpItemController extends Controller
         return addcslashes($value, '%_\\');
     }
 
+    /**
+     * Podzapytanie o powiązanie, które łączy towar z kartą: najnowsze potwierdzone, bez niego automat — ta sama
+     * reguła co linkedBy() przy wierszu.
+     */
+    private function linking(string $select): QueryBuilder
+    {
+        return DB::table('erp_item_links as pl')
+            ->selectRaw($select)
+            ->whereColumn('pl.erp_item_id', 'erp_items.id')
+            ->whereNotNull('pl.product_id')
+            ->whereIn('pl.status', [ErpItemLink::STATUS_CONFIRMED, ErpItemLink::STATUS_AUTO])
+            ->orderByRaw("case when pl.status = 'confirmed' then 0 else 1 end")
+            ->orderByRaw('coalesce(pl.decided_at, pl.created_at) desc')
+            ->orderByDesc('pl.id')
+            ->limit(1);
+    }
+
+    /** @param  Builder<ErpItem>  $query */
+    private function orderByLinkValue(Builder $query, string $sort, string $dir): void
+    {
+        if ($sort === 'status') {
+            $sql = 'case match_outcome';
+            $bindings = [];
+            foreach (self::OUTCOME_RANK as $outcome => $rank) {
+                $sql .= ' when ? then '.$rank;
+                $bindings[] = $outcome;
+            }
+            $query->orderByRaw($sql.' else 9 end '.$dir, $bindings);
+
+            return;
+        }
+        $value = match ($sort) {
+            // pierwsza karta w kolejności wiersza: potwierdzona, automat, propozycja (bez odrzuconych)
+            'card' => DB::table('erp_item_links as cl')
+                ->join('products as cp', 'cp.id', '=', 'cl.product_id')
+                ->select('cp.sku')
+                ->whereColumn('cl.erp_item_id', 'erp_items.id')
+                ->where('cl.status', '!=', ErpItemLink::STATUS_REJECTED)
+                ->orderByRaw("case cl.status when 'confirmed' then 0 when 'auto' then 1 else 2 end")
+                ->orderBy('cl.id')
+                ->limit(1),
+            'linked_by' => $this->linking(self::LINKER_NAME_SQL),
+            default => $this->linking(self::LINKED_AT_SQL),
+        };
+        $sql = '('.$value->toSql().')';
+        $query->orderByRaw($sql.' is null', $value->getBindings())->orderByRaw($sql.' '.$dir, $value->getBindings());
+        if ($sort === 'linked_by') {
+            $at = $this->linking(self::LINKED_AT_SQL);
+            $query->orderByRaw('('.$at->toSql().') desc', $at->getBindings());
+        }
+    }
+
+    /**
+     * Kto ile towarów połączył (automat pierwszy, potem osoby od największej liczby).
+     *
+     * @param  Builder<ErpItem>  $query
+     * @return list<array{key: string|null, name: string, count: int}>
+     */
+    private function linkers(Builder $query): array
+    {
+        $rows = DB::query()
+            ->fromSub($query->select(['linker' => $this->linking(self::LINKER_SQL)]), 'x')
+            ->whereNotNull('linker')
+            ->selectRaw('linker, count(*) as c')
+            ->groupBy('linker')
+            ->get();
+        $names = User::query()
+            ->whereIn('id', $rows->pluck('linker')->map(fn ($id): int => (int) $id)->filter(fn (int $id): bool => $id > 0)->all())
+            ->pluck('name', 'id');
+        $out = [];
+        foreach ($rows as $row) {
+            $id = (int) $row->linker;
+            $out[] = [
+                'key' => match (true) {
+                    $id === 0 => self::LINKER_AUTO,
+                    $id > 0 => (string) $id,
+                    default => null,
+                },
+                'name' => match (true) {
+                    $id === 0 => 'automat',
+                    $id > 0 => (string) ($names[$id] ?? 'użytkownik #'.$id),
+                    default => 'osoba usunięta z systemu',
+                },
+                'count' => (int) $row->c,
+            ];
+        }
+        usort($out, static fn (array $a, array $b): int => [$a['key'] !== self::LINKER_AUTO, $b['count'], $a['name']]
+            <=> [$b['key'] !== self::LINKER_AUTO, $a['count'], $b['name']]);
+
+        return $out;
+    }
+
+    /** Północ dnia polskiego (+ dni) jako chwila UTC w zapisie bazy. */
+    private function polishDayStart(string $date, int $addDays = 0): string
+    {
+        return CarbonImmutable::createFromFormat('!Y-m-d', $date, PolishTime::TIMEZONE)
+            ->addDays($addDays)
+            ->utc()
+            ->format('Y-m-d H:i:s');
+    }
+
+    /**
+     * Kto i kiedy połączył towar z kartą — powiązanie wybrane jak w linking().
+     *
+     * @return array{auto: bool, by: string|null, at: string|null}|null
+     */
+    private function linkedBy(ErpItem $item): ?array
+    {
+        $link = $item->links
+            ->filter(static fn (ErpItemLink $l): bool => $l->product_id !== null
+                && in_array($l->status, [ErpItemLink::STATUS_CONFIRMED, ErpItemLink::STATUS_AUTO], true))
+            ->sort(static function (ErpItemLink $a, ErpItemLink $b): int {
+                $at = static fn (ErpItemLink $l): string => (string) ($l->decided_at ?? $l->created_at)?->format('Y-m-d H:i:s');
+
+                return [$a->status !== ErpItemLink::STATUS_CONFIRMED, $at($b), $b->id]
+                    <=> [$b->status !== ErpItemLink::STATUS_CONFIRMED, $at($a), $a->id];
+            })
+            ->first();
+        if ($link === null) {
+            return null;
+        }
+        $auto = $link->status === ErpItemLink::STATUS_AUTO;
+        $at = $auto ? $link->created_at : ($link->decided_at ?? $link->created_at);
+
+        return [
+            'auto' => $auto,
+            'by' => $auto ? null : ($link->decider?->name ?? ($link->decided_by !== null ? 'użytkownik #'.$link->decided_by : 'osoba usunięta z systemu')),
+            'at' => $at?->toIso8601String(),
+        ];
+    }
+
     /** @return array<string, mixed> */
     private function presentFresh(ErpItem $item): array
     {
@@ -246,6 +433,7 @@ class ErpItemController extends Controller
             'last_supplier' => $item->last_supplier,
             'outcome' => $item->match_outcome,
             'match_value' => $item->match_value,
+            'linked' => $this->linkedBy($item),
             'links' => $links,
         ];
     }

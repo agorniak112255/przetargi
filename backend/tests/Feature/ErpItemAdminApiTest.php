@@ -157,6 +157,70 @@ final class ErpItemAdminApiTest extends TestCase
         $this->assertSame('confirmed', $first->refresh()->match_outcome);
     }
 
+    public function test_who_and_when_linked_for_reports(): void
+    {
+        $ala = User::factory()->withRole('admin')->create(['name' => 'Ala']);
+        $bartek = User::factory()->withRole('admin')->create(['name' => 'Bartek']);
+        $cardA = $this->card('A-1', 'UVEX', 'Okulary A');
+        $cardB = $this->card('B-1', 'UVEX', 'Okulary B');
+        $cardC = $this->card('C-1', 'UVEX', 'Okulary C');
+        $cardD = $this->card('D-1', 'UVEX', 'Okulary D');
+
+        $this->travelTo('2026-09-29 07:00:00');
+        $auto = $this->item('SAUTO', 'AUTOMAT', 'auto');
+        $this->link($auto, $cardD, ErpItemLink::STATUS_AUTO);
+        $byAla = $this->item('SALA', 'ALA', 'suggested');
+        $alaLink = $this->link($byAla, $cardB, ErpItemLink::STATUS_SUGGESTED);
+        $byAla2 = $this->item('SALA2', 'ALA 2', 'no_code');
+        $byBartek = $this->item('SBART', 'BARTEK', 'no_code');
+        $open = $this->item('SOPEN', 'OTWARTY', 'suggested');
+        $this->link($open, $cardA, ErpItemLink::STATUS_SUGGESTED);
+
+        $this->travelTo('2026-10-01 10:00:00');
+        Sanctum::actingAs($ala);
+        $this->postJson('/api/admin/erp-links/'.$alaLink->id.'/confirm')->assertOk();
+        $this->travelTo('2026-10-02 12:00:00');
+        $this->postJson('/api/admin/erp-items/'.$byAla2->id.'/link', ['product_id' => $cardC->id])->assertOk();
+        // 23:30 UTC 3.10 = 01:30 4.10 w Polsce
+        $this->travelTo('2026-10-03 23:30:00');
+        Sanctum::actingAs($bartek);
+        $this->postJson('/api/admin/erp-items/'.$byBartek->id.'/link', ['product_id' => $cardA->id])->assertOk();
+
+        $rows = collect($this->getJson('/api/admin/erp-items?sort=code&dir=asc')->assertOk()->json('data'))->keyBy('code');
+        $this->assertSame(['auto' => true, 'by' => null, 'at' => '2026-09-29T07:00:00+00:00'], $rows['SAUTO']['linked']);
+        $this->assertSame(['auto' => false, 'by' => 'Ala', 'at' => '2026-10-01T10:00:00+00:00'], $rows['SALA']['linked']);
+        $this->assertSame('Bartek', $rows['SBART']['linked']['by']);
+        $this->assertNull($rows['SOPEN']['linked']);
+
+        // filtr osoby i okresu (dni polskie)
+        $this->assertSame(['SAUTO'], $this->codes('linked_by=auto'));
+        $this->assertSame(['SALA', 'SALA2'], $this->codes('linked_by='.$ala->id.'&sort=code&dir=asc'));
+        $this->assertSame(['SALA', 'SALA2'], $this->codes('linked_from=2026-10-01&linked_to=2026-10-03&sort=code&dir=asc'));
+        $this->assertSame(['SBART'], $this->codes('linked_from=2026-10-04'));
+        $this->assertSame(['SAUTO'], $this->codes('linked_to=2026-09-30'));
+        $this->getJson('/api/admin/erp-items?linked_from=2026-10-04&linked_to=2026-10-01')->assertUnprocessable();
+
+        // zestawienie: te same filtry, bez filtra osoby
+        $period = $this->getJson('/api/admin/erp-items?linked_from=2026-10-01&linked_by='.$bartek->id)->assertOk();
+        $this->assertSame(['SBART'], array_column($period->json('data'), 'code'));
+        $this->assertSame([
+            ['key' => (string) $ala->id, 'name' => 'Ala', 'count' => 2],
+            ['key' => (string) $bartek->id, 'name' => 'Bartek', 'count' => 1],
+        ], $period->json('meta.linkers'));
+        $this->assertSame([
+            ['key' => 'auto', 'name' => 'automat', 'count' => 1],
+            ['key' => (string) $ala->id, 'name' => 'Ala', 'count' => 2],
+            ['key' => (string) $bartek->id, 'name' => 'Bartek', 'count' => 1],
+        ], $this->getJson('/api/admin/erp-items/summary')->json('linkers'));
+
+        // sortowanie: niepołączone zawsze na końcu
+        $this->assertSame(['SBART', 'SALA2', 'SALA', 'SAUTO', 'SOPEN'], $this->codes('sort=linked_at&dir=desc'));
+        $this->assertSame(['SAUTO', 'SALA', 'SALA2', 'SBART', 'SOPEN'], $this->codes('sort=linked_at&dir=asc'));
+        $this->assertSame(['SALA2', 'SALA', 'SAUTO', 'SBART', 'SOPEN'], $this->codes('sort=linked_by&dir=asc'));
+        $this->assertSame(['SALA', 'SALA2', 'SBART', 'SAUTO', 'SOPEN'], $this->codes('sort=status&dir=asc&per_page=5'));
+        $this->assertSame(['SBART', 'SOPEN', 'SALA', 'SALA2', 'SAUTO'], $this->codes('sort=card&dir=asc'));
+    }
+
     /** @return list<string> */
     private function codes(string $query): array
     {

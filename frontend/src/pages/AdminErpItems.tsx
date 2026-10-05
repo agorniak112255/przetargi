@@ -3,18 +3,39 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { applyCheckboxRange } from '../lib/checkboxRange'
-import { api, can, type ErpAdminItem, type ErpAdminLink, type ErpAdminSummary, type ErpOutcome } from '../lib/api'
+import {
+  api,
+  can,
+  type ErpAdminItem,
+  type ErpAdminLink,
+  type ErpAdminLinker,
+  type ErpAdminSummary,
+  type ErpOutcome,
+} from '../lib/api'
 import { erpQty, erpUnitLabel } from '../lib/erpStock'
 import { formatDate, formatDateTime } from '../lib/priceChange'
 
 type ItemsPage = {
   data: ErpAdminItem[]
-  meta: { current_page: number; last_page: number; per_page: number; total: number }
+  /** linkers: kto ile połączył przy tych filtrach (bez filtra „Połączył”). */
+  meta: { current_page: number; last_page: number; per_page: number; total: number; linkers: ErpAdminLinker[] }
 }
 
 type StatusFilter = '' | 'linked' | 'auto' | 'confirmed' | 'review' | 'no_card' | 'no_code' | 'rejected' | 'unlinked'
-type SortKey = 'stock' | 'last_sale' | 'last_purchase' | 'code' | 'name'
+type SortKey = 'stock' | 'last_sale' | 'last_purchase' | 'code' | 'name' | 'status' | 'card' | 'linked_at' | 'linked_by'
 type SortDir = 'asc' | 'desc'
+const SORT_KEYS: readonly SortKey[] = [
+  'stock',
+  'last_sale',
+  'last_purchase',
+  'code',
+  'name',
+  'status',
+  'card',
+  'linked_at',
+  'linked_by',
+]
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: '', label: 'Wszystkie' },
@@ -45,6 +66,10 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
   last_purchase: 'desc',
   code: 'asc',
   name: 'asc',
+  status: 'asc',
+  card: 'asc',
+  linked_at: 'desc',
+  linked_by: 'asc',
 }
 const SEARCH_DEBOUNCE_MS = 300
 /** Limit bulk-confirm z kontraktu API. */
@@ -260,7 +285,14 @@ export function AdminErpItems() {
   const soldMonths = pick(params.get('sold_months'), SOLD_MONTHS, '')
   const supplier = params.get('supplier') ?? ''
   const search = params.get('search') ?? ''
-  const sort = pick<SortKey>(params.get('sort'), ['stock', 'last_sale', 'last_purchase', 'code', 'name'], 'stock')
+  const linkedByParam = params.get('linked_by') ?? ''
+  const linkedBy = /^(auto|[1-9]\d{0,9})$/.test(linkedByParam) ? linkedByParam : ''
+  const linkedFromParam = params.get('linked_from') ?? ''
+  const linkedFrom = DATE_RE.test(linkedFromParam) ? linkedFromParam : ''
+  const linkedToParam = params.get('linked_to') ?? ''
+  // „do” przed „od” — serwer odrzuca (422), więc taki zakres nie idzie do zapytania
+  const linkedTo = DATE_RE.test(linkedToParam) && !(linkedFrom && linkedToParam < linkedFrom) ? linkedToParam : ''
+  const sort = pick<SortKey>(params.get('sort'), SORT_KEYS, 'stock')
   const dir = pick<SortDir>(params.get('dir'), ['asc', 'desc'], DEFAULT_DIR[sort])
   const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1)
   const perPage = PER_PAGE_OPTIONS.includes(Number(params.get('per_page'))) ? Number(params.get('per_page')) : 50
@@ -273,12 +305,15 @@ export function AdminErpItems() {
     if (soldMonths) qs.set('sold_months', soldMonths)
     if (supplier.trim()) qs.set('supplier', supplier.trim())
     if (search.trim()) qs.set('search', search.trim())
+    if (linkedBy) qs.set('linked_by', linkedBy)
+    if (linkedFrom) qs.set('linked_from', linkedFrom)
+    if (linkedTo) qs.set('linked_to', linkedTo)
     qs.set('sort', sort)
     qs.set('dir', dir)
     qs.set('page', String(page))
     qs.set('per_page', String(perPage))
     return qs.toString()
-  }, [status, group, inStock, soldMonths, supplier, search, sort, dir, page, perPage])
+  }, [status, group, inStock, soldMonths, supplier, search, linkedBy, linkedFrom, linkedTo, sort, dir, page, perPage])
 
   const [summary, setSummary] = useState<ErpAdminSummary | null>(null)
   const [summaryErr, setSummaryErr] = useState('')
@@ -401,7 +436,13 @@ export function AdminErpItems() {
   const selectedIds = selectableIds.filter((id) => selected[id])
   const allVisibleSelected = selectableIds.length > 0 && selectableIds.every((id) => selected[id])
   const showSelect = canManage
-  const colCount = 8 + (showSelect ? 1 : 0)
+  const colCount = 9 + (showSelect ? 1 : 0)
+  // opcje „Połączył”: wszyscy łączący z liczników; wybrana osoba zostaje, nawet gdy liczniki jeszcze się wczytują
+  const linkerOptions = (summary?.linkers ?? []).filter((l): l is ErpAdminLinker & { key: string } => l.key !== null)
+  if (linkedBy && !linkerOptions.some((l) => l.key === linkedBy)) {
+    linkerOptions.push({ key: linkedBy, name: linkedBy === 'auto' ? 'automat' : `użytkownik #${linkedBy}`, count: 0 })
+  }
+  const resultLinkers = result?.meta.linkers ?? []
 
   function toggleSelected(id: number, shiftKey: boolean) {
     const index = selectableIds.indexOf(id)
@@ -552,7 +593,9 @@ export function AdminErpItems() {
     })
   }
 
-  const hasFilters = Boolean(status || group || inStock || soldMonths || supplier || search)
+  const hasFilters = Boolean(
+    status || group || inStock || soldMonths || supplier || search || linkedBy || linkedFromParam || linkedToParam,
+  )
   const meta = result?.meta
   const busy = bulkBusy || busyItemId !== null
 
@@ -705,6 +748,41 @@ export function AdminErpItems() {
             onChange={(e) => setSearchInput(e.target.value)}
           />
         </label>
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          Połączył
+          <select
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
+            value={linkedBy}
+            onChange={(e) => setFilters({ linked_by: e.target.value })}
+          >
+            <option value="">wszyscy</option>
+            {linkerOptions.map((l) => (
+              <option key={l.key} value={l.key}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          Połączone od
+          <input
+            type="date"
+            className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-800"
+            value={linkedFromParam}
+            max={linkedToParam || undefined}
+            onChange={(e) => setFilters({ linked_from: e.target.value })}
+          />
+        </label>
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          do
+          <input
+            type="date"
+            className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-800"
+            value={linkedToParam}
+            min={linkedFromParam || undefined}
+            onChange={(e) => setFilters({ linked_to: e.target.value })}
+          />
+        </label>
         {hasFilters && (
           <button
             type="button"
@@ -750,6 +828,34 @@ export function AdminErpItems() {
             {meta ? itemsLabel(meta.total) : ''}
             {loading ? (meta ? ' · ładowanie…' : 'Ładowanie…') : ''}
           </span>
+          {resultLinkers.length > 0 && (
+            <span className="flex flex-wrap items-center gap-1 text-slate-500" title="Liczone przy tych filtrach, bez filtra „Połączył”">
+              Połączyli:
+              {resultLinkers.map((l) => {
+                if (l.key === null) {
+                  return (
+                    <span key="removed" className="rounded border border-slate-200 bg-white px-1.5 py-0.5 tabular-nums">
+                      <span className="text-slate-800">{l.name}</span> {fmtInt(l.count)}
+                    </span>
+                  )
+                }
+                const active = l.key === linkedBy
+                return (
+                  <button
+                    key={l.key}
+                    type="button"
+                    onClick={() => setFilters({ linked_by: active ? null : l.key })}
+                    aria-pressed={active}
+                    className={`rounded border px-1.5 py-0.5 tabular-nums ${
+                      active ? 'border-sky-400 bg-sky-50 text-sky-900' : 'border-slate-200 bg-white hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-slate-800">{l.name}</span> {fmtInt(l.count)}
+                  </button>
+                )
+              })}
+            </span>
+          )}
         </div>
 
         <table className="w-full text-left text-xs">
@@ -771,8 +877,14 @@ export function AdminErpItems() {
               <SortTh label="HANDEL" k="stock" sort={sort} dir={dir} onSort={clickSort} align="right" />
               <SortTh label="Ostatnia sprzedaż" k="last_sale" sort={sort} dir={dir} onSort={clickSort} />
               <SortTh label="Ostatni zakup / dostawca" k="last_purchase" sort={sort} dir={dir} onSort={clickSort} />
-              <th className="p-2 font-medium">Status</th>
-              <th className="p-2 font-medium">Karta</th>
+              <SortTh label="Status" k="status" sort={sort} dir={dir} onSort={clickSort} />
+              <SortTh label="Karta" k="card" sort={sort} dir={dir} onSort={clickSort} />
+              <th className="p-2 font-medium" aria-sort={ariaSort(sort, dir, ['linked_by', 'linked_at'])}>
+                <span className="flex flex-col items-start gap-0.5">
+                  <SortButton label="Połączył" k="linked_by" sort={sort} dir={dir} onSort={clickSort} />
+                  <SortButton label="kiedy" k="linked_at" sort={sort} dir={dir} onSort={clickSort} />
+                </span>
+              </th>
               <th className="w-36 p-2 font-medium">Akcje</th>
             </tr>
           </thead>
@@ -852,6 +964,18 @@ export function AdminErpItems() {
                       onPick={(link) => confirmLink(item, link)}
                       onReject={(link) => rejectLink(item, link)}
                     />
+                  </td>
+                  <td className="whitespace-nowrap p-2 text-[11px]">
+                    {item.linked ? (
+                      <>
+                        <div className={item.linked.auto ? 'text-slate-500' : 'font-medium text-slate-800'}>
+                          {item.linked.auto ? 'automat' : item.linked.by}
+                        </div>
+                        {item.linked.at && <div className="text-slate-500">{formatDateTime(item.linked.at)}</div>}
+                      </>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="p-2">
                     {canManage ? (
@@ -1010,24 +1134,43 @@ function SortTh({
   onSort: (k: SortKey) => void
   align?: 'right'
 }) {
+  return (
+    <th className={`p-2 font-medium ${align === 'right' ? 'text-right' : ''}`} aria-sort={ariaSort(sort, dir, [k])}>
+      <SortButton label={label} k={k} sort={sort} dir={dir} onSort={onSort} />
+    </th>
+  )
+}
+
+function ariaSort(sort: SortKey, dir: SortDir, keys: SortKey[]): 'ascending' | 'descending' | 'none' {
+  return keys.includes(sort) ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'
+}
+
+function SortButton({
+  label,
+  k,
+  sort,
+  dir,
+  onSort,
+}: {
+  label: string
+  k: SortKey
+  sort: SortKey
+  dir: SortDir
+  onSort: (k: SortKey) => void
+}) {
   const active = sort === k
   return (
-    <th
-      className={`p-2 font-medium ${align === 'right' ? 'text-right' : ''}`}
-      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    <button
+      type="button"
+      onClick={() => onSort(k)}
+      className={`inline-flex items-center gap-0.5 text-left hover:text-slate-900 ${active ? 'text-slate-900' : ''}`}
+      title="Sortuj"
     >
-      <button
-        type="button"
-        onClick={() => onSort(k)}
-        className={`inline-flex items-center gap-0.5 text-left hover:text-slate-900 ${active ? 'text-slate-900' : ''}`}
-        title="Sortuj"
-      >
-        {label}
-        <span className={active ? 'text-slate-700' : 'text-slate-300'} aria-hidden>
-          {active ? (dir === 'asc' ? '▲' : '▼') : '↕'}
-        </span>
-      </button>
-    </th>
+      {label}
+      <span className={active ? 'text-slate-700' : 'text-slate-300'} aria-hidden>
+        {active ? (dir === 'asc' ? '▲' : '▼') : '↕'}
+      </span>
+    </button>
   )
 }
 
@@ -1052,6 +1195,7 @@ function LinksCell({
   const rejected = item.links.filter((l) => l.status === 'rejected')
   const open = openLinks(item)
   const multi = open.length > 1
+  const confirmedCount = item.links.filter((l) => l.status === 'confirmed' && l.product).length
 
   if (visible.length === 0) {
     return (
@@ -1115,7 +1259,8 @@ function LinksCell({
                   </span>
                 ))}
               </p>
-              {l.status === 'confirmed' && (l.decided_by || l.decided_at) && (
+              {/* jedna potwierdzona karta — kto i kiedy w kolumnie „Połączył”; przy kilku podpis każdej */}
+              {l.status === 'confirmed' && confirmedCount > 1 && (l.decided_by || l.decided_at) && (
                 <p className="text-[11px] text-slate-500">
                   potwierdził {l.decided_by ?? '—'}
                   {l.decided_at ? `, ${formatDateTime(l.decided_at)}` : ''}
