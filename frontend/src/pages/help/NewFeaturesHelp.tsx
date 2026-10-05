@@ -8,7 +8,7 @@ import { AppFrame, Btn, Card, Field, LiveFrame, LivePage, LiveScreen, Mark, Slid
 /**
  * Samouczek „Nowości (październik 2026)”. Ogłoszenia z Biuletynu Zamówień Publicznych. Etapy 3–4: kalendarz terminów i subskrypcja w programie pocztowym,
  * wyszukiwanie Ctrl+K, karta klienta i notatki, powiązanie zapytania z klientem, wynik zapytania i podpowiedź z ERP XL,
- * ważność oferty, cele handlowców i przypisanie pracownika ERP XL; „Czego jeszcze nie ma”. Etapy 0–1: godzina składania
+ * ważność oferty, cele handlowców i przypisanie pracownika ERP XL, okno łączenia towaru XL z kartą; „Czego jeszcze nie ma”. Etapy 0–1: godzina składania
  * i numer ogłoszenia, wynik przetargu i pobieranie wyniku z Biuletynu, raport skuteczności, powiadomienia i wzmianki
  * „@”, „Do zrobienia dziś”, stan systemu. Wynik kampanii w Raportach i zespoły w Rolach.
  * Ekrany to rysunki poglądowe z przykładowymi danymi (poza dashboardem i stanem systemu — tam prawdziwy widok).
@@ -476,6 +476,45 @@ function Stage34Slideshow() {
                   <div className="rounded border border-slate-300 px-2 py-1">Anna Nowak (64 klientów)</div>
                 </Mark>
                 <p className="mt-1 text-[11px] text-blue-700">propozycja — ten sam e-mail co to konto (sprawdź, zanim wybierzesz)</p>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Łączenie towaru z ERP XL z kartą — większe okno',
+          does: '„Wybierz kartę…” na ekranie Powiązań z ERP XL otwiera duże okno: u góry towar z ERP XL (kod, nazwa, stan, ostatni zakup i dostawca, kod z nazwy), pod nim pole szukania, po lewej lista kart, po prawej podgląd wskazanej karty (zdjęcie, producent, cena zakupu, opakowanie, początek opisu z zaznaczonymi słowami z nazwy towaru). Każde wpisane słowo zawęża listę: „rękawice rtepo” pokaże karty, które mają oba słowa (w SKU, nazwie, producencie albo kodzie towaru z ERP XL) — wpisanie całej nazwy z ERP XL zwykle nic nie znajdzie, bo żadna karta nie ma wszystkich jej słów. Pod polem są słowa z nazwy towaru z liczbą kart, które każde z nich trafia (np. „RTEPO 2”) — kliknięcie wpisuje słowo, Shift+kliknięcie dopisuje je do frazy. Gdy fraza nic nie znajduje, okno pokazuje, ile kart trafia każde jej słowo osobno. Bez wpisanej frazy lista pokazuje obecną kartę towaru i propozycje automatu; karta, którą ktoś wcześniej odłączył albo odrzucił, ma dopisek „odrzucona wcześniej”. „Podgląd” przy wierszu (albo dwuklik) otwiera pełną kartę; „Otwórz kartę ↗” — kartę w nowej karcie przeglądarki. Połączenie zapisuje się jako potwierdzone ręcznie.',
+          click: 'Administracja → Powiązania z ERP XL → „Wybierz kartę…” → wpisz słowo albo kliknij słowo z nazwy → strzałki ↑ ↓ albo kliknięcie wskazuje kartę → „Połącz z …” (albo Ctrl+Enter). Escape zamyka okno.',
+          tone: 'violet',
+          screen: (
+            <AppFrame nav="Administracja">
+              <Card className="space-y-2 text-xs">
+                <div>
+                  <b className="font-mono">ARKRTEPO07116CZ</b> — RĘKAWICE ROBOCZE RTEPO CZARNE
+                </div>
+                <Mark>
+                  <div className="rounded border border-blue-400 px-2 py-1">rękawice rtepo</div>
+                </Mark>
+                <div className="flex flex-wrap gap-1 font-mono text-[11px]">
+                  <span className="rounded-full border border-slate-300 px-2">RĘKAWICE 1200</span>
+                  <span className="rounded-full border border-slate-300 px-2">RTEPO 2</span>
+                  <span className="rounded-full border border-slate-200 px-2 text-slate-400">07116CZ 0</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <div className="rounded bg-blue-50 px-2 py-1 ring-1 ring-blue-300">
+                      <b className="font-mono">RTEPO</b> · Rękawice ochronne TEPO.
+                    </div>
+                    <div className="rounded px-2 py-1">
+                      <b className="font-mono">RTEPO-DOTS</b> · Rękawice ochronne TEPO-DOTS.
+                    </div>
+                  </div>
+                  <div className="rounded border border-slate-200 p-2 text-[11px] text-slate-600">
+                    Zdjęcie, producent, cena zakupu, opis karty RTEPO
+                  </div>
+                </div>
+                <div className="text-right">
+                  <Btn label="Połącz z RTEPO" />
+                </div>
               </Card>
             </AppFrame>
           ),

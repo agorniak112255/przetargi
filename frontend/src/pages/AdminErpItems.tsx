@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { ProductSearchSelect } from '../components/ProductSearchSelect'
+import { ErpCardPickerModal } from '../components/ErpCardPickerModal'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import {
   api,
@@ -1162,7 +1162,7 @@ export function AdminErpItems() {
       </div>
 
       {pickFor && (
-        <PickCardModal
+        <ErpCardPickerModal
           item={pickFor}
           onClose={() => setPickFor(null)}
           onLink={async (productId, sku) => {
@@ -1357,124 +1357,6 @@ function LinksCell({
           odrzucone: {rejected.map((l) => l.product?.sku ?? `#${l.id}`).join(', ')}
         </p>
       )}
-    </div>
-  )
-}
-
-/** Okno ręcznego połączenia: wyszukiwarka kart (ProductSearchSelect) i „Połącz”. */
-function PickCardModal({
-  item,
-  onClose,
-  onLink,
-  error,
-}: {
-  item: ErpAdminItem
-  onClose: () => void
-  onLink: (productId: number, sku: string) => Promise<boolean>
-  error: string
-}) {
-  const [productId, setProductId] = useState('')
-  const [sku, setSku] = useState('')
-  const [busy, setBusy] = useState(false)
-  const confirmed = item.links.find((l) => l.status === 'confirmed')
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !busy) onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, busy])
-
-  async function submit() {
-    const id = Number(productId)
-    if (!id) return
-    setBusy(true)
-    try {
-      await onLink(id, sku || `#${id}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="erp-pick-title"
-      onClick={() => {
-        if (!busy) onClose()
-      }}
-    >
-      <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
-          <div className="min-w-0">
-            <h3 id="erp-pick-title" className="text-sm font-semibold">
-              Połącz towar XL z kartą
-            </h3>
-            <p className="text-xs text-slate-600">
-              <span className="font-mono">{item.code}</span> — {item.name}
-            </p>
-            {item.name1 && <p className="font-mono text-[11px] text-slate-400">Nazwa1: {item.name1}</p>}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-md border border-slate-300 px-2.5 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
-          >
-            Zamknij
-          </button>
-        </div>
-        <div className="space-y-2 px-4 py-3 text-xs">
-          <p className="text-slate-600">
-            Wpisz SKU, nazwę albo kod z karty i wybierz kartę z listy.
-            {item.match_value && (
-              <>
-                {' '}
-                Kod z nazwy XL: <span className="font-mono text-slate-800">{item.match_value}</span>.
-              </>
-            )}
-          </p>
-          <ProductSearchSelect
-            products={[]}
-            value={productId}
-            disabled={busy}
-            previewQuery={item.name}
-            className="max-w-full"
-            onChange={(id, p) => {
-              setProductId(id)
-              setSku(p?.sku ?? '')
-            }}
-          />
-          {confirmed && (
-            <p className="rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
-              Ten towar ma już potwierdzoną kartę {confirmed.product?.sku ?? `#${confirmed.id}`}.
-            </p>
-          )}
-          <p className="text-[11px] text-slate-500">Połączenie zapisze się jako potwierdzone ręcznie.</p>
-          {error && <p className="text-[11px] text-red-700">{error}</p>}
-        </div>
-        <div className="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
-          >
-            Anuluj
-          </button>
-          <button
-            type="button"
-            disabled={busy || !productId}
-            onClick={() => void submit()}
-            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40"
-          >
-            {busy ? 'Łączę…' : 'Połącz'}
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

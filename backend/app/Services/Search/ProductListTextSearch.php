@@ -96,6 +96,53 @@ final class ProductListTextSearch
     }
 
     /**
+     * Tryb „każde słowo” (/products?words=all): każde słowo frazy musi trafić w kartę tak, jak trafiłoby wpisane
+     * osobno (SKU, nazwa, producent, numer modelu, marka) albo przez kod towaru ERP XL — kolejne słowa zawężają listę.
+     * Cała fraza jako jeden ciąg („RĘKAWICE ROBOCZE RTEPO CZARNE”) nie trafia nic, bo żadna karta nie ma jej dosłownie,
+     * a „rękawice rtepo” znajduje kartę RTEPO „Rękawice ochronne TEPO.”.
+     *
+     * @param  Builder<Product>  $query
+     * @param  list<string>  $words  ProductListTextSearch::phraseWords()
+     * @param  array<string, list<int>>  $erpIdsByWord  słowo → karty wskazane kodem ERP XL (ErpCodeSearch)
+     */
+    public function applyAllWords(Builder $query, array $words, array $erpIdsByWord): void
+    {
+        foreach ($words as $word) {
+            $erpIds = $erpIdsByWord[$word] ?? [];
+            $query->where(function ($one) use ($word, $erpIds) {
+                $one->where(fn ($text) => $this->applyTextSearch($text, $word));
+                if ($erpIds !== []) {
+                    $one->orWhereIn('id', $erpIds);
+                }
+            });
+        }
+    }
+
+    /**
+     * Słowa frazy do trybu „każde słowo”: rozdzielone spacją, bez interpunkcji na brzegach („OCHR.” → „OCHR”),
+     * co najmniej 2 znaki, bez powtórzeń (wielkość liter bez znaczenia), najwyżej $max — kod z ukośnikiem albo kropką
+     * w środku („9198.014”, „BPBOCH8540/8”) zostaje jednym słowem.
+     *
+     * @return list<string>
+     */
+    public static function phraseWords(string $term, int $max = 8): array
+    {
+        $out = [];
+        foreach (preg_split('/\s+/u', trim($term)) ?: [] as $raw) {
+            $word = (string) preg_replace('/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/u', '', $raw);
+            if (mb_strlen($word) < 2) {
+                continue;
+            }
+            $out[mb_strtolower($word)] ??= $word;
+            if (count($out) >= $max) {
+                break;
+            }
+        }
+
+        return array_values($out);
+    }
+
+    /**
      * Wpisany numer katalogowy wychodzi pierwszy: dokładne SKU i karty wskazane kodem ERP XL (0), SKU zawierające
      * frazę (1), reszta (2). Zbioru wyników nie zawęża — dalsze sortowanie dokłada wywołujący.
      *

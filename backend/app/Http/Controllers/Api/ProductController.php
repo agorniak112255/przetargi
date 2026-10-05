@@ -104,14 +104,32 @@ class ProductController extends Controller
         if ($request->filled('q')) {
             $term = trim((string) $request->string('q'));
             $searchTerm = $term;
-            $erpCodes = app(ErpCodeSearch::class)->productCodes($term);
-            if ($erpCodes !== []) {
-                $erpIds = array_keys($erpCodes);
-                $query->where(fn ($outer) => $outer
-                    ->where(fn ($text) => $this->textSearch->applyTextSearch($text, $term))
-                    ->orWhereIn('id', $erpIds));
+            // words=all (okno „Połącz towar XL z kartą”): każde słowo zawęża listę; jedno słowo — jak zwykle
+            $words = (string) $request->string('words') === 'all' ? ProductListTextSearch::phraseWords($term) : [];
+            if (count($words) === 1) {
+                // „RTEPO,” albo „a rtepo” — jedno słowo po odcięciu interpunkcji i jednoznakowych; numer pierwszy po nim
+                $term = $searchTerm = $words[0];
+            }
+            if (count($words) > 1) {
+                $erpByWord = [];
+                foreach ($words as $word) {
+                    $wordCodes = app(ErpCodeSearch::class)->productCodes($word);
+                    $erpByWord[$word] = array_keys($wordCodes);
+                    foreach ($wordCodes as $id => $codes) {
+                        $erpCodes[$id] = array_values(array_unique([...($erpCodes[$id] ?? []), ...$codes]));
+                    }
+                }
+                $this->textSearch->applyAllWords($query, $words, $erpByWord);
             } else {
-                $this->textSearch->applyTextSearch($query, $term);
+                $erpCodes = app(ErpCodeSearch::class)->productCodes($term);
+                if ($erpCodes !== []) {
+                    $erpIds = array_keys($erpCodes);
+                    $query->where(fn ($outer) => $outer
+                        ->where(fn ($text) => $this->textSearch->applyTextSearch($text, $term))
+                        ->orWhereIn('id', $erpIds));
+                } else {
+                    $this->textSearch->applyTextSearch($query, $term);
+                }
             }
         }
 
@@ -217,6 +235,8 @@ class ProductController extends Controller
         if ($sortCol !== 'name') {
             $query->orderBy('name', 'asc');
         }
+        // karty o tej samej nazwie w stałej kolejności — „Pokaż więcej” nie powtarza ani nie gubi kart między stronami
+        $query->orderBy('id');
 
         $rawPerPage = strtolower(trim((string) $request->input('per_page', '100')));
         if ($rawPerPage === 'all') {
@@ -369,6 +389,25 @@ class ProductController extends Controller
         return response()->json([
             'shop_source_url' => $product->shop_source_url,
         ]);
+    }
+
+    /**
+     * Ile kart trafia każde słowo frazy osobno (te same warunki co /products?q=<słowo>, z kodem ERP XL) — okno
+     * „Połącz towar XL z kartą” podpowiada słowa, gdy cała fraza nie trafia żadnej karty. Same liczby, bez wierszy
+     * i cen: jedno zapytanie COUNT na słowo zamiast pełnej strony /products.
+     */
+    public function wordCounts(Request $request): JsonResponse
+    {
+        $request->validate(['q' => ['required', 'string', 'max:200']]);
+        $codes = app(ErpCodeSearch::class);
+        $out = [];
+        foreach (ProductListTextSearch::phraseWords((string) $request->string('q'), 6) as $word) {
+            $count = Product::query();
+            $this->textSearch->applyAllWords($count, [$word], [$word => array_keys($codes->productCodes($word))]);
+            $out[] = ['word' => $word, 'count' => $count->count()];
+        }
+
+        return response()->json(['words' => $out]);
     }
 
     public function manufacturers(): JsonResponse
