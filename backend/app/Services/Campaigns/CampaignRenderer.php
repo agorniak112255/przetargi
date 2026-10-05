@@ -109,7 +109,7 @@ class CampaignRenderer
      * @param  Collection<int, CampaignItem>  $items
      * @param  bool  $useSnapshot  dane pozycji z migawek (kampania po starcie wysyłki), nie bieżący stan
      * @param  list<array<string, mixed>>  $blocks
-     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null, footerNote?: string, withSignature?: bool}  $mail
+     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null, footerNote?: string, withSignature?: bool, askButton?: bool}  $mail
      * @param  User|null  $sender  skrzynka nadawcy (podpis, adres); null = autor
      * @param  string|null  $track  baza linków mierzonych odbiorcy; null = bez linku do strony produktu, drugi przycisk wprost
      * @param  string|null  $askAddress  adres do mailto „Zapytaj o ofertę”; null = adres skrzynki nadawcy, pusty = „#”
@@ -156,7 +156,8 @@ class CampaignRenderer
                 'note' => $row['note'] !== null && trim((string) $row['note']) !== '' ? (string) $row['note'] : null,
                 'description' => is_string($description) && trim($description) !== '' ? trim($description) : null,
                 'norms' => $snap !== null ? $snap['norms'] : $row['card_norms'],
-                'ask_url' => $this->askUrl($askTo, $code, $itemCode),
+                // oferta z ceną nie pyta o ofertę — przycisk „Zapytaj” tylko w kampaniach
+                'ask_url' => ($mail['askButton'] ?? true) ? $this->askUrl($askTo, $code, $itemCode) : null,
                 'product_url' => $track !== null ? $track.'/p/'.$row['id'] : null,
                 'link' => $this->link($row['link'] ?? null, $track !== null ? $track.'/l/'.$row['id'] : null),
             ];

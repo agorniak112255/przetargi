@@ -229,7 +229,7 @@ export function OffersHelp() {
         },
         {
           action: 'Treść maila i podgląd',
-          does: 'W sekcji „Treść maila” wpisujesz „Temat wiadomości” (bez niego oferty nie wyślesz) i krótki „Wstęp” (na przykład „Dzień dobry, zgodnie z rozmową przesyłam…”), wybierasz „Układ produktów” i opcjonalnie datę „Oferta ważna do” — gdy ta data minie, oferty nie da się wysłać, dopóki jej nie zmienisz albo nie wyczyścisz. „Podgląd maila” pokazuje mail dokładnie tak, jak go zobaczy klient: baner, wstęp, kafelki produktów z ceną netto i przycisk „Zapytaj o ofertę”, który otwiera mail do Ciebie. W ofercie nie ma linku „Wypisz mnie” — to nie jest mailing. Wszystko zapisuje się samo.',
+          does: 'W sekcji „Treść maila” wpisujesz „Temat wiadomości” (bez niego oferty nie wyślesz) i krótki „Wstęp” (na przykład „Dzień dobry, zgodnie z rozmową przesyłam…”), wybierasz „Układ produktów” i opcjonalnie datę „Oferta ważna do” — gdy ta data minie, oferty nie da się wysłać, dopóki jej nie zmienisz albo nie wyczyścisz. „Podgląd maila” pokazuje mail dokładnie tak, jak go zobaczy klient: baner, wstęp i kafelki produktów z ceną netto. Przycisku „Zapytaj o ofertę” w ofercie nie ma — klient dostaje cenę; zamiast niego przy pozycji możesz dodać własny przycisk z linkiem, np. „Zobacz w sklepie” („+ Dodaj link” pod opisem pozycji: link https://, nazwa przycisku i kolor). W ofercie nie ma linku „Wypisz mnie” — to nie jest mailing. Wszystko zapisuje się samo.',
           click: 'Sekcja „Treść maila”: pola „Temat wiadomości”, „Wstęp”, „Układ produktów” i „Oferta ważna do”. Podgląd odświeża się po zmianie.',
           tone: 'blue',
           screen: (
@@ -254,9 +254,11 @@ export function OffersHelp() {
                             <div className="mb-1 h-8 rounded bg-slate-100" />
                             <p className="truncate font-medium text-slate-800">{n}</p>
                             <p className="tabular-nums text-slate-700">{['129,00', '189,00', '59,00'][i]} zł netto</p>
-                            <span className="mt-0.5 inline-block rounded bg-blue-600 px-1 text-[9px] text-white">
-                              Zapytaj o ofertę
-                            </span>
+                            {i === 0 && (
+                              <span className="mt-0.5 inline-block rounded bg-emerald-700 px-1 text-[9px] text-white">
+                                Zobacz w sklepie
+                              </span>
+                            )}
                           </div>
                         ))}
                       </div>

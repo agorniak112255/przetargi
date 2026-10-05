@@ -71,6 +71,8 @@ class OfferRenderer
                 'unsubscribeUrl' => null,
                 'notice' => $notice,
                 'footerNote' => '',
+                // klient dostaje cenę — „Zapytaj o ofertę” zbędne; zamiast niego opcjonalny link przy pozycji
+                'askButton' => false,
                 'withSignature' => $withSignature,
             ],
             $author,

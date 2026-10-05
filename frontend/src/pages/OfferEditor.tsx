@@ -13,10 +13,12 @@ import {
   type ChipTone,
 } from '../components/CampaignsUi'
 import { CardPickerModal } from '../components/CardPickerModal'
+import { ItemLinkField } from '../components/ItemLinkField'
 import { api, ApiError, can } from '../lib/api'
 import { errorText, fmtDate, fmtDateTime, fmtQty, moneyInputValue, parseMoney } from '../lib/campaignFormat'
 import {
   CAMPAIGN_LAYOUT_HINT,
+  DEFAULT_BRAND_COLOR,
   CAMPAIGN_LAYOUT_LABEL,
   LAYOUTS_WITH_DESCRIPTION,
   formatPln,
@@ -723,6 +725,20 @@ function ItemRow({
               emptyText={item.card ? 'brak — karta nie ma opisu' : 'brak — pozycja nie ma karty'}
               ariaName={item.name}
               onCommit={(next) => onPatch({ description: next })}
+            />
+            <ItemLinkField
+              name={item.name}
+              link={item.link}
+              editable
+              brandColor={DEFAULT_BRAND_COLOR}
+              askLabel={null}
+              onSave={async (link) =>
+                (await onPatch(
+                  link
+                    ? { link_url: link.url, link_label: link.label, link_color: link.color }
+                    : { link_url: null, link_label: null, link_color: null },
+                )) !== null
+              }
             />
           </div>
         </div>

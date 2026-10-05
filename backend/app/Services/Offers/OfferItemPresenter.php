@@ -41,6 +41,10 @@ class OfferItemPresenter
             'promo_price_net' => $item->price_net,
             'note' => $item->note,
             'description' => $item->description,
+            // przycisk z linkiem handlowca (np. do sklepu) — jak drugi przycisk pozycji kampanii
+            'link_url' => $item->link_url,
+            'link_label' => $item->link_label,
+            'link_color' => $item->link_color,
         ]));
     }
 
@@ -96,6 +100,7 @@ class OfferItemPresenter
                 'card_excerpt' => $row['card_excerpt'],
                 'card' => $row['card'],
                 'image_url' => $row['image_url'],
+                'link' => $row['link'],
                 'warnings' => [
                     'below_cost' => $price !== null && $unitCost !== null && $price < $unitCost,
                     'no_price' => $price === null,

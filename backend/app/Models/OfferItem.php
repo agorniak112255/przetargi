@@ -21,6 +21,9 @@ class OfferItem extends Model
         'price_net',
         'note',
         'description',
+        'link_url',
+        'link_label',
+        'link_color',
     ];
 
     protected function casts(): array

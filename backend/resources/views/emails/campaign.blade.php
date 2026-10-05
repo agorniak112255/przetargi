@@ -137,6 +137,7 @@
                   </td>
                   <td valign="top" align="right" style="padding:8px 10px;border-top:1px solid {{ $line }};font-size:12px;color:{{ $muted }};white-space:nowrap;">{{ $p['stock_qty'] ?? '—' }}</td>
                   <td valign="top" align="right" style="padding:8px 10px;border-top:1px solid {{ $line }};">
+@if ($p['ask_url'] !== null)
                     <table role="presentation" cellspacing="0" cellpadding="0" border="0">
                       <tr>
                         <td bgcolor="{{ $brand }}" style="background:{{ $brand }};border-radius:4px;">
@@ -144,6 +145,7 @@
                         </td>
                       </tr>
                     </table>
+@endif
 @if (($p['link'] ?? null) !== null)
                     {{-- nazwa do 40 znaków — łamie się (max-width), żeby nie rozpychać kolumny cennika --}}
                     <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:4px;">

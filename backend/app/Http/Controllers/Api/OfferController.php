@@ -12,6 +12,7 @@ use App\Models\OfferItem;
 use App\Models\OfferRecipient;
 use App\Models\OfferSend;
 use App\Models\User;
+use App\Services\Campaigns\CampaignBlocks;
 use App\Services\Erp\ErpItemCards;
 use App\Services\Offers\OfferItemPresenter;
 use App\Services\Offers\OfferPdf;
@@ -173,14 +174,25 @@ class OfferController extends Controller
             // krótki opis w mailu (układy „z opisem”); pusty = wycinek opisu karty
             'description' => ['sometimes', 'nullable', 'string', 'max:300'],
             'position' => ['sometimes', 'integer', 'min:1', 'max:1000'],
+            // przycisk z linkiem (np. do sklepu) — jak drugi przycisk pozycji kampanii; pusty link = bez przycisku
+            'link_url' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'link_label' => ['required_with:link_url', 'nullable', 'string', 'max:40', 'not_regex:'.self::NO_NEWLINE],
+            'link_color' => ['required_with:link_url', 'nullable', 'string', Rule::in(CampaignBlocks::BRAND_COLORS)],
         ], [
             'price_net.numeric' => 'Cena musi być liczbą.',
             'price_net.min' => 'Cena nie może być ujemna.',
             'note.max' => 'Uwaga może mieć najwyżej 300 znaków.',
             'description.max' => 'Opis może mieć najwyżej 300 znaków.',
+            'link_url.max' => 'Link może mieć najwyżej 500 znaków.',
+            'link_label.required_with' => 'Wpisz nazwę przycisku.',
+            'link_label.max' => 'Nazwa przycisku może mieć najwyżej 40 znaków.',
+            'link_label.not_regex' => 'Nazwa przycisku musi być jedną linią.',
+            'link_color.required_with' => 'Wybierz kolor przycisku.',
+            'link_color.in' => 'Wybierz kolor przycisku z listy.',
         ]);
+        $link = $this->itemLink($v);
 
-        $this->locked($offer, function (Offer $locked) use ($item, $v): void {
+        $this->locked($offer, function (Offer $locked) use ($item, $v, $link): void {
             $data = array_intersect_key($v, array_flip(['price_net', 'note', 'description']));
             if (array_key_exists('price_net', $data) && $data['price_net'] !== null) {
                 $data['price_net'] = round((float) $data['price_net'], 2);
@@ -189,6 +201,9 @@ class OfferController extends Controller
                 if (array_key_exists($field, $data) && is_string($data[$field])) {
                     $data[$field] = trim($data[$field]) !== '' ? trim($data[$field]) : null;
                 }
+            }
+            if ($link !== null) {
+                $data = [...$data, ...$link];
             }
             if ($data !== []) {
                 $item->update($data);
@@ -309,6 +324,33 @@ class OfferController extends Controller
             'text' => (string) $send->text,
             'created_at' => $send->created_at?->toIso8601String(),
         ]);
+    }
+
+    /**
+     * Pola przycisku z linkiem z żądania (jak CampaignController::itemLink): null = żądanie ich nie zmienia; pusty
+     * link = przycisk usunięty (wszystkie trzy null). Link tylko https:// jak w mailu kampanii.
+     *
+     * @param  array<string, mixed>  $v
+     * @return array{link_url: string|null, link_label: string|null, link_color: string|null}|null
+     */
+    private function itemLink(array $v): ?array
+    {
+        if (! array_key_exists('link_url', $v)) {
+            return null;
+        }
+        $url = trim((string) ($v['link_url'] ?? ''));
+        if ($url === '') {
+            return ['link_url' => null, 'link_label' => null, 'link_color' => null];
+        }
+        if (! CampaignBlocks::validUrl($url, false)) {
+            throw ValidationException::withMessages(['link_url' => 'Link musi zaczynać się od https:// i nie może zawierać spacji.']);
+        }
+        $label = trim((string) ($v['link_label'] ?? ''));
+        if ($label === '') {
+            throw ValidationException::withMessages(['link_label' => 'Wpisz nazwę przycisku.']);
+        }
+
+        return ['link_url' => $url, 'link_label' => $label, 'link_color' => (string) $v['link_color']];
     }
 
     /**

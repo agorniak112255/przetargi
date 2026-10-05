@@ -1,5 +1,5 @@
 import { api, downloadFile } from './api'
-import type { CampaignLayout } from './campaigns'
+import type { CampaignItemLink, CampaignLayout } from './campaigns'
 
 /**
  * Oferty dla klientów — typy i wywołania API (05.10.2026). Lekka oferta: wybrane produkty z ceną, wysyłka ze
@@ -39,6 +39,8 @@ export type OfferItem = {
   card_excerpt: string | null
   card: { id: number; sku: string; name: string; thumb_url: string | null } | null
   image_url: string | null
+  /** Przycisk z linkiem w mailu i PDF (np. do sklepu); null = bez przycisku. Oferta nie ma „Zapytaj o ofertę”. */
+  link: CampaignItemLink | null
   warnings: { below_cost: boolean; no_price: boolean; no_image: boolean }
 }
 
@@ -101,6 +103,10 @@ export type OfferItemPatch = {
   note?: string | null
   description?: string | null
   position?: number
+  /** Pusty / null link usuwa przycisk (wtedy nazwa i kolor też null). */
+  link_url?: string | null
+  link_label?: string | null
+  link_color?: string | null
 }
 
 export type OfferPreview = {

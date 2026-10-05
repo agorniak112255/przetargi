@@ -133,7 +133,7 @@ final class OfferApiTest extends TestCase
         // dokładnie klucze kontraktu OfferItem (bez pól kampanii)
         $this->assertSame([
             'id', 'position', 'erp_item_id', 'product_id', 'code', 'name', 'unit', 'stock', 'unit_cost', 'suggested_price',
-            'price_net', 'note', 'description', 'card_excerpt', 'card', 'image_url', 'warnings',
+            'price_net', 'note', 'description', 'card_excerpt', 'card', 'image_url', 'link', 'warnings',
         ], array_keys($items[0]));
 
         // duplikaty pomijane
@@ -266,10 +266,11 @@ final class OfferApiTest extends TestCase
         $this->assertStringContainsString('Dzień dobry, przesyłam ofertę.', $preview['html']);
         $this->assertStringContainsString('Ceny netto. Oferta ważna do 31.10.2026', $preview['html']);
         $this->assertStringContainsString('Ceny netto. Oferta ważna do 31.10.2026', $preview['text']);
-        // „Zapytaj o ofertę” na adres skrzynki autora z kodem oferty
-        $this->assertStringContainsString('mailto:jan@supon.example.pl?subject='.rawurlencode('Zapytanie '.$offer['code'].' A1'), $preview['html']);
         // oferta do jednego klienta — bez linii wypisu i bez linków mierzonych
         foreach ([$preview['html'], $preview['text']] as $body) {
+            // klient dostaje cenę — bez przycisku „Zapytaj o ofertę” (06.10.2026)
+            $this->assertStringNotContainsString('Zapytaj', $body);
+            $this->assertStringNotContainsString('mailto:', $body);
             $this->assertStringNotContainsString('Wypisz', $body);
             $this->assertStringNotContainsString('/api/wypis/', $body);
             $this->assertStringNotContainsString('/api/k/', $body);
@@ -279,13 +280,48 @@ final class OfferApiTest extends TestCase
             $this->assertStringNotContainsString('tel. 600 000 000', $body);
         }
 
-        // bez skrzynki: nadawca pusty, pytania na adres konta
+        // bez skrzynki: nadawca pusty
         UserMailAccount::query()->where('user_id', $user->id)->delete();
         config(['campaigns.public_url' => '']);
         $bare = $this->getJson("/api/offers/{$offer['id']}/preview")->assertOk()->json();
         $this->assertSame('', $bare['from']);
         $this->assertTrue($bare['public_url_missing']);
-        $this->assertStringContainsString('mailto:'.$user->email.'?subject=', $bare['html']);
+        $this->assertStringNotContainsString('mailto:', $bare['html']);
+    }
+
+    public function test_item_link_button_instead_of_ask(): void
+    {
+        $user = $this->author();
+        $card = $this->card('KARTA-7', 'Półbuty S3');
+        Sanctum::actingAs($user);
+        $offer = $this->postJson('/api/offers', ['product_ids' => [$card->id]])->json();
+        $itemId = $offer['items'][0]['id'];
+        $this->assertNull($offer['items'][0]['link']);
+
+        $res = $this->patchJson("/api/offers/{$offer['id']}/items/{$itemId}", [
+            'link_url' => 'https://sklep.example.pl/polbuty-s3', 'link_label' => 'Zobacz w sklepie', 'link_color' => '#0b7d6a',
+        ])->assertOk();
+        $this->assertSame(
+            ['url' => 'https://sklep.example.pl/polbuty-s3', 'label' => 'Zobacz w sklepie', 'color' => '#0b7d6a'],
+            $res->json('items.0.link'),
+        );
+
+        $preview = $this->getJson("/api/offers/{$offer['id']}/preview")->assertOk()->json();
+        $this->assertStringContainsString('href="https://sklep.example.pl/polbuty-s3"', $preview['html']);
+        $this->assertStringContainsString('Zobacz w sklepie', $preview['html']);
+        $this->assertStringContainsString('Zobacz w sklepie: https://sklep.example.pl/polbuty-s3', $preview['text']);
+        $this->assertStringNotContainsString('Zapytaj', $preview['html']);
+
+        // tylko https://, nazwa wymagana, kolor z listy
+        $this->patchJson("/api/offers/{$offer['id']}/items/{$itemId}", ['link_url' => 'http://sklep.example.pl', 'link_label' => 'X', 'link_color' => '#0b7d6a'])
+            ->assertStatus(422)->assertJsonValidationErrors('link_url');
+        $this->patchJson("/api/offers/{$offer['id']}/items/{$itemId}", ['link_url' => 'https://sklep.example.pl', 'link_label' => '', 'link_color' => '#0b7d6a'])
+            ->assertStatus(422)->assertJsonValidationErrors('link_label');
+        $this->patchJson("/api/offers/{$offer['id']}/items/{$itemId}", ['link_url' => 'https://sklep.example.pl', 'link_label' => 'X', 'link_color' => '#123456'])
+            ->assertStatus(422)->assertJsonValidationErrors('link_color');
+
+        // pusty link usuwa przycisk
+        $this->patchJson("/api/offers/{$offer['id']}/items/{$itemId}", ['link_url' => ''])->assertOk()->assertJsonPath('items.0.link', null);
     }
 
     public function test_copied_sets_timestamp(): void
