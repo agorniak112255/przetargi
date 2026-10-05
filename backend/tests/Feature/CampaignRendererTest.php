@@ -454,6 +454,64 @@ final class CampaignRendererTest extends TestCase
         $this->assertStringContainsString('src="https://przetargi.example.pl/api/product-images/5/thumb"', $html);
     }
 
+    public function test_render_items_without_unsubscribe_url_has_no_unsubscribe_line(): void
+    {
+        $author = $this->sender();
+        $campaign = $this->campaign($author, [$this->erpItem('B20417', 40)]);
+        $mail = [
+            'subject' => "Oferta\r\ndla klienta",
+            'preheader' => null,
+            'validUntil' => 'Ceny netto.',
+            'unsubscribeUrl' => null,
+            'notice' => null,
+        ];
+        $blocks = [['type' => 'header', 'logo' => null], ['type' => 'products', 'layout' => 'list']];
+
+        $rendered = app(CampaignRenderer::class)->renderItems($campaign->items()->get(), $author, 'OF-0001', false, $blocks, null, $mail);
+
+        $this->assertSame('Oferta dla klienta', $rendered['subject']);
+        foreach (['html', 'text'] as $part) {
+            $this->assertStringContainsString('Towar B20417', $rendered[$part], $part);
+            $this->assertStringContainsString('Ceny netto.', $rendered[$part], $part);
+            $this->assertStringNotContainsString('Wypisz mnie z mailingu', $rendered[$part], $part);
+            $this->assertStringNotContainsString('Otrzymujesz tę wiadomość', $rendered[$part], $part);
+            // stopka administratora danych zostaje, bez separatora po linii wypisu
+            $this->assertStringContainsString('Administratorem danych jest SUPON, Rzeszów.', $rendered[$part], $part);
+            $this->assertStringNotContainsString('· Administratorem', $rendered[$part], $part);
+        }
+        // bez bazy linków mierzonych: bez linku do strony produktu; „Zapytaj o ofertę” do skrzynki nadawcy
+        $this->assertStringNotContainsString('/api/k/', $rendered['html']);
+        $this->assertStringContainsString('mailto:jan@supon.example.pl?subject='.rawurlencode('Zapytanie OF-0001 B20417'), $rendered['html']);
+
+        // bez stopki administratora i bez wypisu — cały wiersz stopki pominięty
+        config(['campaigns.footer_note' => '']);
+        $html = app(CampaignRenderer::class)->renderItems($campaign->items()->get(), $author, 'OF-0001', false, $blocks, null, $mail)['html'];
+        $this->assertStringNotContainsString('background:#f6f8f9;border-top:1px solid', $html);
+
+        // kampania (adres wypisu podany) nadal z linią wypisu
+        $html = app(CampaignRenderer::class)->renderItems($campaign->items()->get(), $author, 'OF-0001', false, $blocks, null, [...$mail, 'unsubscribeUrl' => '#'])['html'];
+        $this->assertStringContainsString('Wypisz mnie z mailingu', $html);
+    }
+
+    public function test_render_items_ask_address_overrides_sender_mailbox(): void
+    {
+        $author = $this->sender();
+        $campaign = $this->campaign($author, [$this->erpItem('B20417', 40)]);
+        $mail = ['subject' => 'Oferta', 'preheader' => null, 'validUntil' => 'Ceny netto.', 'unsubscribeUrl' => null, 'notice' => null];
+        $blocks = [['type' => 'products', 'layout' => 'grid3']];
+        $renderer = app(CampaignRenderer::class);
+
+        $rendered = $renderer->renderItems($campaign->items()->get(), $author, 'OF-0002', false, $blocks, null, $mail, askAddress: 'oferty@supon.example.pl');
+        $this->assertStringContainsString('mailto:oferty@supon.example.pl?subject='.rawurlencode('Zapytanie OF-0002 B20417'), $rendered['html']);
+        $this->assertStringContainsString('Zapytaj o ofertę: mailto:oferty@supon.example.pl?subject=', $rendered['text']);
+        $this->assertStringNotContainsString('mailto:jan@supon.example.pl', $rendered['html']);
+
+        // pusty adres — przycisk nigdzie nie prowadzi, w wersji tekstowej bez linii „Zapytaj o ofertę”
+        $rendered = $renderer->renderItems($campaign->items()->get(), $author, 'OF-0002', false, $blocks, null, $mail, askAddress: '');
+        $this->assertStringNotContainsString('mailto:', $rendered['html']);
+        $this->assertStringNotContainsString('Zapytaj o ofertę:', $rendered['text']);
+    }
+
     private function asset(int $width, int $height): CampaignAsset
     {
         $uuid = (string) Str::uuid();

@@ -190,16 +190,20 @@
 @endif
             </td>
           </tr>
-          {{-- stopka z wypisem --}}
+          {{-- stopka z wypisem (oferta do jednego klienta: unsubscribeUrl null — bez linii wypisu) --}}
+@if ($unsubscribeUrl !== null || $footerNote !== '')
           <tr>
             <td style="padding:12px 24px 16px;background:#f6f8f9;border-top:1px solid {{ $line }};font-family:Arial,Helvetica,sans-serif;font-size:11px;color:{{ $muted }};border-radius:0 0 6px 6px;">
+@if ($unsubscribeUrl !== null)
               Otrzymujesz tę wiadomość jako klient {{ $company }}.
               <a href="{{ $unsubscribeUrl }}" style="color:{{ $muted }};">Wypisz mnie z mailingu</a>
+@endif
 @if ($footerNote !== '')
-              · {{ $footerNote }}
+              {{ $unsubscribeUrl !== null ? '· ' : '' }}{{ $footerNote }}
 @endif
             </td>
           </tr>
+@endif
         </table>
       </td>
     </tr>

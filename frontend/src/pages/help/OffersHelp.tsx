@@ -1,0 +1,382 @@
+import type { ReactNode } from 'react'
+import { AppFrame, Btn, Card, Field, Mark, Slideshow, Th } from './kit'
+
+/**
+ * Pomoc modułu „Oferty” (05.10.2026). Same atrapy z kit.tsx — strony ofert dopiero powstają, więc bez LivePage;
+ * po ustabilizowaniu ekranu listy można podmienić pierwszy slajd na LivePage jak w CampaignsHelp.
+ */
+
+function Chip({ tone, children }: { tone: 'slate' | 'green' | 'amber' | 'red'; children: ReactNode }) {
+  const cls = {
+    slate: 'bg-slate-100 text-slate-700',
+    green: 'bg-emerald-100 text-emerald-800',
+    amber: 'bg-amber-100 text-amber-900',
+    red: 'bg-red-100 text-red-800',
+  } as const
+  return <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${cls[tone]}`}>{children}</span>
+}
+
+/** Nagłówek sekcji edytora oferty (Produkty, Treść, Wysyłka). */
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Card className="mb-3">
+      <p className="mb-2 text-sm font-semibold text-slate-900">{title}</p>
+      {children}
+    </Card>
+  )
+}
+
+/** Pozycja oferty w atrapie tabeli produktów. */
+function ItemRow({
+  name,
+  code,
+  stock,
+  cost,
+  suggested,
+  price,
+  warn,
+  mark,
+}: {
+  name: string
+  code: string
+  stock: string
+  cost: string
+  suggested: string
+  price: string
+  warn?: ReactNode
+  mark?: boolean
+}) {
+  const priceBox = (
+    <span
+      className={`inline-block min-w-[4.5rem] rounded border px-2 py-1 text-right tabular-nums ${
+        price ? 'border-slate-300 bg-white text-slate-800' : 'border-amber-400 bg-amber-50 text-slate-400'
+      }`}
+    >
+      {price || '—'}
+    </span>
+  )
+  return (
+    <tr className="border-b align-top">
+      <td className="p-2">
+        <span className="font-medium">{name}</span>
+        <span className="block font-mono text-[10px] text-slate-500">{code}</span>
+        {warn && <span className="mt-0.5 block">{warn}</span>}
+      </td>
+      <td className="p-2 text-right tabular-nums">{stock}</td>
+      <td className="p-2 text-right tabular-nums">{cost}</td>
+      <td className="p-2 text-right">
+        {mark ? <Mark>{priceBox}</Mark> : priceBox}
+        <span className="mt-0.5 block text-[10px] text-slate-500">
+          {suggested ? `sugerowana ${suggested} (koszt + 18%)` : 'brak kosztu — bez ceny sugerowanej'}
+        </span>
+      </td>
+    </tr>
+  )
+}
+
+export function OffersHelp() {
+  return (
+    <Slideshow
+      title="Oferty"
+      slides={[
+        {
+          action: 'Oferta dla jednego klienta',
+          does: 'Oferta to lekki mail z wybranymi produktami i cenami dla konkretnego klienta — na przykład odpowiedź na rozmowę telefoniczną. Kampania to mailing do wielu odbiorców naraz z wynikiem sprzedaży; oferty nie mają grup odbiorców, planowania ani wyników. Mail oferty wygląda jak mail kampanii: baner, kafelki produktów ze zdjęciem i ceną netto. Widzisz tylko swoje oferty. Moduł widzą osoby z uprawnieniem „Oferty dla klientów” (nadaje je administrator w Administracja → Role).',
+          click: 'Menu „Kampanie i oferty” → „Oferty” (bez dostępu do kampanii w menu jest od razu „Oferty”). Nowa pusta oferta: „+ Nowa oferta”. Istniejącą otwierasz przyciskiem „Otwórz” albo kliknięciem w temat; „Usuń” kasuje ofertę razem z historią wysyłek.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Oferty">
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h1 className="text-xl font-semibold">Oferty</h1>
+                  <p className="text-[11px] text-slate-600">
+                    Twoje oferty dla klientów — wysyłka z Twojej skrzynki albo kopia do wklejenia w Thunderbirdzie.
+                  </p>
+                </div>
+                <Btn label="+ Nowa oferta" />
+              </div>
+              <Card>
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b bg-slate-50">
+                      <Th>Oferta</Th>
+                      <Th>Pozycje</Th>
+                      <Th>Wysłano do</Th>
+                      <Th>Ostatnia wysyłka</Th>
+                      <Th>Skopiowana</Th>
+                      <Th>Zmieniona</Th>
+                      <Th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b">
+                      <td className="p-2">
+                        <span className="font-medium">Rękawice dla działu utrzymania ruchu</span>
+                        <span className="block font-mono text-[10px] text-slate-500">OF-0007</span>
+                      </td>
+                      <td className="p-2 text-right tabular-nums">4</td>
+                      <td className="p-2 text-right tabular-nums">2 adresów</td>
+                      <td className="whitespace-nowrap p-2 tabular-nums">03.10.2026 15:10</td>
+                      <td className="p-2 text-slate-400">—</td>
+                      <td className="whitespace-nowrap p-2 tabular-nums">03.10.2026 15:10</td>
+                      <td className="p-2 text-right">
+                        <Mark>
+                          <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Otwórz</span>
+                        </Mark>
+                      </td>
+                    </tr>
+                    <tr className="border-b">
+                      <td className="p-2">
+                        <span className="font-medium">Obuwie S3 — zapytanie telefoniczne</span>
+                        <span className="block font-mono text-[10px] text-slate-500">OF-0008</span>
+                      </td>
+                      <td className="p-2 text-right tabular-nums">3</td>
+                      <td className="p-2 text-right text-slate-400">—</td>
+                      <td className="p-2 text-slate-400">—</td>
+                      <td className="whitespace-nowrap p-2 tabular-nums">05.10.2026 09:12</td>
+                      <td className="whitespace-nowrap p-2 tabular-nums">05.10.2026 09:20</td>
+                      <td className="p-2 text-right">
+                        <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Otwórz</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Produkty z listy Produktów albo Zapasów',
+          does: 'Na liście Produkty albo Zapasy zaznaczasz pozycje i klikasz „Dodaj do oferty”. Menu proponuje nową ofertę z zaznaczonych albo dopisanie do jednej z pięciu ostatnio zmienianych ofert — także już wysłanej, bo oferta zawsze zostaje do edycji. Pozycje, które już są w ofercie, nie dublują się. Po kliknięciu otwiera się oferta. Oferta mieści ograniczoną liczbę pozycji — gdy zaznaczonych jest za dużo, menu pokaże komunikat i nic nie zostanie dodane.',
+          click: 'Zaznacz wiersze (Shift+klik: zakres), potem „Dodaj do oferty ▾” → „Nowa oferta z zaznaczonych” albo „Do oferty „…””.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Zapasy">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-800 px-4 py-2.5 text-xs text-white">
+                <span>
+                  <b className="tabular-nums">3</b> zaznaczone · razem ok. <b className="tabular-nums">4 180 zł</b> zapasu
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="rounded border border-slate-500 px-3 py-1.5">Wyczyść</span>
+                  <Mark>
+                    <span className="inline-block rounded bg-emerald-500 px-3 py-1.5 font-semibold text-slate-900">
+                      Dodaj do oferty ▾
+                    </span>
+                  </Mark>
+                  <span className="rounded bg-sky-500 px-3 py-1.5 font-semibold text-slate-900">Dodaj do kampanii ▾</span>
+                </span>
+              </div>
+              <div className="ml-auto w-80 rounded-xl border border-slate-200 bg-white p-2 text-xs shadow-xl">
+                <div className="rounded-lg bg-slate-100 px-2.5 py-2">
+                  <span className="block font-semibold">Nowa oferta z zaznaczonych</span>
+                  <span className="block text-[11px] text-slate-500">
+                    3 pozycje · cena: koszt zakupu + Twoja domyślna marża
+                  </span>
+                </div>
+                <div className="my-1 border-t border-slate-100" />
+                <div className="px-2.5 py-2">
+                  <span className="block font-semibold">Do oferty „Obuwie S3 — zapytanie telefoniczne”</span>
+                  <span className="block text-[11px] text-slate-500">OF-0008 · 2 pozycje · zmieniona 05.10.2026</span>
+                </div>
+                <div className="px-2.5 py-2">
+                  <span className="block font-semibold">Do oferty „Rękawice dla działu utrzymania ruchu”</span>
+                  <span className="block text-[11px] text-slate-500">
+                    OF-0007 · 4 pozycje · zmieniona 03.10.2026 · wysłana 03.10.2026
+                  </span>
+                </div>
+              </div>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Ceny w ofercie',
+          does: 'Przy każdej pozycji widzisz stan magazynu, koszt zakupu (średni koszt partii towaru z ERP XL, a dla karty bez towaru w XL — cenę zakupu karty) i cenę sugerowaną = koszt zakupu + Twoja domyślna marża z Moje konto → Oferty → „Domyślna marża”. Cena sugerowana wpisuje się sama jako „Cena netto w ofercie” przy dodaniu pozycji — możesz ją zmienić, a „wstaw sugerowaną” przywraca ją jednym kliknięciem. Gdy kosztu brak, pole jest puste i trzeba wpisać cenę ręcznie: bez ceny przy każdej pozycji oferty nie da się wysłać ani skopiować. Cena niższa od kosztu zakupu dostaje ostrzeżenie, ale nie blokuje wysyłki. Kolejne produkty dodasz też wyszukiwarką „Dodaj kartę produktu” w samej ofercie (wymaga uprawnienia „Produkty — podgląd”); kolejność pozycji w mailu zmieniasz strzałkami w górę i w dół.',
+          click: 'Kliknij w pole „Cena netto w ofercie” i wpisz kwotę. Nowy produkt: „Dodaj kartę produktu” nad tabelą — wpisz nazwę lub kod i wybierz kartę z listy.',
+          tone: 'amber',
+          screen: (
+            <AppFrame nav="Oferty">
+              <h1 className="mb-2 text-lg font-semibold">Obuwie S3 — zapytanie telefoniczne</h1>
+              <Section title="Produkty w ofercie">
+                <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                  <Chip tone="red">bez ceny: 1</Chip>
+                  <Chip tone="amber">poniżej kosztu: 1</Chip>
+                  <span className="ml-auto">Dodaj kartę produktu:</span>
+                  <span className="w-48 rounded border border-slate-300 bg-white px-2 py-1 text-slate-400">
+                    nazwa albo kod produktu…
+                  </span>
+                </div>
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b bg-slate-50">
+                      <Th>Produkt</Th>
+                      <Th>Stan</Th>
+                      <Th>Koszt zakupu</Th>
+                      <Th>Cena netto w ofercie</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <ItemRow
+                      name="Półbuty robocze S3 SRC"
+                      code="OB-S3-412"
+                      stock="38 par"
+                      cost="112,40 zł"
+                      suggested="132,63 zł"
+                      price="129,00"
+                      mark
+                    />
+                    <ItemRow
+                      name="Trzewiki zimowe S3 CI"
+                      code="OB-S3-518"
+                      stock="—"
+                      cost="—"
+                      suggested=""
+                      price=""
+                      warn={<Chip tone="red">Brak kosztu zakupu — wpisz cenę</Chip>}
+                    />
+                    <ItemRow
+                      name="Kalosze PCV S5"
+                      code="OB-S5-020"
+                      stock="12 par"
+                      cost="64,80 zł"
+                      suggested="76,46 zł"
+                      price="59,00"
+                      warn={<Chip tone="amber">Cena niższa od kosztu zakupu</Chip>}
+                    />
+                  </tbody>
+                </table>
+              </Section>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Treść maila i podgląd',
+          does: 'W sekcji „Treść maila” wpisujesz „Temat wiadomości” (bez niego oferty nie wyślesz) i krótki „Wstęp” (na przykład „Dzień dobry, zgodnie z rozmową przesyłam…”), wybierasz „Układ produktów” i opcjonalnie datę „Oferta ważna do” — gdy ta data minie, oferty nie da się wysłać ani skopiować, dopóki jej nie zmienisz albo nie wyczyścisz. „Podgląd maila” pokazuje mail dokładnie tak, jak go zobaczy klient: baner, wstęp, kafelki produktów z ceną netto i przycisk „Zapytaj o ofertę”, który otwiera mail do Ciebie. W ofercie nie ma linku „Wypisz mnie” — to nie jest mailing. Wszystko zapisuje się samo.',
+          click: 'Sekcja „Treść maila”: pola „Temat wiadomości”, „Wstęp”, „Układ produktów” i „Oferta ważna do”. Podgląd odświeża się po zmianie.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Oferty">
+              <Section title="Treść maila">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Field label="Temat wiadomości" value="Oferta: obuwie S3 dla Państwa zakładu" mark />
+                    <Field label="Wstęp" value="Dzień dobry, zgodnie z rozmową przesyłam ofertę na obuwie…" />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="Układ produktów" value="Siatka po 3" />
+                      <Field label="Oferta ważna do" value="31.10.2026" />
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white text-[10px]">
+                    <div className="rounded-t-lg bg-slate-800 px-3 py-2 text-xs font-bold text-white">SUPON</div>
+                    <div className="space-y-2 p-2">
+                      <p className="text-slate-700">Dzień dobry, zgodnie z rozmową przesyłam ofertę na obuwie…</p>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {['Półbuty S3 SRC', 'Trzewiki S3 CI', 'Kalosze PCV S5'].map((n, i) => (
+                          <div key={n} className="rounded border border-slate-200 p-1">
+                            <div className="mb-1 h-8 rounded bg-slate-100" />
+                            <p className="truncate font-medium text-slate-800">{n}</p>
+                            <p className="tabular-nums text-slate-700">{['129,00', '189,00', '59,00'][i]} zł netto</p>
+                            <span className="mt-0.5 inline-block rounded bg-blue-600 px-1 text-[9px] text-white">
+                              Zapytaj o ofertę
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-slate-500">Ceny netto. Oferta ważna do 31.10.2026</p>
+                    </div>
+                  </div>
+                </div>
+              </Section>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Wysyłka z Twojej skrzynki',
+          does: 'Wpisujesz jeden albo kilka adresów (oddzielone przecinkiem, średnikiem albo nową linią). Każdy adres dostaje osobny mail — klienci nie widzą siebie nawzajem. Mail wychodzi z Twojej skrzynki ustawionej w Moje konto → „Moja poczta”; bez niej wysyłka nie ruszy. Na Twoją skrzynkę przychodzi kopia z dopiskiem „[Kopia]” i listą adresów. Adresy z listy „Wypisani” w Kampaniach (wypisani z mailingu, adresy, na które maile nie dochodzą, i dopisani ręcznie) blokują wysyłkę — komunikat pokaże, który adres i dlaczego; usuń go z pola. Wysłać i skopiować można dopiero, gdy każda pozycja ma cenę.',
+          click: 'Sekcja „Wysyłka”: wpisz adresy w polu „Adresy e-mail klientów”, kliknij „Wyślij do 2 adresów” i potwierdź w oknie.',
+          tone: 'green',
+          screen: (
+            <AppFrame nav="Oferty">
+              <Section title="Wysyłka">
+                <Field label="Adresy e-mail klientów" value="zaopatrzenie@sanitex.pl, bhp@przyklad-firma.pl" />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  2 adresy. Każdy adres dostaje osobny mail — klienci nie widzą siebie nawzajem. Kopia z listą adresów trafi do
+                  Twojej skrzynki.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Mark>
+                    <Btn label="Wyślij do 2 adresów" />
+                  </Mark>
+                  <Btn label="Kopiuj do wklejenia w Thunderbirdzie" color="border" />
+                </div>
+                <p className="mt-3 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-700">
+                  Przykład blokady: adres biuro@kowalski.pl wypisał się z mailingu — usuń go z listy adresów.
+                </p>
+              </Section>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Kopia do wklejenia w Thunderbirdzie',
+          does: 'Gdy wolisz wysłać ofertę sam, na przykład jako odpowiedź w wątku z klientem, kopiujesz gotowy mail i wklejasz go w nowej wiadomości Thunderbirda — wygląda tak samo jak wysłany z aplikacji. Temat wpisujesz w Thunderbirdzie sam (ten z pola „Temat wiadomości” albo własny). Przy kopiowaniu adresów nie sprawdzamy, bo odbiorcę wybierasz w Thunderbirdzie, a historia wysyłek takiego maila nie obejmuje — zapisuje się tylko data ostatniego kopiowania (kolumna „Skopiowana” na liście ofert). Osoby z dodatkiem Thunderbirda mogą też kliknąć „Otwórz w Thunderbirdzie” — nowa wiadomość z ofertą otworzy się sama, adresata wpisujesz w Thunderbirdzie.',
+          click: '„Kopiuj do wklejenia w Thunderbirdzie”, potem w Thunderbirdzie nowa wiadomość albo odpowiedź i Ctrl+V w treści.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Oferty">
+              <Section title="Wysyłka">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Btn label="Wyślij do 0 adresów" color="border" />
+                  <Mark>
+                    <Btn label="Kopiuj do wklejenia w Thunderbirdzie" color="border" />
+                  </Mark>
+                  <span className="text-[11px] text-emerald-700">Skopiowano — wklej w nowej wiadomości (Ctrl+V)</span>
+                </div>
+              </Section>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Historia: co dostał klient',
+          does: 'Każda wysyłka zapisuje dokładnie ten mail, który wyszedł, i listę adresów ze stanem: wysłano, błąd (z opisem) albo pominięto. Gdy zawiedzie Twoja skrzynka, pozostałe adresy dostają stan „pominięto”, a wysyłka z Twojej skrzynki wstrzymuje się na kwadrans — sprawdź ustawienia w Moje konto → „Moja poczta” i wyślij do tych adresów jeszcze raz. Ofertę możesz dalej zmieniać i wysyłać kolejnym osobom; zmiana ceny czy treści nie zmienia maili, które już wyszły — „Pokaż wysłaną” przy wysyłce otwiera to, co klient faktycznie dostał.',
+          click: 'Sekcja „Historia wysyłek” pod ofertą: „Pokaż wysłaną” przy wybranej wysyłce.',
+          tone: 'slate',
+          screen: (
+            <AppFrame nav="Oferty">
+              <Section title="Historia wysyłek">
+                <ul className="divide-y divide-slate-200 text-xs">
+                  <li className="py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-slate-700">
+                        <b className="font-medium tabular-nums text-slate-900">05.10.2026 10:42</b> · wysłano 1 z 2
+                      </span>
+                      <Mark>
+                        <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Pokaż wysłaną</span>
+                      </Mark>
+                    </div>
+                    <span className="mt-1 block">
+                      <span className="font-mono text-[11px]">zaopatrzenie@sanitex.pl</span> <Chip tone="green">wysłano</Chip>
+                    </span>
+                    <span className="mt-1 block">
+                      <span className="font-mono text-[11px]">bhp@przyklad-firma.pl</span> <Chip tone="red">błąd</Chip>{' '}
+                      <span className="text-slate-500">skrzynka odbiorcy nie istnieje</span>
+                    </span>
+                  </li>
+                  <li className="py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-slate-700">
+                        <b className="font-medium tabular-nums text-slate-900">03.10.2026 15:10</b> · wysłano 1 z 1
+                      </span>
+                      <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Pokaż wysłaną</span>
+                    </div>
+                    <span className="mt-1 block">
+                      <span className="font-mono text-[11px]">zaopatrzenie@sanitex.pl</span> <Chip tone="green">wysłano</Chip>
+                    </span>
+                  </li>
+                </ul>
+              </Section>
+            </AppFrame>
+          ),
+        },
+      ]}
+    />
+  )
+}

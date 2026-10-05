@@ -114,7 +114,7 @@ export function CampaignsHelp() {
         {
           action: 'Lista kampanii',
           does: 'Tu są Twoje kampanie mailowe z towarem: projekty (jeszcze niewysłane), zaplanowane i wysłane. Przy wysłanej widać liczbę odbiorców i ile towaru zeszło z magazynu po 7 i po 30 dniach. Moduł widzą osoby z uprawnieniem „Kampanie — własne kampanie”; osoba z samym „Kampanie — podgląd wysłanych” widzi tylko zakładkę „Wszystkie” z kampaniami po wysyłce i niczego w nich nie zmienia.',
-          click: 'Menu „Kampanie”. Nowa kampania: „+ Pusta kampania” albo „+ Nowa kampania z Zapasów”. Istniejącą otwierasz przyciskiem „Edytuj” (projekt) albo „Otwórz” (wysłana).',
+          click: 'Menu „Kampanie” (z dostępem do ofert: „Kampanie i oferty” → „Kampanie”). Nowa kampania: „+ Pusta kampania” albo „+ Nowa kampania z Zapasów”. Istniejącą otwierasz przyciskiem „Edytuj” (projekt) albo „Otwórz” (wysłana).',
           tone: 'blue',
           screen: (
             <LivePage

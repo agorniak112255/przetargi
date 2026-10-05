@@ -32,15 +32,20 @@ const toneLabel: Record<Tone, string> = {
   slate: 'patrz',
 }
 
-/** Menu boczne atrapy — kolejność i ikony jak w components/Layout.tsx (bez Ustawień AI i Administracji). */
-const NAV: Array<[string, NavIconName]> = [
+/**
+ * Menu boczne atrapy — kolejność i ikony jak w components/Layout.tsx (bez Ustawień AI i Administracji).
+ * Trzeci element: 'group' = nagłówek rozwijanej grupy, 'sub' = pozycja w grupie (wcięta).
+ */
+const NAV: Array<[string, NavIconName, ('group' | 'sub')?]> = [
   ['Dashboard', 'dashboard'],
   ['Przetargi', 'tenders'],
   ['Ogłoszenia', 'notices'],
   ['Produkty', 'products'],
   ['Zapasy', 'inventory'],
   ['Raport dla zarządu', 'reports'],
-  ['Kampanie', 'campaigns'],
+  ['Kampanie i oferty', 'campaigns', 'group'],
+  ['Kampanie', 'campaigns', 'sub'],
+  ['Oferty', 'offers', 'sub'],
   ['Łączenie kart', 'substitutes'],
   ['Cenniki', 'price-lists'],
   ['Zamienniki', 'substitutes'],
@@ -64,15 +69,16 @@ export function AppFrame({ nav, children }: { nav: string; children: ReactNode }
             Przetargi Supon
             <small className="mt-0.5 block text-[10px] font-normal text-slate-400">Artur · admin</small>
           </div>
-          {NAV.map(([l, icon]) => (
+          {NAV.map(([l, icon, kind]) => (
             <div
               key={l}
-              className={`flex items-center gap-1.5 border-l-2 px-3 py-1.5 ${
+              className={`flex items-center gap-1.5 border-l-2 py-1.5 pr-3 ${kind === 'sub' ? 'pl-6' : 'pl-3'} ${
                 l === nav ? 'border-sky-400 bg-slate-700 font-semibold' : 'border-transparent text-slate-300'
               }`}
             >
               <NavIcon name={icon} className="h-3 w-3 shrink-0" />
               {l}
+              {kind === 'group' && <span className="ml-auto text-[9px]">▴</span>}
             </div>
           ))}
         </aside>

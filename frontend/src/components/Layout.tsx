@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { can, canAny } from '../lib/api'
+import { can, canAny, type User } from '../lib/api'
 import { CHAT_PERMISSION } from '../lib/chat'
 import { usePresence } from '../lib/usePresence'
 import { ChatNavBadge } from './ChatUnreadProvider'
@@ -20,14 +20,32 @@ type NavLinkItem = {
   orCampaignReport?: true
 }
 
-const links: NavLinkItem[] = [
+/** Rozwijana grupa pozycji; przy jednej widocznej pozycji menu pokazuje zwykły link, w zwiniętym pasku — ikony płasko. */
+type NavGroupItem = {
+  group: string
+  label: string
+  icon: NavIconName
+  children: NavLinkItem[]
+}
+
+type NavEntry = NavLinkItem | NavGroupItem
+
+const links: NavEntry[] = [
   { to: '/', label: 'Dashboard', icon: 'dashboard', permission: 'dashboard.view' },
   { to: '/tenders', label: 'Przetargi', icon: 'tenders', anyOf: ['tenders.view_own', 'tenders.view_all'] },
   { to: '/ogloszenia', label: 'Ogłoszenia', icon: 'notices', anyOf: ['notices.view'] },
   { to: '/products', label: 'Produkty', icon: 'products', permission: 'products.view' },
   { to: '/zapasy', label: 'Zapasy', icon: 'inventory', anyOf: ['inventory.view', 'campaigns.use'] },
   { to: '/raport-zapasow', label: 'Raport dla zarządu', icon: 'reports', permission: 'inventory.report.view' },
-  { to: '/kampanie', label: 'Kampanie', icon: 'campaigns', anyOf: ['campaigns.use', 'campaigns.view'] },
+  {
+    group: 'campaigns-offers',
+    label: 'Kampanie i oferty',
+    icon: 'campaigns',
+    children: [
+      { to: '/kampanie', label: 'Kampanie', icon: 'campaigns', anyOf: ['campaigns.use', 'campaigns.view'] },
+      { to: '/oferty', label: 'Oferty', icon: 'offers', permission: 'offers.use' },
+    ],
+  },
   { to: '/card-matches', label: 'Łączenie kart', icon: 'substitutes', permission: 'card_matches.view' },
   { to: '/price-lists', label: 'Cenniki', icon: 'price-lists', permission: 'price_lists.view' },
   { to: '/substitutes', label: 'Zamienniki', icon: 'substitutes', permission: 'products.view' },
@@ -51,6 +69,117 @@ function readCollapsed(): boolean {
   }
 }
 
+/** Rozwinięcie grupy menu — zapamiętane w tej przeglądarce; bez zapisu grupa jest rozwinięta (łatwo znaleźć pozycje). */
+const groupOpenKey = (group: string) => `supon_nav_group_${group}_open`
+
+function readGroupOpen(group: string): boolean {
+  try {
+    return localStorage.getItem(groupOpenKey(group)) !== '0'
+  } catch {
+    return true
+  }
+}
+
+function writeGroupOpen(group: string, open: boolean) {
+  try {
+    localStorage.setItem(groupOpenKey(group), open ? '1' : '0')
+  } catch {
+    /* bez zapisu — stan grupy działa do odświeżenia strony */
+  }
+}
+
+function isLinkVisible(user: User | null | undefined, l: NavLinkItem): boolean {
+  if (l.orCampaignReport && user?.campaign_report_scope != null) return true
+  if (l.permission) return can(user, l.permission)
+  if (l.anyOf) return canAny(user, l.anyOf)
+  return true
+}
+
+/** Trasa należy do pozycji: sam adres albo strona w środku (/oferty/12). */
+function isUnder(pathname: string, to: string): boolean {
+  return pathname === to || pathname.startsWith(`${to}/`)
+}
+
+function SideLink({ l, collapsed }: { l: NavLinkItem; collapsed: boolean }) {
+  return (
+    <NavLink
+      to={l.to}
+      end={l.to === '/'}
+      data-tip={collapsed ? l.label : undefined}
+      className={({ isActive }) =>
+        `app-nav-link block border-b border-slate-700 px-4 py-3 text-sm ${
+          isActive ? 'app-nav-link--active border-l-4 border-l-sky-400 bg-slate-700 pl-3' : 'hover:bg-slate-700'
+        }`
+      }
+    >
+      <NavIcon name={l.icon} className="app-nav-icon" />
+      <span className="app-nav-label">{l.label}</span>
+      {l.to === '/czat' && <ChatNavBadge />}
+    </NavLink>
+  )
+}
+
+/**
+ * Rozwijana grupa w rozwiniętym pasku. Wejście na stronę z grupy (także z linku spoza menu) rozwija ją; poza tym
+ * stan z localStorage. Zwinięta grupa z aktywną stroną w środku podświetla nagłówek jak aktywny link.
+ */
+function SideGroup({ g, items }: { g: NavGroupItem; items: NavLinkItem[] }) {
+  const { pathname } = useLocation()
+  const inside = items.some((l) => isUnder(pathname, l.to))
+  const [open, setOpen] = useState(() => inside || readGroupOpen(g.group))
+  const [wasInside, setWasInside] = useState(inside)
+  if (inside !== wasInside) {
+    // zmiana trasy w czasie renderu (bez efektu): wejście do grupy ją rozwija, wyjście niczego nie zwija
+    setWasInside(inside)
+    if (inside && !open) setOpen(true)
+  }
+
+  function toggle() {
+    const next = !open
+    setOpen(next)
+    writeGroupOpen(g.group, next)
+  }
+
+  const listId = `app-nav-group-${g.group}`
+  const activeHeader = inside && !open
+  return (
+    <>
+      {/* app-sidebar-btn: w szablonach z marginesem pozycji (nocna zmiana) przycisk dostaje szerokość jak linki */}
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-controls={listId}
+        className={`app-nav-link app-sidebar-btn flex w-full items-center border-b border-slate-700 px-4 py-3 text-left text-sm ${
+          activeHeader ? 'app-nav-link--active border-l-4 border-l-sky-400 bg-slate-700 pl-3' : 'hover:bg-slate-700'
+        }`}
+      >
+        <NavIcon name={g.icon} className="app-nav-icon" />
+        <span className="app-nav-label">{g.label}</span>
+        <svg
+          className={`ml-auto shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      <div id={listId} hidden={!open} className="pl-4">
+        {items.map((l) => (
+          <SideLink key={l.to} l={l} collapsed={false} />
+        ))}
+      </div>
+    </>
+  )
+}
+
 export function Layout() {
   const { user, logout } = useAuth()
   usePresence(Boolean(user))
@@ -68,11 +197,12 @@ export function Layout() {
     }
   }
 
-  const visible = links.filter((l) => {
-    if (l.orCampaignReport && user?.campaign_report_scope != null) return true
-    if (l.permission) return can(user, l.permission)
-    if (l.anyOf) return canAny(user, l.anyOf)
-    return true
+  // Grupa z jedną widoczną pozycją = zwykły link (jak przed grupą); w zwiniętym pasku pozycje grupy idą płasko.
+  const visible: NavEntry[] = links.flatMap((entry): NavEntry[] => {
+    if (!('group' in entry)) return isLinkVisible(user, entry) ? [entry] : []
+    const children = entry.children.filter((l) => isLinkVisible(user, l))
+    if (children.length > 1 && !collapsed) return [{ ...entry, children }]
+    return children
   })
 
   return (
@@ -98,25 +228,13 @@ export function Layout() {
           <NavIcon name={collapsed ? 'expand' : 'collapse'} className="app-brand-toggle" />
         </button>
         <nav className="app-nav">
-          {visible.map((l) => (
-            <NavLink
-              key={l.to}
-              to={l.to}
-              end={l.to === '/'}
-              data-tip={collapsed ? l.label : undefined}
-              className={({ isActive }) =>
-                `app-nav-link block border-b border-slate-700 px-4 py-3 text-sm ${
-                  isActive
-                    ? 'app-nav-link--active border-l-4 border-l-sky-400 bg-slate-700 pl-3'
-                    : 'hover:bg-slate-700'
-                }`
-              }
-            >
-              <NavIcon name={l.icon} className="app-nav-icon" />
-              <span className="app-nav-label">{l.label}</span>
-              {l.to === '/czat' && <ChatNavBadge />}
-            </NavLink>
-          ))}
+          {visible.map((entry) =>
+            'group' in entry ? (
+              <SideGroup key={entry.group} g={entry} items={entry.children} />
+            ) : (
+              <SideLink key={entry.to} l={entry} collapsed={collapsed} />
+            ),
+          )}
         </nav>
         <div className="app-sidebar-footer">
           {/* jedno pole wyszukiwania dla całej aplikacji; skrót Ctrl+K obsługuje samo okno GlobalSearch */}

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useAppearance } from '../appearanceContext'
 import { useAuth } from '../auth'
 import { NotificationPreferencesForm } from '../components/account/NotificationPreferencesForm'
-import { api, can, type User } from '../lib/api'
+import { api, canAny, type User } from '../lib/api'
 import { TEMPLATES, type AppearanceMode, type AppearanceTemplate, type Scheme } from '../lib/appearance'
 import {
   getMailAccount,
@@ -165,7 +165,7 @@ function MarginForm() {
       })
       replaceUser(res)
       setValue(String(res.default_margin_percent ?? '').replace('.', ','))
-      setMsg('Zapisano. Nowe odpowiedzi na zapytania zaczną się od tej marży.')
+      setMsg('Zapisano. Nowe odpowiedzi na zapytania i nowe pozycje ofert zaczną się od tej marży.')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd')
     } finally {
@@ -196,7 +196,8 @@ function MarginForm() {
       </div>
       <p className="mt-2 text-xs text-slate-500">
         Każda nowa odpowiedź na zapytanie startuje z ceną oferty: zakup + ta marża. Dla pojedynczego listu
-        zmienisz ją na stronie odpowiedzi. Z tą marżą okno „Oferta dla klienta” proponuje cenę.
+        zmienisz ją na stronie odpowiedzi. Z tą marżą okno „Oferta dla klienta” proponuje cenę, a moduł
+        „Kampanie i oferty” liczy cenę sugerowaną produktów (koszt zakupu + marża).
       </p>
       <button
         type="submit"
@@ -272,7 +273,7 @@ function MailField({ id, label, hint, children }: { id: string; label: string; h
 }
 
 /**
- * Moja poczta: skrzynka SMTP użytkownika, z której wychodzą jego kampanie. Hasło nigdy nie wraca z serwera
+ * Moja poczta: skrzynka SMTP użytkownika, z której wychodzą jego kampanie i oferty. Hasło nigdy nie wraca z serwera
  * (has_password); puste pole przy zapisie = bez zmiany. Test wysyła wiadomość na adres nadawcy.
  */
 function MailAccountForm() {
@@ -530,7 +531,7 @@ function MailAccountForm() {
           <MailField
             id="mail-signature"
             label="Podpis"
-            hint="zwykły tekst, pod każdą kampanią — np. imię i nazwisko, stanowisko, telefon"
+            hint="zwykły tekst, pod każdą kampanią i ofertą — np. imię i nazwisko, stanowisko, telefon"
           >
             <textarea
               id="mail-signature"
@@ -678,7 +679,7 @@ function MailAccountForm() {
             </p>
           )}
           <p className="mt-3 text-slate-500">
-            Bez ustawionej skrzynki kampanię można przygotować, ale nie da się jej wysłać.
+            Bez ustawionej skrzynki kampanię i ofertę można przygotować, ale nie da się ich wysłać (ofertę można skopiować do Thunderbirda).
           </p>
         </aside>
       </div>
@@ -712,7 +713,7 @@ export function Account() {
 
       <MarginForm />
 
-      {can(user, 'campaigns.use') && <MailAccountForm />}
+      {canAny(user, ['campaigns.use', 'offers.use']) && <MailAccountForm />}
 
       <PasswordForm />
 

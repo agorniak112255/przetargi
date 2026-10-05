@@ -468,7 +468,7 @@ class CampaignSender
     /**
      * Wysyłka jednej wiadomości (HTML + tekst); zwraca Message-ID albo null.
      */
-    private function deliver(UserMailAccount $account, string $to, ?string $toName, string $subject, string $html, string $text, ?string $unsubscribeUrl = null): ?string
+    public function deliver(UserMailAccount $account, string $to, ?string $toName, string $subject, string $html, string $text, ?string $unsubscribeUrl = null): ?string
     {
         $mailer = $this->mailers->make($account);
         $from = (string) $account->from_address;
@@ -495,7 +495,7 @@ class CampaignSender
      * Błąd skrzynki nadawcy (połączenie, TLS, logowanie, odrzucony nadawca, nieczytelne hasło, każda odmowa 4xx) — nie
      * adresata. Adresat: trwałe odrzucenie (5xx) przy RCPT TO albo po treści wiadomości, zły format adresu.
      */
-    protected function isSenderError(Throwable $e): bool
+    public function isSenderError(Throwable $e): bool
     {
         if ($e instanceof DecryptException) {
             return true;
@@ -651,7 +651,7 @@ class CampaignSender
     }
 
     /** Treść błędu do bazy i komunikatu: bez hasła, najwyżej 500 znaków. */
-    private function errorText(Throwable $e, ?UserMailAccount $account): string
+    public function errorText(Throwable $e, ?UserMailAccount $account): string
     {
         $message = trim($e->getMessage()) !== '' ? trim($e->getMessage()) : class_basename($e);
         if ($e instanceof DecryptException) {

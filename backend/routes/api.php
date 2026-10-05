@@ -59,6 +59,7 @@ use App\Http\Controllers\Api\NoticeController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\NotificationPreferenceController;
 use App\Http\Controllers\Api\OfferComposeController;
+use App\Http\Controllers\Api\OfferController;
 use App\Http\Controllers\Api\PrestaExportController;
 use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\PriceListController;
@@ -586,10 +587,30 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/email-suppressions', [EmailSuppressionController::class, 'index']);
         Route::post('/email-suppressions', [EmailSuppressionController::class, 'store']);
         Route::delete('/email-suppressions/{suppression}', [EmailSuppressionController::class, 'destroy']);
+    });
 
+    // „Moja poczta” — skrzynka do wysyłki kampanii i ofert
+    Route::middleware('permission:campaigns.use|offers.use')->group(function (): void {
         Route::get('/me/mail-account', [UserMailAccountController::class, 'show']);
         Route::put('/me/mail-account', [UserMailAccountController::class, 'update']);
         Route::post('/me/mail-account/test', [UserMailAccountController::class, 'test'])->middleware('throttle:10,1');
+    });
+
+    // oferty dla klientów — tylko własne (cudza = 404, sprawdza kontroler); whereNumber: /offers/compose/* (zapytania
+    // klientów, wyżej) nie trafia tutaj
+    Route::middleware('permission:offers.use')->group(function (): void {
+        Route::get('/offers', [OfferController::class, 'index']);
+        Route::post('/offers', [OfferController::class, 'store']);
+        Route::get('/offers/{offer}', [OfferController::class, 'show'])->whereNumber('offer');
+        Route::patch('/offers/{offer}', [OfferController::class, 'update'])->whereNumber('offer');
+        Route::delete('/offers/{offer}', [OfferController::class, 'destroy'])->whereNumber('offer');
+        Route::post('/offers/{offer}/items', [OfferController::class, 'addItems'])->whereNumber('offer');
+        Route::patch('/offers/{offer}/items/{item}', [OfferController::class, 'updateItem'])->whereNumber(['offer', 'item']);
+        Route::delete('/offers/{offer}/items/{item}', [OfferController::class, 'removeItem'])->whereNumber(['offer', 'item']);
+        Route::get('/offers/{offer}/preview', [OfferController::class, 'preview'])->whereNumber('offer');
+        Route::post('/offers/{offer}/copied', [OfferController::class, 'copied'])->whereNumber('offer');
+        Route::post('/offers/{offer}/send', [OfferController::class, 'send'])->whereNumber('offer')->middleware('throttle:5,1');
+        Route::get('/offers/{offer}/sends/{send}', [OfferController::class, 'showSend'])->whereNumber(['offer', 'send']);
     });
 
     Route::middleware('permission:admin.access')->prefix('admin')->group(function (): void {

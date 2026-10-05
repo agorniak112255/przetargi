@@ -78,8 +78,10 @@
 @endif
 @endif
 
+@if ($unsubscribeUrl !== null)
 Otrzymujesz tę wiadomość jako klient {!! $company !!}.
 Wypisz mnie z mailingu: {!! $unsubscribeUrl !!}
+@endif
 @if ($footerNote !== '')
 {!! $footerNote !!}
 @endif

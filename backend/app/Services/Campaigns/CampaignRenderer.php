@@ -6,10 +6,12 @@ namespace App\Services\Campaigns;
 
 use App\Models\Campaign;
 use App\Models\CampaignAsset;
+use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\User;
 use App\Models\UserMailAccount;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 
 /**
  * Treść maila kampanii (Blade emails/campaign + campaign-text) — ten sam HTML w podglądzie, teście i wysyłce.
@@ -21,7 +23,7 @@ use Illuminate\Support\Carbon;
  *
  * Układ maila to bloki (CampaignBlocks) w zapisanej kolejności; puste i niekompletne bloki są pomijane (renderer nigdy
  * nie rzuca). Zawsze, niezależnie od bloków: „Ceny netto ważne…” nad produktami, podpis nadawcy po blokach i linia
- * wypisu na końcu.
+ * wypisu na końcu (bez linii wypisu, gdy unsubscribeUrl = null — oferta do jednego klienta, renderItems).
  */
 class CampaignRenderer
 {
@@ -74,19 +76,53 @@ class CampaignRenderer
      */
     public function renderBlocks(Campaign $campaign, array $blocks, ?string $brandColor, ?CampaignRecipient $recipient = null, ?User $sender = null, ?string $notice = null): array
     {
-        $author = $campaign->user;
+        $publicUrl = rtrim((string) config('campaigns.public_url'), '/');
+        $track = $recipient !== null && $publicUrl !== '' ? $publicUrl.'/api/k/'.$recipient->token : null;
+        $validUntil = $campaign->valid_until !== null
+            ? 'Ceny netto ważne do '.$campaign->valid_until->format('d.m.Y').' lub do wyczerpania zapasów'
+            : 'Ceny netto ważne do wyczerpania zapasów';
+
+        return $this->renderItems(
+            $campaign->items()->get(),
+            $campaign->user,
+            (string) $campaign->code,
+            // po starcie wysyłki klient dostaje to, co zapisano w snapshotach — nie bieżący stan
+            ! $campaign->isDraft(),
+            $blocks,
+            $brandColor,
+            [
+                'subject' => (string) $campaign->subject,
+                'preheader' => $campaign->preheader,
+                'validUntil' => $validUntil,
+                'unsubscribeUrl' => $recipient !== null && $publicUrl !== '' ? $publicUrl.'/api/wypis/'.$recipient->token : '#',
+                'notice' => $notice,
+            ],
+            $sender,
+            $track,
+        );
+    }
+
+    /**
+     * Mail z podanych pozycji (zapisanych albo przejściowych CampaignItem z id i position) — wspólny dla kampanii i ofert.
+     * Temat i preheader trafiają do maila w jednej linii; unsubscribeUrl null = mail bez linii wypisu (oferta do klienta).
+     *
+     * @param  Collection<int, CampaignItem>  $items
+     * @param  bool  $useSnapshot  dane pozycji z migawek (kampania po starcie wysyłki), nie bieżący stan
+     * @param  list<array<string, mixed>>  $blocks
+     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null}  $mail
+     * @param  User|null  $sender  skrzynka nadawcy (podpis, adres); null = autor
+     * @param  string|null  $track  baza linków mierzonych odbiorcy; null = bez linku do strony produktu, drugi przycisk wprost
+     * @param  string|null  $askAddress  adres do mailto „Zapytaj o ofertę”; null = adres skrzynki nadawcy, pusty = „#”
+     * @return array{subject: string, html: string, text: string}
+     */
+    public function renderItems(Collection $items, ?User $author, string $code, bool $useSnapshot, array $blocks, ?string $brandColor, array $mail, ?User $sender = null, ?string $track = null, ?string $askAddress = null): array
+    {
         $sender ??= $author;
         /** @var UserMailAccount|null $account */
         $account = $sender?->mailAccount;
-        $fromAddress = $account !== null ? (string) $account->from_address : '';
-        $code = (string) $campaign->code;
-        // po starcie wysyłki klient dostaje to, co zapisano w snapshotach — nie bieżący stan
-        $useSnapshot = ! $campaign->isDraft();
+        $askTo = $askAddress ?? ($account !== null ? (string) $account->from_address : '');
 
-        $items = $campaign->items()->get();
         $snapUnits = $items->pluck('snap_unit', 'id')->all();
-        $publicUrl = rtrim((string) config('campaigns.public_url'), '/');
-        $track = $recipient !== null && $publicUrl !== '' ? $publicUrl.'/api/k/'.$recipient->token : null;
         $products = [];
         foreach ($author !== null ? $this->presenter->presentMany($items, $author) : [] as $row) {
             $snap = $useSnapshot ? $row['snapshot'] : null;
@@ -120,22 +156,18 @@ class CampaignRenderer
                 'note' => $row['note'] !== null && trim((string) $row['note']) !== '' ? (string) $row['note'] : null,
                 'description' => is_string($description) && trim($description) !== '' ? trim($description) : null,
                 'norms' => $snap !== null ? $snap['norms'] : $row['card_norms'],
-                'ask_url' => $this->askUrl($fromAddress, $code, $itemCode),
+                'ask_url' => $this->askUrl($askTo, $code, $itemCode),
                 'product_url' => $track !== null ? $track.'/p/'.$row['id'] : null,
-                'link' => $this->link($row['link'], $track !== null ? $track.'/l/'.$row['id'] : null),
+                'link' => $this->link($row['link'] ?? null, $track !== null ? $track.'/l/'.$row['id'] : null),
             ];
         }
 
-        $validUntil = $campaign->valid_until !== null
-            ? 'Ceny netto ważne do '.$campaign->valid_until->format('d.m.Y').' lub do wyczerpania zapasów'
-            : 'Ceny netto ważne do wyczerpania zapasów';
-
         return $this->compose($blocks, $brandColor, $products, [
-            'subject' => $this->line((string) $campaign->subject),
-            'preheader' => $campaign->preheader !== null ? $this->line($campaign->preheader) : null,
-            'validUntil' => $validUntil,
-            'unsubscribeUrl' => $recipient !== null && $publicUrl !== '' ? $publicUrl.'/api/wypis/'.$recipient->token : '#',
-            'notice' => $notice,
+            'subject' => $this->line((string) $mail['subject']),
+            'preheader' => ($mail['preheader'] ?? null) !== null ? $this->line((string) $mail['preheader']) : null,
+            'validUntil' => (string) $mail['validUntil'],
+            'unsubscribeUrl' => $mail['unsubscribeUrl'] ?? null,
+            'notice' => $mail['notice'] ?? null,
         ], $sender, $account);
     }
 
@@ -186,7 +218,7 @@ class CampaignRenderer
     /**
      * @param  list<array<string, mixed>>  $blocks
      * @param  list<array<string, mixed>>  $products
-     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string, notice: string|null}  $mail
+     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null}  $mail
      * @return array{subject: string, html: string, text: string}
      */
     private function compose(array $blocks, ?string $brandColor, array $products, array $mail, ?User $sender, ?UserMailAccount $account): array

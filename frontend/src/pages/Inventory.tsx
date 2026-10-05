@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { AddToCampaignMenu, CAMPAIGN_MAX_ITEMS } from '../components/AddToCampaignMenu'
+import { AddToOfferMenu } from '../components/AddToOfferMenu'
 import { CampaignPickBanner } from '../components/CampaignPickBanner'
 import { useCampaignTarget } from '../lib/campaignTarget'
 import { InventoryTabs } from '../components/InventoryTabs'
@@ -147,6 +148,9 @@ function pageNumbers(current: number, last: number): Array<number | '…'> {
 export function Inventory() {
   const { user } = useAuth()
   const canCampaign = can(user, 'campaigns.use')
+  const canOffer = can(user, 'offers.use')
+  // zaznaczanie wierszy służy kampanii i ofercie — wystarczy jedno z uprawnień
+  const canSelect = canCampaign || canOffer
   const canRwPw = can(user, 'inventory.view')
   const [params, setParams] = useSearchParams()
   // lista otwarta z kreatora kampanii (?kampania=ID) — „Dodaj do K-…” i powrót do kampanii
@@ -310,7 +314,7 @@ export function Inventory() {
   const from = meta && rows.length > 0 ? (meta.current_page - 1) * meta.per_page + 1 : null
   const to = from != null ? from + rows.length - 1 : null
   const pages = meta ? pageNumbers(meta.current_page, Math.max(1, meta.last_page)) : []
-  const colCount = 10 + (canCampaign ? 1 : 0)
+  const colCount = 10 + (canSelect ? 1 : 0)
   // Oddziały z odpowiedzi; wybrany z adresu zostaje na liście także przed pierwszą odpowiedzią.
   const locations = result?.locations ?? []
   const locationName = locations.find((l) => l.key === location)?.name ?? result?.location_name ?? (location ? `Magazyny ${location}` : '')
@@ -363,7 +367,7 @@ export function Inventory() {
       {/* przypięte u góry: do której kampanii dobierasz towar i co zaznaczono — widoczne przy przewijaniu */}
       <div className="app-sticky-bar sticky top-0 z-30 -mx-1 space-y-2 px-1 pb-2 empty:hidden">
         <CampaignPickBanner {...campaignPick} what="towar" />
-        {canCampaign && selected.size > 0 && (
+        {canSelect && selected.size > 0 && (
           <div className="app-bulk-bar flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-slate-800 px-4 py-2.5 text-sm text-white shadow-xl">
             <span>
               <b className="tabular-nums">{fmtInt(selected.size)}</b>{' '}
@@ -372,9 +376,9 @@ export function Inventory() {
               {selectedWithoutValue > 0 && (
                 <span className="text-slate-300"> ({fmtInt(selectedWithoutValue)} bez wartości z XL)</span>
               )}
-              {selected.size > CAMPAIGN_MAX_ITEMS && (
+              {canCampaign && selected.size > CAMPAIGN_MAX_ITEMS && (
                 <span className="mt-0.5 block text-xs text-amber-300">
-                  Kampania mieści najwyżej {CAMPAIGN_MAX_ITEMS} pozycji — odznacz{' '}
+                  Kampania mieści najwyżej {CAMPAIGN_MAX_ITEMS} pozycji — {canOffer ? 'do kampanii odznacz' : 'odznacz'}{' '}
                   {fmtInt(selected.size - CAMPAIGN_MAX_ITEMS)}.
                 </span>
               )}
@@ -390,12 +394,21 @@ export function Inventory() {
               >
                 Wyczyść
               </button>
-              <AddToCampaignMenu
-                erpItemIds={[...selected.keys()]}
-                target={campaignPick.target}
-                placement="down"
-                buttonClassName="rounded bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-sky-400 disabled:opacity-50"
-              />
+              {canOffer && (
+                <AddToOfferMenu
+                  erpItemIds={[...selected.keys()]}
+                  placement="down"
+                  buttonClassName="rounded bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-emerald-400 disabled:opacity-50"
+                />
+              )}
+              {canCampaign && (
+                <AddToCampaignMenu
+                  erpItemIds={[...selected.keys()]}
+                  target={campaignPick.target}
+                  placement="down"
+                  buttonClassName="rounded bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-sky-400 disabled:opacity-50"
+                />
+              )}
             </div>
           </div>
         )}
@@ -427,7 +440,13 @@ export function Inventory() {
             stan × cena z ostatniej PZ.
             {location &&
               ` Oddział ${locationName}: stan, wartość, najstarsza partia i ostatnia sprzedaż tylko z magazynów oddziału (faktury, paragony i WZ wystawione z tych magazynów).`}
-            {canCampaign && ` Zaznacz pozycje i dodaj je do kampanii (najwyżej ${CAMPAIGN_MAX_ITEMS}, Shift+klik: zakres).`}
+            {canCampaign && canOffer
+              ? ` Zaznacz pozycje i dodaj je do kampanii (najwyżej ${CAMPAIGN_MAX_ITEMS}) albo do oferty dla klienta (Shift+klik: zakres).`
+              : canCampaign
+                ? ` Zaznacz pozycje i dodaj je do kampanii (najwyżej ${CAMPAIGN_MAX_ITEMS}, Shift+klik: zakres).`
+                : canOffer
+                  ? ' Zaznacz pozycje i dodaj je do oferty dla klienta (Shift+klik: zakres).'
+                  : ''}
           </p>
         </div>
         <p className="text-[11px] text-slate-500">
@@ -611,7 +630,7 @@ export function Inventory() {
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
-              {canCampaign && (
+              {canSelect && (
                 <th className="w-8 p-2">
                   <input
                     type="checkbox"
@@ -654,7 +673,7 @@ export function Inventory() {
                 warehouses={warehouses}
                 lotCutoff={result?.lot_cutoff ?? null}
                 selection={
-                  canCampaign
+                  canSelect
                     ? { checked: selected.has(row.id), onToggle: (shiftKey) => toggleRow(i, shiftKey) }
                     : undefined
                 }

@@ -8,6 +8,7 @@ import { DashboardHelp } from './help/DashboardHelp'
 import { InventoryHelp } from './help/InventoryHelp'
 import { AppFrame, Btn, Card, Field, LivePage, Mark, Slideshow, Th } from './help/kit'
 import { NewFeaturesHelp } from './help/NewFeaturesHelp'
+import { OffersHelp } from './help/OffersHelp'
 import { ReportsHelp } from './help/ReportsHelp'
 import { SubstitutesHelp } from './help/SubstitutesHelp'
 import { useAuth } from '../auth'
@@ -25,6 +26,7 @@ const modules = [
   { id: 'zapasy', label: 'Zapasy' },
   { id: 'raport-zarzad', label: 'Raport dla zarządu' },
   { id: 'kampanie', label: 'Kampanie' },
+  { id: 'oferty', label: 'Oferty' },
   { id: 'laczenie-kart', label: 'Łączenie kart' },
   { id: 'cenniki', label: 'Cenniki' },
   { id: 'zamienniki', label: 'Zamienniki' },
@@ -2097,6 +2099,7 @@ const panels: Record<ModuleId, () => ReactNode> = {
   zapasy: () => <InventoryHelp />,
   'raport-zarzad': () => <BoardReportHelp />,
   kampanie: () => <CampaignsHelp />,
+  oferty: () => <OffersHelp />,
   'laczenie-kart': () => <CardMatchesHelp />,
   cenniki: () => <PriceListsHelp />,
   zamienniki: () => <SubstitutesHelp />,

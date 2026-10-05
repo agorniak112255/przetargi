@@ -38,6 +38,8 @@ import { Help } from './pages/Help'
 import { Login } from './pages/Login'
 import { MailingListDetail } from './pages/MailingListDetail'
 import { Notices } from './pages/Notices'
+import { OfferEditor } from './pages/OfferEditor'
+import { Offers } from './pages/Offers'
 import { ProductCompare } from './pages/ProductCompare'
 import { ProductDetail } from './pages/ProductDetail'
 import { AiSettingsPage } from './pages/AiSettings'
@@ -267,6 +269,22 @@ export default function App() {
               element={
                 <PermissionGuard anyOf={['campaigns.use', 'campaigns.view']}>
                   <CampaignEditor />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="oferty"
+              element={
+                <PermissionGuard permission="offers.use">
+                  <Offers />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="oferty/:id"
+              element={
+                <PermissionGuard permission="offers.use">
+                  <OfferEditor />
                 </PermissionGuard>
               }
             />

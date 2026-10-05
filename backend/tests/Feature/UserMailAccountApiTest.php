@@ -54,6 +54,16 @@ final class UserMailAccountApiTest extends TestCase
         });
     }
 
+    public function test_offers_permission_alone_opens_mail_account(): void
+    {
+        // oferty wychodzą z tej samej skrzynki co kampanie — bez niej osoba z samymi ofertami nie mogłaby wysyłać
+        $user = User::factory()->create();
+        $user->givePermissionTo('offers.use');
+
+        Sanctum::actingAs($user);
+        $this->getJson('/api/me/mail-account')->assertOk()->assertJsonPath('configured', false);
+    }
+
     public function test_show_empty_then_save_and_password_never_returned(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

@@ -13,6 +13,7 @@ export type NavIconName =
   | 'inquiries'
   | 'chat'
   | 'campaigns'
+  | 'offers'
   | 'ai-settings'
   | 'admin'
   | 'help'
@@ -86,6 +87,13 @@ const shapes: Record<NavIconName, ReactNode> = {
     <>
       <path d="M13 19H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5" />
       <path d="M3 7l9 6 9-6M16 18h6M19 15l3 3-3 3" />
+    </>
+  ),
+  // Otwarta koperta z wysuniętą kartką — oferta dla jednego klienta (Kampanie: koperta ze strzałką).
+  offers: (
+    <>
+      <path d="M7 12.5V4a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v8.5M10 6.5h4M10 9.5h2.5" />
+      <path d="M3 10v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9M3 10l9 6 9-6" />
     </>
   ),
   'ai-settings': (

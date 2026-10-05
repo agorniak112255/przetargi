@@ -17,8 +17,10 @@ use App\Support\PermissionCatalog;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -115,6 +117,10 @@ class UserController extends Controller
         // kampanie zostają w historii (wynik, wypisy) — klucz obcy campaigns.user_id blokuje usunięcie autora
         if (Campaign::query()->where('user_id', $user->id)->exists()) {
             return response()->json(['message' => 'Użytkownik ma kampanie — nie można go usunąć.'], 422);
+        }
+        // oferty z historią wysyłek — klucz obcy offers.user_id (bez kaskady) blokuje usunięcie autora
+        if (Schema::hasTable('offers') && DB::table('offers')->where('user_id', $user->id)->exists()) {
+            return response()->json(['message' => 'Użytkownik ma oferty — nie można go usunąć.'], 422);
         }
 
         $user->delete();

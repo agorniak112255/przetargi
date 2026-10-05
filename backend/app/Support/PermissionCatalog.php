@@ -76,6 +76,7 @@ final class PermissionCatalog
         'campaigns.manage',
         'campaigns.delete',
         'campaigns.view',
+        'offers.use',
         'chat',
     ];
 
@@ -250,6 +251,7 @@ final class PermissionCatalog
             ['campaigns.manage', 'Kampanie — wszystkie, wspólne grupy i szablony', 'Widzi kampanie wszystkich pracowników, prowadzi wspólne grupy odbiorców, wspólne szablony maili i listę adresów wypisanych z mailingu.', 'Kampanie'],
             ['campaigns.delete', 'Kampanie — usuwanie wysłanych', 'Może usunąć wysłaną albo anulowaną kampanię razem z jej odbiorcami, kliknięciami i odpowiedziami (wypisy z mailingu zostają). Cudze kampanie — tylko z uprawnieniem „Kampanie — wszystkie”. Własny projekt usuwa każdy bez tego uprawnienia.', 'Kampanie'],
             ['campaigns.view', 'Kampanie — podgląd wysłanych', 'Widzi kampanie wszystkich pracowników po rozpoczęciu wysyłki (w trakcie, wysłane i anulowane): treść maila, pozycje, odbiorców, kliknięcia, odpowiedzi i sprzedaż. Nie zmienia, nie wysyła, nie duplikuje i nie usuwa kampanii. Może wysłać mail testowy tylko na własny adres. Projekty innych osób są niewidoczne.', 'Kampanie'],
+            ['offers.use', 'Oferty dla klientów', 'Może przygotować ofertę z towarów ERP XL i kart produktów, skopiować ją do własnej wiadomości albo wysłać ze swojej skrzynki pod podane adresy (osobny mail do każdego adresu). Przy pozycjach widzi koszt zakupu towaru z ERP XL i cenę zakupu karty produktu. Dodawanie produktów z listy produktów wymaga też uprawnienia „Produkty — podgląd”.', 'Kampanie'],
             ['inquiries.view_others', 'Zapytania — otwieranie cudzych', 'Może otworzyć zapytanie innego pracownika i zobaczyć mail klienta, dobrane pozycje i przygotowany list. Tylko podgląd — zmieniać i wysyłać może wyłącznie autor.', 'Zapytania'],
             ['chat', 'Czat firmowy', 'Może pisać do współpracowników i w kanałach czatu oraz przekazywać do czatu maile, zapytania i przetargi.', 'Czat'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],

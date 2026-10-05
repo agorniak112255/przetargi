@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { AddToCampaignMenu } from '../components/AddToCampaignMenu'
+import { AddToOfferMenu } from '../components/AddToOfferMenu'
 import { CampaignPickBanner } from '../components/CampaignPickBanner'
 import { useCampaignTarget } from '../lib/campaignTarget'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
@@ -298,7 +299,8 @@ export function Products() {
   const canDelete = can(user, 'products.delete')
   const canMergeCards = can(user, 'card_matches.decide')
   const canCampaign = can(user, 'campaigns.use')
-  const canSelect = canEnrich || canDelete || canMergeCards || canCampaign
+  const canOffer = can(user, 'offers.use')
+  const canSelect = canEnrich || canDelete || canMergeCards || canCampaign || canOffer
   // lista otwarta z kreatora kampanii (?kampania=ID) — „Dodaj do K-…” i powrót do kampanii
   const campaignPick = useCampaignTarget()
   const hasActions = canEnrich || canExportPresta || canDelete
@@ -1072,6 +1074,14 @@ export function Products() {
               showCount
               target={campaignPick.target}
               buttonClassName="rounded border border-sky-300 px-3 py-2 text-xs text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+            />
+          )}
+          {canOffer && (
+            <AddToOfferMenu
+              productIds={selectedIds}
+              placement="down"
+              showCount
+              buttonClassName="rounded border border-emerald-300 px-3 py-2 text-xs text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
             />
           )}
           {canDelete && (
