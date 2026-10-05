@@ -32,6 +32,20 @@ final class ShopImageGuardsTest extends TestCase
             $identity->imageUrlNamesForeignGloveModel('https://shop.example/08-352-i-08-354.jpg', $alphatec),
             'plik z naszym modelem obok innego zostaje'
         );
+        // audyt 05.10.2026: katalog PIM z naszym modelem i lista modeli rodziny w nazwie pliku
+        $suit = new Product(['sku' => '210500027', 'name' => 'AlphaTec 66-300 model 146, 3XL', 'manufacturer' => 'Ansell']);
+        $this->assertFalse($identity->imageUrlNamesForeignGloveModel(
+            'https://www.ansell.com/-/media/projects/ansell/website/pim/product-assets/alphatec-suits/66300/alphatec-66-330-model-146-static---front.ashx',
+            $suit
+        ));
+        $family = 'https://www.ansell.com/-/media/projects/ansell/website/pim/product-assets/alphatec-gloves-and-aprons/alphatec-epdm/alphatec-epdm-85-501-503-505-image.ashx';
+        $this->assertFalse($identity->imageUrlNamesForeignGloveModel($family, new Product(['sku' => '85503110', 'name' => 'ALPHATEC 85503 ISOLATOR 10Tb2432A S11,0', 'manufacturer' => 'Ansell'])));
+        $this->assertTrue($identity->imageUrlNamesForeignGloveModel($family, new Product(['sku' => '85600110', 'name' => 'ALPHATEC 85600 8Tw2032A S11,0', 'manufacturer' => 'Ansell'])));
+        $this->assertTrue($identity->imageUrlNamesForeignGloveModel(
+            'https://www.ansell.com/-/media/projects/ansell/website/pim/product-assets/dermashield/dermashield-73-721/dermashield_73-721_glovestretch.ashx',
+            new Product(['sku' => '73711090', 'name' => 'DERMASHIELD 73711', 'manufacturer' => 'Ansell'])
+        ), 'zdjęcie sąsiedniego modelu z jego katalogu');
+
         // numer zdjęcia sklepu bez modelu i katalogi CDN w ścieżce nie są modelem
         $hyflex = new Product(['sku' => '11250160-N', 'name' => 'HyFlex 11250 NARROW NO THUMB S', 'manufacturer' => 'Ansell']);
         $this->assertFalse($identity->imageUrlNamesForeignGloveModel('https://bhp-sklep.com.pl/wp-content/uploads/2023/11/01180035-17286.png', $hyflex));

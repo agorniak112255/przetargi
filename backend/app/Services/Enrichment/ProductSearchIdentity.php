@@ -5593,8 +5593,27 @@ final class ProductSearchIdentity
     public function imageUrlNamesForeignGloveModel(string $url, Product $product): bool
     {
         $file = $this->imageFileNameStem($url);
+        $ours = $this->ansellGloveModel($product);
+        if ($file === '' || $ours === null) {
+            return false;
+        }
+        // Katalog PIM Ansella nazwany naszym modelem rozstrzyga: „…/alphatec-suits/66300/66-300-model-146…” przy
+        // pliku z literówką „alphatec-66-330-model-146-static---front.ashx” (karta AlphaTec 66-300, audyt 05.10.2026).
+        if ($this->hayHasAnsellGloveModel(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')), $ours)) {
+            return false;
+        }
+        // Zdjęcie rodziny „alphatec-epdm-85-501-503-505-image” pokazuje też 85-503 i 85-505 — lista modeli w nazwie
+        // pliku liczy się jak każdy z nich osobno.
+        $file = (string) preg_replace_callback(
+            '/(?<!\d)(\d{2})-(\d{3})((?:-\d{3}(?!\d))+)/u',
+            static fn (array $m): string => implode(' ', array_map(
+                static fn (string $tail): string => $m[1].'-'.$tail,
+                [$m[2], ...array_values(array_filter(explode('-', $m[3])))]
+            )),
+            $file
+        );
 
-        return $file !== '' && $this->urlOrTitleHasForeignAnsellGloveModel('', $file, $product);
+        return $this->urlOrTitleHasForeignAnsellGloveModel('', $file, $product);
     }
 
     /**
