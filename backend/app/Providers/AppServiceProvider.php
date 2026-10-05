@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Models\User;
 use App\Services\Ai\AiServedProviderTally;
+use App\Services\Auth\NetworkAccessPolicy;
 use App\Services\B2b\B2bSyncLauncher;
 use App\Services\B2b\BackgroundB2bSyncLauncher;
 use App\Services\B2b\InlineB2bSyncLauncher;
@@ -21,6 +23,8 @@ use App\Support\BrandDictionary;
 use App\Support\ProductVariantFacts;
 use App\Support\StorageOwnership;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Sanctum\PersonalAccessToken;
+use Laravel\Sanctum\Sanctum;
 use Throwable;
 
 class AppServiceProvider extends ServiceProvider
@@ -28,6 +32,8 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(AiServedProviderTally::class);
+        // adresy sieci lokalnej czytane raz na żądanie
+        $this->app->scoped(NetworkAccessPolicy::class);
         // jedna instancja na żądanie albo zadanie kolejki — słownik czytany raz, nie przy każdej karcie
         $this->app->scoped(BrandDictionary::class);
         $this->app->scoped(EnrichmentAttemptLog::class);
@@ -66,6 +72,23 @@ class AppServiceProvider extends ServiceProvider
                 }
             });
         }
+
+        // Dostęp z sieci przy każdym żądaniu z kluczem (wszystkie trasy auth:sanctum, także autoryzacja kanałów czatu).
+        // Klucze sprzed zmiany ustawienia przestają działać od razu. Logowanie sesją (guard web) tego nie sprawdza —
+        // dziś go nie ma (bez statefulApi()); włączenie go wymaga tej samej kontroli.
+        Sanctum::authenticateAccessTokensUsing(function (PersonalAccessToken $token, bool $isValid): bool {
+            if (! $isValid || ! $token->tokenable instanceof User) {
+                return $isValid;
+            }
+            $request = $this->app->make('request');
+            if ($this->app->make(NetworkAccessPolicy::class)->allows($token->tokenable, $request->ip())) {
+                return true;
+            }
+            // odpowiedź 401 dostaje powód, żeby aplikacja wylogowała i powiedziała dlaczego (bootstrap/app.php)
+            $request->attributes->set('network_access_denied', true);
+
+            return false;
+        });
 
         try {
             $this->app->make(MailSettingsService::class)->applyToConfig();

@@ -6,6 +6,7 @@ namespace App\Http\Requests\Admin;
 
 use App\Models\User;
 use App\Rules\ExistingWebRole;
+use App\Services\Auth\NetworkAccessPolicy;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -35,6 +36,8 @@ class UpdateUserRequest extends FormRequest
             'erp_operator_ident' => ['sometimes', 'nullable', 'string', 'max:20'],
             // pracownik ERP XL (opiekun klientów, KtO_PrcNumer) — cele handlowców; null = brak; jeden pracownik = jedno konto
             'erp_employee_gid' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:4294967295', Rule::unique('users', 'erp_employee_gid')->ignore($user->id)],
+            // dostęp z sieci: null = jak w grupie, any = z każdej sieci, local = tylko z sieci lokalnej
+            'network_access' => ['sometimes', 'nullable', Rule::in(NetworkAccessPolicy::MODES)],
         ];
     }
 

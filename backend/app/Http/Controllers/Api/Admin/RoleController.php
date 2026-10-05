@@ -10,9 +10,12 @@ use App\Http\Requests\Admin\StoreRoleRequest;
 use App\Http\Requests\Admin\UpdateRolePermissionsRequest;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\Auth\NetworkAccessPolicy;
 use App\Support\PermissionCatalog;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Spatie\Permission\PermissionRegistrar;
 
 class RoleController extends Controller
@@ -33,6 +36,7 @@ class RoleController extends Controller
                     'is_system' => in_array($role->name, PermissionCatalog::ROLES, true),
                     'permissions' => $role->permissions->pluck('name')->values()->all(),
                     'users_count' => $role->users()->count(),
+                    'network_access' => self::networkAccess($role),
                 ];
             })
             ->values();
@@ -73,6 +77,7 @@ class RoleController extends Controller
             'is_system' => false,
             'permissions' => $role->permissions()->pluck('name')->values()->all(),
             'users_count' => 0,
+            'network_access' => NetworkAccessPolicy::ANY,
         ], 201);
     }
 
@@ -141,7 +146,41 @@ class RoleController extends Controller
             'is_system' => in_array($roleModel->name, PermissionCatalog::ROLES, true),
             'permissions' => $roleModel->permissions()->pluck('name')->values()->all(),
             'users_count' => $roleModel->users()->count(),
+            'network_access' => self::networkAccess($roleModel),
         ]);
+    }
+
+    /**
+     * Dostęp z sieci dla całej grupy. Konto z własnym ustawieniem (Użytkownicy) go nie dziedziczy.
+     */
+    public function updateNetworkAccess(Request $request, NetworkAccessPolicy $policy, string $role): JsonResponse
+    {
+        $data = $request->validate([
+            'network_access' => ['required', Rule::in(NetworkAccessPolicy::MODES)],
+        ]);
+
+        $roleModel = Role::query()
+            ->where('guard_name', 'web')
+            ->where('name', $role)
+            ->first();
+
+        if ($roleModel === null) {
+            return response()->json(['message' => 'Nieznana rola.'], 404);
+        }
+
+        /** @var User $actor */
+        $actor = $request->user();
+        $policy->applyGuarded($actor, $request->ip(), 'network_access', function () use ($roleModel, $data): void {
+            $roleModel->forceFill(['network_access' => $data['network_access']])->save();
+        });
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
+
+        return $this->present($roleModel);
+    }
+
+    private static function networkAccess(Role $role): string
+    {
+        return $role->getAttribute('network_access') === NetworkAccessPolicy::LOCAL ? NetworkAccessPolicy::LOCAL : NetworkAccessPolicy::ANY;
     }
 
     public function destroy(string $role): JsonResponse

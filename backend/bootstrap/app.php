@@ -3,8 +3,10 @@
 use App\Http\Middleware\EnsureTenderAccess;
 use App\Http\Middleware\LogApiActivity;
 use App\Models\B2bSyncRun;
+use App\Services\Auth\NetworkAccessPolicy;
 use App\Services\Enrichment\JinaAccountService;
 use App\Services\System\ScheduledTaskRecorder;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -117,6 +119,17 @@ return Application::configure(basePath: dirname(__DIR__))
         app(ScheduledTaskRecorder::class)->attach($schedule);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // klucz odrzucony przez dostęp z sieci (AppServiceProvider) — aplikacja wylogowuje i pokazuje ten komunikat
+        $exceptions->render(function (AuthenticationException $e, $request) {
+            if ($request->attributes->get('network_access_denied') !== true) {
+                return null;
+            }
+
+            return response()->json([
+                'message' => NetworkAccessPolicy::DENIED_MESSAGE,
+                'reason' => 'network',
+            ], 401);
+        });
         $exceptions->render(function (UnauthorizedException $e, $request) {
             if ($request->expectsJson() || $request->is('api/*')) {
                 return response()->json(['message' => 'Brak uprawnień.'], 403);

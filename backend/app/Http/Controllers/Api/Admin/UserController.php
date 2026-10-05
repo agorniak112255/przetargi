@@ -12,6 +12,7 @@ use App\Mail\AccountCredentialsMail;
 use App\Models\Campaign;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\Auth\NetworkAccessPolicy;
 use App\Support\PermissionCatalog;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
@@ -23,9 +24,14 @@ use Throwable;
 
 class UserController extends Controller
 {
+    public function __construct(
+        private readonly NetworkAccessPolicy $networkAccess,
+    ) {}
+
     public function index(): JsonResponse
     {
         $users = User::query()
+            ->with('roles')
             ->orderBy('name')
             ->get()
             ->map(fn (User $user): array => $this->present($user))
@@ -70,19 +76,33 @@ class UserController extends Controller
         if (array_key_exists('erp_employee_gid', $data)) {
             $user->forceFill(['erp_employee_gid' => $data['erp_employee_gid'] === null ? null : (int) $data['erp_employee_gid']]);
         }
-        try {
-            $user->save();
-        } catch (UniqueConstraintViolationException) {
-            // dwa równoczesne zapisy tego samego pracownika — walidacja przeszła w obu, baza przepuściła jeden
-            $message = 'Ten pracownik ERP XL jest już przypisany do innego konta.';
-
-            return response()->json(['message' => $message, 'errors' => ['erp_employee_gid' => [$message]]], 422);
+        if (array_key_exists('network_access', $data)) {
+            $user->forceFill(['network_access' => $data['network_access']]);
         }
 
-        if (isset($data['role'])) {
-            $user->syncPrimaryRole($data['role']);
+        /** @var User $actor */
+        $actor = $request->user();
+        // zmiana dostępu z sieci albo grupy nie może odciąć administratora, który ją zapisuje
+        $conflict = $this->networkAccess->applyGuarded($actor, $request->ip(), 'network_access', function () use ($user, $data): ?JsonResponse {
+            try {
+                $user->save();
+            } catch (UniqueConstraintViolationException) {
+                // dwa równoczesne zapisy tego samego pracownika — walidacja przeszła w obu, baza przepuściła jeden
+                $message = 'Ten pracownik ERP XL jest już przypisany do innego konta.';
+
+                return response()->json(['message' => $message, 'errors' => ['erp_employee_gid' => [$message]]], 422);
+            }
+
+            if (isset($data['role'])) {
+                $user->syncPrimaryRole($data['role']);
+            }
+            $this->applyAppearance($user, $data);
+
+            return null;
+        });
+        if ($conflict !== null) {
+            return $conflict;
         }
-        $this->applyAppearance($user, $data);
 
         return response()->json($this->present($user->fresh()));
     }
@@ -150,6 +170,9 @@ class UserController extends Controller
             ...$user->toAuthArray(),
             'erp_operator_ident' => $user->getAttribute('erp_operator_ident'),
             'erp_employee_gid' => $user->erp_employee_gid === null ? null : (int) $user->erp_employee_gid,
+            // null = jak w grupie; effective — co faktycznie obowiązuje i skąd (konto / grupa)
+            'network_access' => in_array($user->getAttribute('network_access'), NetworkAccessPolicy::MODES, true) ? $user->getAttribute('network_access') : null,
+            'network_access_effective' => $this->networkAccess->effective($user),
         ];
     }
 

@@ -114,4 +114,10 @@ return [
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
 
+    /*
+    | Dostęp z sieci (konta i grupy „tylko z sieci lokalnej”, zob. NetworkAccessPolicy). false = wyłącznik
+    | awaryjny: nikt nie jest blokowany, np. gdy biuro dostało nowy adres i nikt nie może się zalogować.
+    */
+    'network_access_enforce' => (bool) env('NETWORK_ACCESS_ENFORCE', true),
+
 ];

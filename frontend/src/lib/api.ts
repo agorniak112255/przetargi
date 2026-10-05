@@ -26,6 +26,9 @@ export class ApiError extends Error {
   }
 }
 
+/** Zdarzenie okna: klucz odrzucony przez dostęp z sieci (detail = komunikat serwera). */
+export const NETWORK_BLOCKED_EVENT = 'supon:network-blocked'
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('Accept', 'application/json')
@@ -57,6 +60,10 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
       (typeof body.message === 'string' ? body.message : null) ??
       (errors ? Object.values(errors).flat().join(' ') : null) ??
       `Błąd API ${res.status}`
+    // konto „tylko z sieci lokalnej” poza nią — serwer już nie przyjmuje klucza; auth.tsx wylogowuje z tym komunikatem
+    if (res.status === 401 && body.reason === 'network') {
+      window.dispatchEvent(new CustomEvent<string>(NETWORK_BLOCKED_EVENT, { detail: String(msg) }))
+    }
     throw new ApiError(String(msg), res.status, body)
   }
   return body as T

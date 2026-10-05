@@ -9,6 +9,8 @@ type RoleRow = {
   is_system?: boolean
   users_count?: number
   permissions: string[]
+  /** dostęp z sieci całej grupy; konto z własnym ustawieniem go nie dziedziczy */
+  network_access?: 'any' | 'local'
 }
 
 type PermissionDef = {
@@ -85,6 +87,30 @@ export function AdminRoles() {
       })
       setMsg('Zapisano uprawnienia roli.')
       await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Dostęp z sieci grupy — zapis od razu, osobno od zaznaczeń uprawnień (te zostają na ekranie niezapisane). */
+  async function saveNetworkAccess(mode: 'any' | 'local') {
+    if (!selected) return
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const updated = await api<RoleRow>(`/admin/roles/${selected}/network-access`, {
+        method: 'PATCH',
+        body: JSON.stringify({ network_access: mode }),
+      })
+      setRoles((prev) => prev.map((r) => (r.name === updated.name ? { ...r, network_access: updated.network_access } : r)))
+      setMsg(
+        mode === 'local'
+          ? `Grupa „${updated.label ?? updated.name}” pracuje tylko z sieci lokalnej (poza kontami z własnym ustawieniem).`
+          : `Grupa „${updated.label ?? updated.name}” pracuje z każdej sieci (poza kontami z własnym ustawieniem).`,
+      )
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd')
     } finally {
@@ -336,6 +362,23 @@ export function AdminRoles() {
               </button>
             )}
           </div>
+
+          <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+            Dostęp z sieci
+            <select
+              className="rounded border px-2 py-1 text-sm text-slate-900"
+              value={selectedRole.network_access ?? 'any'}
+              disabled={busy}
+              onChange={(e) => void saveNetworkAccess(e.target.value as 'any' | 'local')}
+            >
+              <option value="any">z każdej sieci</option>
+              <option value="local">tylko z sieci lokalnej</option>
+            </select>
+            <span className="text-xs text-slate-500">
+              zapis od razu; konto z własnym ustawieniem (Użytkownicy) ma pierwszeństwo. Adresy sieci lokalnej:
+              Administracja → Użytkownicy.
+            </span>
+          </label>
 
           <div className="mb-4 max-h-[55vh] space-y-4 overflow-auto">
             {grouped.map(([group, items]) => (

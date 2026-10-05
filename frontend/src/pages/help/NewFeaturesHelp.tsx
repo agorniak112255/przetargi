@@ -771,6 +771,31 @@ function Stage01Slideshow() {
             </AppFrame>
           ),
         },
+        {
+          action: 'Dostęp z sieci: z każdej sieci albo tylko z sieci lokalnej',
+          does: 'Administrator ustala, skąd konto może pracować: „z każdej sieci” albo „tylko z sieci lokalnej” (z biura). Ustawienie ma każda grupa (rola) i może je mieć każde konto. Ustawienie konta ma pierwszeństwo przed grupą; „jak w grupie” oznacza, że obowiązuje ustawienie grupy. Gdy ktoś ma kilka grup, a choć jedna ma „tylko z sieci lokalnej”, konto bez własnego ustawienia też pracuje tylko z sieci lokalnej. Sieć lokalna to adresy IP wpisane w „Sieć lokalna — adresy IP” (pod listą użytkowników): pojedynczy adres albo zakres, np. 91.189.223.0/24. Liczy się publiczny adres biura — ten, który ekran pokazuje jako „Twój adres”, gdy siedzisz w biurze; adresy 192.168.… z sieci wewnętrznej nic nie dają, bo serwer ich nie widzi. Konto ograniczone do sieci lokalnej nie zaloguje się spoza niej (ekran logowania mówi dlaczego), a osoba już zalogowana zostaje wylogowana przy następnym działaniu w aplikacji. Dotyczy to też dodatku do Thunderbirda. Aplikacja nie pozwoli zapisać zmiany, która odcięłaby administratora od adresu, z którego ją zapisuje, ani ustawić „tylko z sieci lokalnej”, gdy lista adresów jest pusta. Dziennik aktywności notuje każdą zablokowaną próbę logowania. Gdy biuro dostanie nowy adres IP od dostawcy Internetu, osoby „tylko z sieci lokalnej” nie zalogują się, dopóki administrator nie dopisze nowego adresu — najlepiej zrobić to od razu z biura („Dodaj mój adres”). Plik kalendarza terminów (adres .ics) działa dalej z każdej sieci, bo pobierają go programy kalendarza.',
+          click: 'Konto: „Administracja” → „Użytkownicy” → „Edytuj” → kolumna „Dostęp z sieci” → „Zapisz”. Grupa: „Administracja” → „Role” → wybierz rolę → „Dostęp z sieci” (zapis od razu). Adresy: „Administracja” → „Użytkownicy” → „Sieć lokalna — adresy IP” → „Dodaj mój adres” albo „Dodaj adres” → „Zapisz adresy”.',
+          tone: 'violet',
+          screen: (
+            <AppFrame nav="Administracja">
+              <Card className="max-w-xl space-y-2 text-xs">
+                <div className="font-semibold">Sieć lokalna — adresy IP</div>
+                <p>
+                  Twój adres: <code className="font-semibold">91.189.223.20</code> <span className="text-green-700">— w sieci lokalnej</span>
+                </p>
+                <div className="flex gap-2">
+                  <span className="rounded border border-slate-300 px-2 py-0.5 font-mono">91.189.223.20</span>
+                  <span className="rounded border border-slate-300 px-2 py-0.5">Biuro</span>
+                </div>
+                <div className="pt-1 font-semibold">Dostęp z sieci (konto)</div>
+                <Mark>
+                  <div className="rounded border border-slate-300 px-2 py-1">tylko z sieci lokalnej</div>
+                </Mark>
+                <p className="text-[11px] text-slate-500">Ustawienie konta ma pierwszeństwo przed grupą.</p>
+              </Card>
+            </AppFrame>
+          ),
+        },
       ]}
     />
   )

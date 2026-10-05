@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
-import { api, ApiError, can, type User } from './lib/api'
+import { api, ApiError, can, NETWORK_BLOCKED_EVENT, type User } from './lib/api'
 import { CHAT_PERMISSION } from './lib/chat'
 import { startRealtime, stopRealtime } from './lib/realtime'
 import { clearToken, getToken, isAddonSession, setToken } from './lib/tokenStore'
@@ -12,6 +12,8 @@ type AuthCtx = {
    * po powrocie serwera `retry` wpuszcza bez ponownego logowania; null = brak problemu.
    */
   connectionError: string | null
+  /** Powód wylogowania przez serwer (konto „tylko z sieci lokalnej” poza nią) — strona logowania go pokazuje. */
+  signedOutNotice: string | null
   retry: () => Promise<void>
   login: (email: string, password: string) => Promise<void>
   logout: () => Promise<void>
@@ -32,6 +34,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [signedOutNotice, setSignedOutNotice] = useState<string | null>(null)
+
+  // Serwer odrzucił klucz przez dostęp z sieci (lib/api.ts) — klucz już nie zadziała, więc od razu ekran logowania.
+  useEffect(() => {
+    function onBlocked(e: Event) {
+      clearToken()
+      setConnectionError(null)
+      setSignedOutNotice((e as CustomEvent<string>).detail || 'Wylogowano: to konto może pracować tylko z sieci lokalnej.')
+      setUser(null)
+    }
+    window.addEventListener(NETWORK_BLOCKED_EVENT, onBlocked)
+    return () => window.removeEventListener(NETWORK_BLOCKED_EVENT, onBlocked)
+  }, [])
 
   const verify = useCallback(async () => {
     if (!getToken()) return
@@ -69,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
     setToken(data.token)
     setConnectionError(null)
+    setSignedOutNotice(null)
     setUser(data.user)
   }
 
@@ -84,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <Ctx.Provider value={{ user, loading, connectionError, retry: verify, login, logout, replaceUser: setUser }}>
+    <Ctx.Provider value={{ user, loading, connectionError, signedOutNotice, retry: verify, login, logout, replaceUser: setUser }}>
       {children}
     </Ctx.Provider>
   )

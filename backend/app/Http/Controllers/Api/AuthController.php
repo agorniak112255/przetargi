@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\ActivityLogger;
+use App\Services\Auth\NetworkAccessPolicy;
 use App\Support\OfferPricing;
 use Closure;
 use Illuminate\Http\JsonResponse;
@@ -20,6 +21,7 @@ class AuthController extends Controller
 {
     public function __construct(
         private readonly ActivityLogger $activityLogger,
+        private readonly NetworkAccessPolicy $networkAccess,
     ) {}
 
     public function login(Request $request): JsonResponse
@@ -46,6 +48,18 @@ class AuthController extends Controller
             throw ValidationException::withMessages([
                 'email' => ['Nieprawidłowy e-mail lub hasło.'],
             ]);
+        }
+
+        // hasło dobre, ale konto „tylko z sieci lokalnej” loguje się spoza niej — bez klucza
+        if (! $this->networkAccess->allows($user, $request->ip())) {
+            $this->activityLogger->log(
+                action: 'login_blocked_network',
+                user: $user,
+                meta: ['label' => 'Logowanie spoza sieci lokalnej — zablokowane'],
+                request: $request,
+            );
+
+            return response()->json(['message' => NetworkAccessPolicy::DENIED_MESSAGE, 'reason' => 'network'], 403);
         }
 
         $newToken = $user->createToken('spa');

@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom'
 import { useAuth } from '../auth'
 
 export function Login() {
-  const { user, login, loading } = useAuth()
+  const { user, login, loading, signedOutNotice } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -30,6 +30,7 @@ export function Login() {
         <h1 className="mb-1 text-xl font-bold text-slate-900">Przetargi Supon</h1>
         <p className="mb-4 text-sm text-slate-500">Logowanie — dział handlowy</p>
         {error && <p className="mb-3 rounded bg-red-50 p-2 text-sm text-red-700">{error}</p>}
+        {!error && signedOutNotice && <p className="mb-3 rounded bg-amber-50 p-2 text-sm text-amber-800">{signedOutNotice}</p>}
         <label className="mb-3 block text-sm">
           E-mail
           <input

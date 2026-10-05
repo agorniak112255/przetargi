@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { AdminLocalNetworks } from '../components/AdminLocalNetworks'
 import { api, fetchErpEmployees, type ErpEmployee, type User } from '../lib/api'
 import { TEMPLATES } from '../lib/appearance'
 import { listErpOperators, type ErpOperator } from '../lib/campaigns'
@@ -10,7 +11,24 @@ type RoleOption = { name: string; label?: string }
  * Użytkownik na liście admina — dodatkowo operator ERP XL (kampanie) i pracownik ERP XL — opiekun klientów
  * (cele handlowców); oba ustawia tylko administrator.
  */
-type AdminUser = User & { erp_operator_ident?: string | null; erp_employee_gid?: number | null }
+type AdminUser = User & {
+  erp_operator_ident?: string | null
+  erp_employee_gid?: number | null
+  /** dostęp z sieci ustawiony na koncie; null = jak w grupie */
+  network_access?: NetworkMode | null
+  /** co obowiązuje i skąd: konto, grupa (rola) albo domyślnie */
+  network_access_effective?: { mode: NetworkMode; source: 'user' | 'role' | 'default'; role: string | null }
+}
+
+type NetworkMode = 'any' | 'local'
+
+const NETWORK_LABELS: Record<NetworkMode, string> = {
+  any: 'z każdej sieci',
+  local: 'tylko z sieci lokalnej',
+}
+
+/** Wartość pola edycji: '' = jak w grupie. */
+type NetworkChoice = '' | NetworkMode
 
 function customersLabel(n: number): string {
   return `${n} ${n === 1 ? 'klient' : 'klientów'}`
@@ -327,6 +345,7 @@ export function AdminUsers() {
   const [editOperator, setEditOperator] = useState('')
   const [editEmployee, setEditEmployee] = useState<number | null>(null)
   const [editEmployeePending, setEditEmployeePending] = useState(false)
+  const [editNetwork, setEditNetwork] = useState<NetworkChoice>('')
 
   async function load() {
     const [usersData, rolesData] = await Promise.all([
@@ -361,6 +380,14 @@ export function AdminUsers() {
 
   function roleLabel(code: string): string {
     return roleOptions.find((r) => r.name === code)?.label ?? code
+  }
+
+  /** „tylko z sieci lokalnej (grupa Handlowiec)” — obowiązujący dostęp z sieci i jego źródło. */
+  function networkSummary(u: AdminUser): string {
+    const eff = u.network_access_effective
+    if (!eff) return '—'
+    const source = eff.source === 'user' ? 'ustawione na koncie' : eff.role ? `grupa ${roleLabel(eff.role)}` : 'bez grupy'
+    return `${NETWORK_LABELS[eff.mode]} (${source})`
   }
 
   async function onCreate(e: FormEvent) {
@@ -418,6 +445,8 @@ export function AdminUsers() {
       if (editPassword) body.password = editPassword
       // pracownik ERP XL tylko po zmianie — zapis innych pól nie rusza przypisania
       if (editEmployee !== (u.erp_employee_gid ?? null)) body.erp_employee_gid = editEmployee
+      // dostęp z sieci tylko po zmianie — jak pracownik ERP XL
+      if (editNetwork !== (u.network_access ?? '')) body.network_access = editNetwork === '' ? null : editNetwork
       await api(`/admin/users/${userId}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
@@ -546,6 +575,7 @@ export function AdminUsers() {
             <th className="p-2">Wygląd</th>
             <th className="p-2">Operator ERP XL</th>
             <th className="p-2">Pracownik ERP XL (opiekun klientów)</th>
+            <th className="p-2">Dostęp z sieci</th>
             <th className="p-2">Akcje</th>
           </tr>
         </thead>
@@ -687,6 +717,29 @@ export function AdminUsers() {
               </td>
               <td className="p-2">
                 {editId === u.id ? (
+                  <div className="max-w-[16rem]">
+                    <select
+                      aria-label="Dostęp z sieci"
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      value={editNetwork}
+                      onChange={(e) => setEditNetwork(e.target.value as NetworkChoice)}
+                    >
+                      <option value="">jak w grupie</option>
+                      <option value="any">{NETWORK_LABELS.any}</option>
+                      <option value="local">{NETWORK_LABELS.local}</option>
+                    </select>
+                    <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                      Ustawienie konta ma pierwszeństwo przed grupą. Adresy sieci lokalnej — pod listą.
+                    </p>
+                  </div>
+                ) : (
+                  <span className={u.network_access_effective?.mode === 'local' ? 'text-amber-800' : 'text-slate-600'}>
+                    {networkSummary(u)}
+                  </span>
+                )}
+              </td>
+              <td className="p-2">
+                {editId === u.id ? (
                   <div className="flex flex-wrap items-center gap-1">
                     <input
                       type="password"
@@ -739,6 +792,7 @@ export function AdminUsers() {
                         setEditOperator(u.erp_operator_ident ?? '')
                         setEditEmployee(u.erp_employee_gid ?? null)
                         setEditEmployeePending(false)
+                        setEditNetwork(u.network_access ?? '')
                       }}
                       className="rounded bg-slate-200 px-2 py-1 text-xs"
                     >
@@ -768,6 +822,8 @@ export function AdminUsers() {
           ))}
         </tbody>
       </table>
+
+      <AdminLocalNetworks />
     </div>
   )
 }

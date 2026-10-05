@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\Admin\EnrichmentDescriptionTemplateController as Ad
 use App\Http\Controllers\Api\Admin\ErpEmployeeController;
 use App\Http\Controllers\Api\Admin\ErpItemController;
 use App\Http\Controllers\Api\Admin\ErpOperatorController;
+use App\Http\Controllers\Api\Admin\LocalNetworkController as AdminLocalNetworkController;
 use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsController;
 use App\Http\Controllers\Api\Admin\PrestaCategoryController as AdminPrestaCategoryController;
 use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
@@ -600,11 +601,15 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::patch('/users/{user}', [AdminUserController::class, 'update'])->middleware('permission:admin.users.manage');
         Route::delete('/users/{user}', [AdminUserController::class, 'destroy'])->middleware('permission:admin.users.manage');
         Route::post('/users/{user}/send-credentials', [AdminUserController::class, 'sendCredentials'])->middleware('permission:admin.users.manage');
+        // adresy sieci lokalnej — dla kont i grup „tylko z sieci lokalnej”
+        Route::get('/local-networks', [AdminLocalNetworkController::class, 'index'])->middleware('permission:admin.users.manage');
+        Route::put('/local-networks', [AdminLocalNetworkController::class, 'update'])->middleware('permission:admin.users.manage');
 
         Route::get('/roles', [AdminRoleController::class, 'index'])->middleware('permission:admin.roles.manage');
         Route::post('/roles', [AdminRoleController::class, 'store'])->middleware('permission:admin.roles.manage');
         Route::put('/roles/{role}', [AdminRoleController::class, 'update'])->middleware('permission:admin.roles.manage');
         Route::patch('/roles/{role}', [AdminRoleController::class, 'rename'])->middleware('permission:admin.roles.manage');
+        Route::patch('/roles/{role}/network-access', [AdminRoleController::class, 'updateNetworkAccess'])->middleware('permission:admin.roles.manage');
         Route::delete('/roles/{role}', [AdminRoleController::class, 'destroy'])->middleware('permission:admin.roles.manage');
         // zespoły (kto komu podlega) — raport „Wynik kampanii”
         Route::get('/teams', [AdminTeamController::class, 'index'])->middleware('permission:admin.roles.manage');
