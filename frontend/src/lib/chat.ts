@@ -1,4 +1,4 @@
-import { api } from './api'
+import { api, apiBlob } from './api'
 import { callKindLabel, type ChatCallMeta } from './calls'
 
 /**
@@ -11,6 +11,10 @@ export const CHAT_PERMISSION = 'chat'
 export const CHAT_MAX_LENGTH = 4000
 /** Od tylu znaków pole wpisywania pokazuje licznik. */
 export const CHAT_COUNTER_FROM = 3500
+/** Największe zdjęcie przed wysłaniem (config chat.image_max_kb na serwerze). */
+export const CHAT_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+/** Rodzaje zdjęć, które przyjmuje serwer (przekodowuje je do JPEG albo PNG). */
+export const CHAT_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 
 export type ChatUser = {
   id: number
@@ -37,13 +41,25 @@ export type ChatMailMeta = {
   body: string | null
 }
 
+/** Zdjęcie po przekodowaniu na serwerze; plik: GET /chat/messages/{id}/image. */
+export type ChatImageMeta = {
+  key: string
+  mime: 'image/jpeg' | 'image/png'
+  width: number
+  height: number
+  size: number
+}
+
 export type ChatMessage = {
   id: number
   conversation_id: number
-  /** call = wpis o rozmowie głosowej/wideo (body null, stan w meta.call); takiego wpisu nie da się usunąć. */
-  kind: 'text' | 'link' | 'mail' | 'system' | 'call'
+  /**
+   * call = wpis o rozmowie głosowej/wideo (body null, stan w meta.call); takiego wpisu nie da się usunąć.
+   * image = zdjęcie (meta.image), body = opcjonalny podpis.
+   */
+  kind: 'text' | 'link' | 'mail' | 'system' | 'call' | 'image'
   body: string | null
-  meta: { link?: ChatLinkMeta; mail?: ChatMailMeta; call?: ChatCallMeta } | null
+  meta: { link?: ChatLinkMeta; mail?: ChatMailMeta; call?: ChatCallMeta; image?: ChatImageMeta } | null
   /** null przy kind ≠ system = konto usunięte. */
   user: ChatPerson | null
   deleted: boolean
@@ -125,12 +141,33 @@ export function sendDirectMessage(
   return api(`/chat/direct/${userId}/messages`, { method: 'POST', body: JSON.stringify(body) })
 }
 
+/** Zdjęcie z opcjonalnym podpisem; ten sam client_uuid przy ponowieniu nie zrobi drugiej wiadomości. */
+export function sendImage(id: number, data: { client_uuid: string; file: File; body: string | null }): Promise<{ data: ChatMessage }> {
+  const form = new FormData()
+  form.set('client_uuid', data.client_uuid)
+  form.set('image', data.file, data.file.name || 'zdjecie.png')
+  if (data.body) form.set('body', data.body)
+  return api(`/chat/conversations/${id}/images`, { method: 'POST', body: form })
+}
+
+/** Plik zdjęcia z wiadomości — z kluczem logowania, więc nie da się go wstawić wprost w <img src>. */
+export function fetchMessageImage(messageId: number, signal?: AbortSignal): Promise<Blob> {
+  return apiBlob(`/chat/messages/${messageId}/image`, signal)
+}
+
+/** Czy plik da się wysłać jako zdjęcie; null = tak, inaczej komunikat dla użytkownika. */
+export function chatImageProblem(file: File): string | null {
+  if (!CHAT_IMAGE_TYPES.includes(file.type)) return 'Można wysłać zdjęcie JPG, PNG, GIF albo WEBP.'
+  if (file.size > CHAT_IMAGE_MAX_BYTES) return 'Zdjęcie może mieć najwyżej 10 MB.'
+  return null
+}
+
 export function deleteMessage(id: number): Promise<{ data: ChatMessage }> {
   return api(`/chat/messages/${id}`, { method: 'DELETE' })
 }
 
-/** Filtr historii rozmowy: wszystko, linki (karty i adresy w treści), przekazane maile, połączenia. */
-export type ChatHistoryType = 'all' | 'links' | 'mails' | 'calls'
+/** Filtr historii rozmowy: wszystko, linki (karty i adresy w treści), przekazane maile, połączenia, zdjęcia. */
+export type ChatHistoryType = 'all' | 'links' | 'mails' | 'calls' | 'images'
 
 export type ChatSearchHit = {
   message: ChatMessage
@@ -229,6 +266,7 @@ export function messagePreview(m: ChatMessage | null): string {
   if (m.kind === 'mail') return `Mail: ${m.meta?.mail?.subject ?? ''}${body ? ` · ${body}` : ''}`
   if (m.kind === 'link') return body || (m.meta?.link?.title ?? 'Link')
   if (m.kind === 'call') return callKindLabel(m.meta?.call?.kind === 'video' ? 'video' : 'audio')
+  if (m.kind === 'image') return body ? `Zdjęcie: ${body}` : 'Zdjęcie'
   return body
 }
 

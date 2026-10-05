@@ -155,6 +155,11 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::delete('/messages/{message}', [ChatMessageController::class, 'destroy'])->whereNumber('message');
         // wyszukiwanie w treści i historia rozmowy (linki, maile, połączenia)
         Route::get('/search', [ChatMessageController::class, 'search']);
+        // zdjęcia (wklejone, przeciągnięte, z dysku) — wgranie i odczyt tylko dla uczestników rozmowy
+        Route::post('/conversations/{conversation}/images', [ChatMessageController::class, 'storeImage'])
+            ->whereNumber('conversation')
+            ->middleware('throttle:30,1,chat-images');
+        Route::get('/messages/{message}/image', [ChatMessageController::class, 'image'])->whereNumber('message');
 
         // rozmowy głosowe i wideo (LiveKit)
         Route::get('/calls/config', [ChatCallController::class, 'config']);

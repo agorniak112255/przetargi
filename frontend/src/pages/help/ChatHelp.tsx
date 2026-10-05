@@ -6,7 +6,7 @@ import { AppFrame, Mark, Slideshow } from './kit'
  * otwarta rozmowa oznacza wiadomości jako przeczytane). Układ jak w pages/Chat.tsx.
  */
 
-type Focus = 'list' | 'compose' | 'cards' | 'delete' | 'failed' | 'call' | 'callcard' | 'history' | 'search'
+type Focus = 'list' | 'compose' | 'cards' | 'delete' | 'failed' | 'call' | 'callcard' | 'history' | 'search' | 'image'
 
 function M({ on, children }: { on: boolean; children: ReactNode }) {
   return on ? <Mark>{children}</Mark> : <>{children}</>
@@ -91,6 +91,7 @@ function HistoryMock() {
           <span className="rounded-full bg-sky-600 px-1.5 text-white">Linki</span>
           <span className="rounded-full bg-slate-100 px-1.5 text-slate-700">Maile</span>
           <span className="rounded-full bg-slate-100 px-1.5 text-slate-700">Połączenia</span>
+          <span className="rounded-full bg-slate-100 px-1.5 text-slate-700">Zdjęcia</span>
         </div>
       </Mark>
       <span className="px-2 pt-1.5 text-[9.5px] font-semibold uppercase tracking-wide text-slate-500">Dzisiaj</span>
@@ -255,15 +256,33 @@ function ChatScreen({ focus }: { focus: Focus }) {
                 </div>
               </M>
             )}
+            {focus === 'image' && (
+              <M on>
+                <div className="grid max-w-[80%] justify-items-end gap-0.5 justify-self-end">
+                  <div className="grid h-16 w-28 content-start gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1.5">
+                    <span className="h-1.5 w-14 rounded bg-sky-600" />
+                    <span className="h-1 w-20 rounded bg-slate-300" />
+                    <span className="h-1 w-16 rounded bg-slate-300" />
+                    <span className="mt-1 h-4 w-10 rounded bg-red-200" />
+                  </div>
+                  <div className="rounded-lg border border-sky-100 bg-sky-50 px-2 py-1 text-[11.5px] text-slate-900">
+                    Taki błąd pokazuje cennik Ansella
+                  </div>
+                </div>
+              </M>
+            )}
           </div>
           {focus === 'history' && <HistoryMock />}
           </div>
-          <div className="grid grid-cols-[1fr_auto] items-end gap-2 border-t border-slate-200 px-2.5 py-1.5">
+          <div className="grid grid-cols-[1fr_auto_auto] items-end gap-2 border-t border-slate-200 px-2.5 py-1.5">
             <M on={focus === 'compose'}>
               <div className="w-full rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-400">Napisz wiadomość…</div>
             </M>
+            <M on={focus === 'image'}>
+              <span className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700">Zdjęcie</span>
+            </M>
             <span className="rounded bg-sky-600 px-2.5 py-1 text-[11px] font-medium text-white">Wyślij</span>
-            <span className="col-span-2 text-[10px] text-slate-500">Enter wysyła, Shift+Enter to nowa linia</span>
+            <span className="col-span-3 text-[10px] text-slate-500">Enter wysyła, Shift+Enter to nowa linia, Ctrl+V wkleja zdjęcie</span>
           </div>
         </div>
       </div>
@@ -460,6 +479,13 @@ export function ChatHelp() {
           screen: <ChatScreen focus="compose" />,
         },
         {
+          action: 'Zdjęcie albo zrzut ekranu',
+          does: 'Zrzut ekranu (Win+Shift+S albo klawisz Print Screen) wklejasz w pole wiadomości skrótem Ctrl+V. Zdjęcie z dysku przeciągnij do rozmowy albo wybierz przyciskiem z obrazkiem obok „Wyślij”. Nad polem pojawia się podgląd — możesz dopisać podpis albo wysłać samo zdjęcie; krzyżyk przy podglądzie je usuwa. W rozmowie zdjęcie widać jako miniaturę: kliknięcie powiększa je na cały ekran, a „Pobierz” zapisuje plik. Wysłać można JPG, PNG, GIF i WEBP do 10 MB; GIF zatrzymuje się na pierwszej klatce. Zdjęcie widzą tylko osoby z tej rozmowy, a usunięcie wiadomości usuwa też zdjęcie.',
+          click: 'Ctrl+V w polu „Napisz wiadomość…” albo przycisk z obrazkiem obok „Wyślij”, potem Enter.',
+          tone: 'blue',
+          screen: <ChatScreen focus="image" />,
+        },
+        {
           action: 'Gdy wiadomość nie doszła',
           does: 'Bez internetu albo przy chwilowym błędzie serwera wiadomość zostaje na czerwono z napisem „Nie wysłano”. Ponowna próba nie zrobi podwójnej wiadomości, nawet jeśli pierwsza jednak doszła.',
           click: '„Wyślij ponownie”. „Nie wysyłaj” usuwa ją z ekranu i wstawia tekst z powrotem do pola.',
@@ -489,8 +515,8 @@ export function ChatHelp() {
         },
         {
           action: 'Historia rozmowy',
-          does: 'Wszystko, co przewinęło się w rozmowie z osobą albo w kanale, od najnowszych: same linki (także adresy wpisane w tekst wiadomości), przekazane maile albo połączenia. Pole u góry szuka w tej jednej rozmowie — w treści, w nazwie zapytania lub przetargu i w temacie, nadawcy i treści maila. Adres strony z listy otwiera się od razu w nowej karcie.',
-          click: '„Historia” (ikona zegara) w górnym pasku rozmowy, potem „Linki”, „Maile” albo „Połączenia”. Kliknięcie wpisu przewija rozmowę do tej wiadomości i na chwilę ją obrysowuje. Zamknięcie — „×” albo Esc.',
+          does: 'Wszystko, co przewinęło się w rozmowie z osobą albo w kanale, od najnowszych: same linki (także adresy wpisane w tekst wiadomości), przekazane maile, połączenia albo zdjęcia. Pole u góry szuka w tej jednej rozmowie — w treści i podpisach zdjęć, w nazwie zapytania lub przetargu i w temacie, nadawcy i treści maila. Adres strony z listy otwiera się od razu w nowej karcie.',
+          click: '„Historia” (ikona zegara) w górnym pasku rozmowy, potem „Linki”, „Maile”, „Połączenia” albo „Zdjęcia”. Kliknięcie wpisu przewija rozmowę do tej wiadomości i na chwilę ją obrysowuje. Zamknięcie — „×” albo Esc.',
           tone: 'blue',
           screen: <ChatScreen focus="history" />,
         },

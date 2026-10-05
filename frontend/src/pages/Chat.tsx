@@ -8,6 +8,8 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ClipboardEvent as ReactClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -33,13 +35,16 @@ import {
   addParticipants,
   avatarColor,
   CHAT_COUNTER_FROM,
+  CHAT_IMAGE_TYPES,
   CHAT_MAX_LENGTH,
+  chatImageProblem,
   createChannel,
   dayLabel,
   deleteMessage,
   fetchChatUsers,
   fetchConversation,
   fetchConversations,
+  fetchMessageImage,
   fetchMessages,
   foldText,
   initials,
@@ -53,6 +58,7 @@ import {
   safeAppPath,
   sameDay,
   searchMessages,
+  sendImage,
   sendMessage,
   timeOf,
   unreadLabel,
@@ -110,9 +116,13 @@ function mergeMessages(prev: ChatMessage[], incoming: ChatMessage[]): ChatMessag
   return [...byId.values()].sort((a, b) => a.id - b.id)
 }
 
+/** Zdjęcie dołączone w polu pisania (wklejone, przeciągnięte albo wybrane) — `url` to podgląd z pamięci przeglądarki. */
+type Attachment = { file: File; url: string }
+
 type Pending = {
   client_uuid: string
   body: string
+  image?: Attachment
   status: 'sending' | 'failed'
   error?: string
 }
@@ -133,6 +143,7 @@ type IconName =
   | 'mail'
   | 'trash'
   | 'history'
+  | 'image'
   | 'close'
 
 const ICONS: Record<IconName, ReactNode> = {
@@ -184,6 +195,13 @@ const ICONS: Record<IconName, ReactNode> = {
     <>
       <path d="M3.5 12a8.5 8.5 0 1 0 2.5-6l-2.5 2.5" />
       <path d="M3.5 4v4.5H8M12 7.5V12l3 2" />
+    </>
+  ),
+  image: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <circle cx="9" cy="10" r="1.6" />
+      <path d="M20.5 15.5l-5-5L7 19" />
     </>
   ),
   close: <path d="M6 6l12 12M18 6L6 18" />,
@@ -523,6 +541,120 @@ function CallCard({
   )
 }
 
+/** Powiększone zdjęcie na całe okno; Esc albo kliknięcie obok zamyka. */
+function ImageViewer({ url, fileName, onClose }: { url: string; fileName: string; onClose: () => void }) {
+  useEffect(() => {
+    // faza przechwytywania + stopPropagation: Esc zamyka tylko zdjęcie, nie panel historii pod spodem
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      onClose()
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Zdjęcie"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex flex-col bg-black/85 p-3 sm:p-6"
+    >
+      <div className="flex shrink-0 justify-end gap-2">
+        <a
+          href={url}
+          download={fileName}
+          onClick={(e) => e.stopPropagation()}
+          className="rounded-full bg-black/50 px-3 py-1.5 text-xs font-medium text-white ring-1 ring-white/40 hover:bg-black/80"
+        >
+          Pobierz
+        </a>
+        <button
+          type="button"
+          onClick={onClose}
+          title="Zamknij (Esc)"
+          aria-label="Zamknij"
+          className="grid h-8 w-8 place-items-center rounded-full bg-black/50 text-white ring-1 ring-white/40 hover:bg-black/80"
+        >
+          <Icon name="close" />
+        </button>
+      </div>
+      <div className="flex min-h-0 flex-1 items-center justify-center pt-3">
+        <img src={url} alt="" onClick={(e) => e.stopPropagation()} className="max-h-full max-w-full rounded-lg object-contain" />
+      </div>
+    </div>
+  )
+}
+
+const THUMB_MAX_W = 240
+const THUMB_MAX_H = 280
+
+/**
+ * Zdjęcie z wiadomości. Plik idzie z kluczem logowania (zwykłe <img src> go nie wyśle), więc pobieramy go do pamięci;
+ * miejsce ma od razu wymiary z meta.image — rozmowa nie skacze, gdy obrazek dojdzie.
+ */
+function ImageTile({ m }: { m: ChatMessage }) {
+  const image = m.meta?.image
+  const [url, setUrl] = useState('')
+  const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(false)
+  const key = image?.key
+
+  useEffect(() => {
+    if (!key) return
+    const ctrl = new AbortController()
+    let objectUrl = ''
+    setFailed(false)
+    fetchMessageImage(m.id, ctrl.signal).then(
+      (blob) => {
+        if (ctrl.signal.aborted) return
+        objectUrl = URL.createObjectURL(blob)
+        setUrl(objectUrl)
+      },
+      () => {
+        if (!ctrl.signal.aborted) setFailed(true)
+      },
+    )
+    return () => {
+      ctrl.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      setUrl('')
+    }
+  }, [m.id, key])
+
+  if (!image) return null
+  const scale = Math.min(1, THUMB_MAX_W / image.width, THUMB_MAX_H / image.height)
+  const frame = {
+    width: Math.max(48, Math.round(image.width * scale)),
+    aspectRatio: `${image.width} / ${image.height}`,
+  }
+  const fileName = `zdjecie-${m.id}.${image.mime === 'image/png' ? 'png' : 'jpg'}`
+  return (
+    <>
+      {url ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          title="Powiększ zdjęcie"
+          style={frame}
+          className="block max-w-full overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200/70 hover:opacity-90"
+        >
+          <img src={url} alt={m.body ? `Zdjęcie: ${m.body}` : 'Zdjęcie'} className="h-full w-full object-cover" />
+        </button>
+      ) : (
+        <span
+          style={frame}
+          className="grid max-w-full place-items-center rounded-xl bg-slate-100 px-2 text-center text-[11px] text-slate-500 ring-1 ring-slate-200/70"
+        >
+          {failed ? 'Nie udało się wczytać zdjęcia' : 'Wczytuję zdjęcie…'}
+        </span>
+      )}
+      {open && url && <ImageViewer url={url} fileName={fileName} onClose={() => setOpen(false)} />}
+    </>
+  )
+}
+
 function MessageItem({
   m,
   own,
@@ -594,6 +726,7 @@ function MessageItem({
       onDecline={onDeclineCall}
     />
   ) : null
+  const photo = !m.deleted && m.kind === 'image' ? <ImageTile m={m} /> : null
   const bubble = m.deleted
     ? `rounded-2xl px-3 py-1.5 text-slate-500 ring-1 ring-slate-200 ${own ? 'rounded-tr-md' : 'rounded-tl-md'}`
     : own
@@ -605,6 +738,7 @@ function MessageItem({
         highlighted ? 'outline-2 outline-offset-4 outline-amber-400' : ''
       }`}
     >
+      {photo}
       {text && <div className={bubble}>{text}</div>}
       {card}
     </div>
@@ -854,6 +988,7 @@ function hitText(m: ChatMessage, q: string): string {
   const needle = foldText(q.trim())
   const found = needle ? fields.find((f) => foldText(f).includes(needle)) : undefined
   if (found) return found
+  if (m.kind === 'image') return clean(m.body) || 'Zdjęcie'
   if (mail) return `${clean(mail.subject) || '(bez tematu)'} · od ${clean(mail.from)}`
   if (m.kind === 'link') return clean(m.meta?.link?.title) || clean(m.body)
   return fields[0] ?? ''
@@ -868,6 +1003,9 @@ function HitKind({ m }: { m: ChatMessage }) {
   } else if (m.kind === 'call') {
     label = 'Połączenie'
     cls = m.meta?.call?.status === 'missed' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'
+  } else if (m.kind === 'image') {
+    label = 'Zdjęcie'
+    cls = 'bg-amber-50 text-amber-700'
   } else if (m.kind === 'link' || urlsIn(m.body ?? '').next().done === false) {
     label = 'Link'
     cls = 'bg-sky-50 text-sky-700'
@@ -886,6 +1024,7 @@ const HISTORY_FILTERS: { key: ChatHistoryType; label: string }[] = [
   { key: 'links', label: 'Linki' },
   { key: 'mails', label: 'Maile' },
   { key: 'calls', label: 'Połączenia' },
+  { key: 'images', label: 'Zdjęcia' },
 ]
 
 /**
@@ -979,7 +1118,9 @@ function HistoryPanel({
         ? 'W tej rozmowie nie ma przekazanych maili.'
         : type === 'calls'
           ? 'W tej rozmowie nie było połączeń.'
-          : 'Nie ma jeszcze wiadomości.'
+          : type === 'images'
+            ? 'W tej rozmowie nie ma jeszcze zdjęć.'
+            : 'Nie ma jeszcze wiadomości.'
 
   return (
     <aside
@@ -1143,6 +1284,11 @@ function Thread({
   const newerBusy = useRef(false)
   const newerAgain = useRef(false)
   const [text, setText] = useState('')
+  const [attachment, setAttachment] = useState<Attachment | null>(null)
+  const attachmentRef = useRef<Attachment | null>(null)
+  attachmentRef.current = attachment
+  const [dragOver, setDragOver] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [actionErr, setActionErr] = useState('')
@@ -1452,9 +1598,12 @@ function Thread({
 
   async function deliver(p: Pending) {
     try {
-      const r = await sendMessage(id, { client_uuid: p.client_uuid, body: p.body })
+      const r = p.image
+        ? await sendImage(id, { client_uuid: p.client_uuid, file: p.image.file, body: p.body || null })
+        : await sendMessage(id, { client_uuid: p.client_uuid, body: p.body })
       applyIncoming([r.data])
       setPending((prev) => prev.filter((x) => x.client_uuid !== p.client_uuid))
+      if (p.image) URL.revokeObjectURL(p.image.url)
       onListChanged()
     } catch (ex) {
       setPending((prev) =>
@@ -1467,12 +1616,73 @@ function Thread({
 
   function send() {
     const body = text.trim()
-    if (!body || body.length > CHAT_MAX_LENGTH) return
-    const p: Pending = { client_uuid: newClientUuid(), body, status: 'sending' }
+    if ((!body && !attachment) || body.length > CHAT_MAX_LENGTH) return
+    const p: Pending = { client_uuid: newClientUuid(), body, status: 'sending', image: attachment ?? undefined }
     stick.current = true
     setPending((prev) => [...prev, p])
     setText('')
+    setAttachment(null)
     void deliver(p)
+  }
+
+  /** Dołączenie zdjęcia do pola pisania — zastępuje poprzednie; podpis to tekst z pola. */
+  function attach(file: File) {
+    const problem = chatImageProblem(file)
+    if (problem) {
+      setActionErr(problem)
+      return
+    }
+    setActionErr('')
+    if (attachment) URL.revokeObjectURL(attachment.url)
+    setAttachment({ file, url: URL.createObjectURL(file) })
+    composer.current?.focus()
+  }
+
+  function removeAttachment() {
+    if (attachment) URL.revokeObjectURL(attachment.url)
+    setAttachment(null)
+    composer.current?.focus()
+  }
+
+  // Zamknięcie rozmowy z dołączonym, niewysłanym zdjęciem — zwalniamy podgląd z pamięci.
+  useEffect(
+    () => () => {
+      if (attachmentRef.current) URL.revokeObjectURL(attachmentRef.current.url)
+    },
+    [],
+  )
+
+  /**
+   * Wklejenie: zrzut ekranu albo skopiowany obrazek trafia do pola jako zdjęcie. Komórki z Excela i tekst z Worda
+   * niosą w schowku także obrazek — gdy jest zwykły tekst, wklejamy tekst.
+   */
+  function onPaste(e: ReactClipboardEvent<HTMLElement>) {
+    const data = e.clipboardData
+    const file = Array.from(data.files).find((f) => f.type.startsWith('image/'))
+    if (!file || data.getData('text/plain').trim() !== '') return
+    e.preventDefault()
+    attach(file)
+  }
+
+  function onDragOver(e: ReactDragEvent<HTMLElement>) {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setDragOver(true)
+  }
+
+  function onDragLeave(e: ReactDragEvent<HTMLElement>) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false)
+  }
+
+  function onDrop(e: ReactDragEvent<HTMLElement>) {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    setDragOver(false)
+    const files = Array.from(e.dataTransfer.files)
+    const file = files.find((f) => f.type.startsWith('image/'))
+    if (file) attach(file)
+    else if (files.length > 0) setActionErr('Można wysłać zdjęcie JPG, PNG, GIF albo WEBP.')
   }
 
   function retry(p: Pending) {
@@ -1485,6 +1695,10 @@ function Thread({
   function discard(p: Pending) {
     setPending((prev) => prev.filter((x) => x.client_uuid !== p.client_uuid))
     setText((t) => (t ? t : p.body))
+    if (p.image) {
+      if (attachment) URL.revokeObjectURL(p.image.url)
+      else setAttachment(p.image)
+    }
   }
 
   async function removeMessage(messageId: number) {
@@ -1620,7 +1834,16 @@ function Thread({
         historyOpen ? 'xl:grid-cols-[minmax(0,1fr)_340px]' : ''
       }`}
       aria-label={`Rozmowa: ${other || isChannel ? conversation.name : 'Konto usunięte'}`}
+      onPaste={onPaste}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-2 z-10 grid place-items-center rounded-2xl border-2 border-dashed border-sky-400 bg-sky-50/90 px-4 text-center text-sm font-medium text-sky-800">
+          Upuść zdjęcie, aby dołączyć je do wiadomości
+        </div>
+      )}
       <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4 xl:col-start-1">
         <div className="flex items-center gap-2 sm:gap-3">
           <button
@@ -1838,12 +2061,25 @@ function Thread({
               <span className="shrink-0 pb-1 text-[10.5px] text-slate-400">
                 {p.status === 'sending' ? 'Wysyłam…' : <span className="text-red-700">Nie wysłano</span>}
               </span>
-              <div
-                className={`min-w-0 rounded-2xl rounded-tr-md px-3 py-2 ${
-                  p.status === 'failed' ? 'bg-red-50 text-slate-900 ring-1 ring-red-200' : 'bg-sky-600 text-white opacity-70'
-                }`}
-              >
-                <MessageText text={p.body} own={p.status !== 'failed'} />
+              <div className="flex min-w-0 flex-col items-end gap-1">
+                {p.image && (
+                  <img
+                    src={p.image.url}
+                    alt="Zdjęcie"
+                    className={`max-h-[280px] max-w-[min(240px,100%)] rounded-xl ring-1 ${
+                      p.status === 'failed' ? 'ring-red-200' : 'opacity-70 ring-slate-200/70'
+                    }`}
+                  />
+                )}
+                {p.body && (
+                  <div
+                    className={`min-w-0 rounded-2xl rounded-tr-md px-3 py-2 ${
+                      p.status === 'failed' ? 'bg-red-50 text-slate-900 ring-1 ring-red-200' : 'bg-sky-600 text-white opacity-70'
+                    }`}
+                  >
+                    <MessageText text={p.body} own={p.status !== 'failed'} />
+                  </div>
+                )}
               </div>
             </div>
             {p.status === 'failed' && (
@@ -1868,7 +2104,39 @@ function Thread({
         }}
         className="px-3 pb-3 pt-1 sm:px-4 xl:col-start-1"
       >
-        <div className="flex items-end gap-2 rounded-2xl bg-slate-100 py-1.5 pl-3.5 pr-1.5 focus-within:ring-2 focus-within:ring-sky-300">
+        {attachment && (
+          <div className="mb-2 flex items-center gap-3 px-1">
+            <span className="relative shrink-0">
+              <img
+                src={attachment.url}
+                alt="Zdjęcie do wysłania"
+                className="h-16 max-w-[140px] rounded-lg object-cover ring-1 ring-slate-200"
+              />
+              <button
+                type="button"
+                onClick={removeAttachment}
+                title="Usuń zdjęcie z wiadomości"
+                aria-label="Usuń zdjęcie z wiadomości"
+                className="absolute -right-2 -top-2 grid h-5 w-5 place-items-center rounded-full bg-black/70 text-white hover:bg-black"
+              >
+                <Icon name="close" className="h-3 w-3" />
+              </button>
+            </span>
+            <span className="text-[11.5px] text-slate-500">Dopisz podpis albo wyślij samo zdjęcie.</span>
+          </div>
+        )}
+        <input
+          ref={fileInput}
+          type="file"
+          accept={CHAT_IMAGE_TYPES.join(',')}
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            if (file) attach(file)
+          }}
+        />
+        <div className="flex items-end gap-1 rounded-2xl bg-slate-100 py-1.5 pl-3.5 pr-1.5 focus-within:ring-2 focus-within:ring-sky-300">
           <textarea
             ref={composer}
             value={text}
@@ -1876,14 +2144,23 @@ function Thread({
             onKeyDown={onKeyDown}
             maxLength={CHAT_MAX_LENGTH}
             rows={1}
-            placeholder="Napisz wiadomość…"
+            placeholder={attachment ? 'Dodaj podpis…' : 'Napisz wiadomość…'}
             aria-label="Treść wiadomości"
             title="Enter wysyła, Shift+Enter to nowa linia"
             className="max-h-[124px] min-h-9 w-full flex-1 resize-none overflow-y-auto border-0 bg-transparent py-2 text-[13px] leading-5 text-slate-900 placeholder:text-slate-400 focus:outline-none"
           />
           <button
+            type="button"
+            onClick={() => fileInput.current?.click()}
+            title="Dodaj zdjęcie (zrzut ekranu wkleisz też Ctrl+V)"
+            aria-label="Dodaj zdjęcie"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+          >
+            <Icon name="image" className="h-[18px] w-[18px]" />
+          </button>
+          <button
             type="submit"
-            disabled={!text.trim()}
+            disabled={!text.trim() && !attachment}
             title="Wyślij (Enter)"
             aria-label="Wyślij"
             className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-40"
@@ -1892,7 +2169,7 @@ function Thread({
           </button>
         </div>
         <small className="mt-1 flex justify-between gap-2 px-2 text-[10.5px] text-slate-400">
-          <span>Enter wysyła, Shift+Enter to nowa linia</span>
+          <span>Enter wysyła, Shift+Enter to nowa linia, Ctrl+V wkleja zdjęcie</span>
           {length > CHAT_COUNTER_FROM && (
             <span className={length >= CHAT_MAX_LENGTH ? 'font-semibold text-red-700' : 'text-amber-700'}>
               {length} / {CHAT_MAX_LENGTH} znaków

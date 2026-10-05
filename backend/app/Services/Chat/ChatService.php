@@ -16,16 +16,20 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\TenderAccessService;
+use App\Support\ImageReencoder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\PersonalAccessToken;
 use Spatie\Permission\Exceptions\PermissionDoesNotExist;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Throwable;
 
 /**
  * Czat firmowy: dostęp do rozmów, nieprzeczytane, wysyłka z idempotencją client_uuid, linki do zapytań i przetargów
@@ -44,7 +48,15 @@ final class ChatService
     private const MAX_SEARCH_LIMIT = 50;
 
     /** Rodzaje wpisów w historii rozmowy (GET /chat/search?type=). */
-    public const SEARCH_TYPES = ['all', 'links', 'mails', 'calls'];
+    public const SEARCH_TYPES = ['all', 'links', 'mails', 'calls', 'images'];
+
+    /** Zdjęcie w czacie: szerokość po przekodowaniu — zrzut ekranu Full HD zostaje czytelny 1:1. */
+    public const IMAGE_MAX_WIDTH = 1920;
+
+    /** Dłuższy bok wgrywanego zdjęcia (długi zrzut strony jeszcze wejdzie). */
+    public const IMAGE_MAX_SOURCE_SIDE = 8000;
+
+    private const IMAGE_DIR = 'chat-images';
 
     public function __construct(
         private readonly TenderAccessService $tenderAccess,
@@ -363,6 +375,108 @@ final class ChatService
 
         [$kind, $body, $meta] = $this->buildContent($me, $data);
 
+        return $this->persist($me, $conversation, $uuid, $kind, $body, $meta);
+    }
+
+    /**
+     * Zdjęcie (wklejone, przeciągnięte albo wybrane z dysku) z opcjonalnym podpisem. Plik przekodowany przez GD
+     * (bez metadanych, np. położenia GPS) trafia na dysk `local` przed zapisem wiersza; gdy wiersz nie powstanie
+     * (błąd albo równoległa powtórka tego samego client_uuid), plik jest kasowany.
+     *
+     * @return array{0: ChatMessage, 1: bool} wiadomość i czy powstała teraz
+     */
+    public function sendImage(User $me, ChatConversation $conversation, string $clientUuid, UploadedFile $file, ?string $caption): array
+    {
+        $uuid = trim($clientUuid);
+        $existing = $this->messageByUuid($me, $uuid);
+        if ($existing !== null) {
+            return [$this->replay($existing, $conversation), false];
+        }
+
+        $caption = $caption === null ? null : trim($caption);
+        $encoded = ImageReencoder::reencode($file, self::IMAGE_MAX_WIDTH, self::IMAGE_MAX_SOURCE_SIDE, 'image');
+        $image = [
+            'key' => (string) Str::uuid(),
+            'mime' => $encoded['mime'],
+            'width' => $encoded['width'],
+            'height' => $encoded['height'],
+            'size' => strlen($encoded['bytes']),
+        ];
+        $path = self::imagePath($image);
+        $disk = Storage::disk('local');
+        $disk->put($path, $encoded['bytes']);
+
+        try {
+            $result = $this->persist($me, $conversation, $uuid, ChatMessage::KIND_IMAGE, $caption === '' ? null : $caption, ['image' => $image]);
+        } catch (Throwable $e) {
+            // błąd mógł przyjść już po zapisie wiersza (np. przy zdarzeniu) — wtedy plik zostaje
+            $this->deleteImageUnlessSaved($me, $uuid, $image['key'], $path);
+            throw $e;
+        }
+        if (! $result[1]) {
+            $this->deleteImageUnlessSaved($me, $uuid, $image['key'], $path);
+        }
+
+        return $result;
+    }
+
+    private function deleteImageUnlessSaved(User $me, string $uuid, string $key, string $path): void
+    {
+        $saved = $this->messageByUuid($me, $uuid);
+        $savedKey = is_array($saved?->meta) ? ($saved->meta['image']['key'] ?? null) : null;
+        if ($savedKey !== $key) {
+            Storage::disk('local')->delete($path);
+        }
+    }
+
+    /**
+     * Plik zdjęcia z wiadomości — tylko dla uczestnika rozmowy; usunięta wiadomość albo brak pliku = 404.
+     *
+     * @return array{path: string, mime: string}
+     */
+    public function imageFile(User $me, int $messageId): array
+    {
+        $message = ChatMessage::query()->find($messageId);
+        if ($message === null) {
+            throw new NotFoundHttpException('Nie ma takiego zdjęcia.');
+        }
+        $this->findForUser($me, (int) $message->conversation_id);
+        $image = is_array($message->meta) ? ($message->meta['image'] ?? null) : null;
+        if ($message->kind !== ChatMessage::KIND_IMAGE || $message->deleted_at !== null || ! is_array($image)) {
+            throw new NotFoundHttpException('Nie ma takiego zdjęcia.');
+        }
+        $path = self::imagePath($image);
+        if (! Storage::disk('local')->exists($path)) {
+            throw new NotFoundHttpException('Nie ma takiego zdjęcia.');
+        }
+
+        return ['path' => $path, 'mime' => $image['mime'] === 'image/png' ? 'image/png' : 'image/jpeg'];
+    }
+
+    /**
+     * Ścieżka pliku na dysku `local` — z klucza nadanego przez serwer (UUID), nigdy z żądania.
+     *
+     * @param  array<string, mixed>  $image  meta.image
+     */
+    private static function imagePath(array $image): string
+    {
+        $key = (string) ($image['key'] ?? '');
+        if (! Str::isUuid($key)) {
+            throw new NotFoundHttpException('Nie ma takiego zdjęcia.');
+        }
+
+        return self::IMAGE_DIR.'/'.$key.(($image['mime'] ?? '') === 'image/png' ? '.png' : '.jpg');
+    }
+
+    /**
+     * Zapis wiadomości i przesunięcie last_message_id rozmowy, potem zdarzenie. Wyścig o ten sam client_uuid
+     * (unikalny klucz) kończy się zwrotem zapisanego wiersza (created = false).
+     *
+     * @param  array<string, mixed>|null  $meta
+     * @return array{0: ChatMessage, 1: bool}
+     */
+    private function persist(User $me, ChatConversation $conversation, string $uuid, string $kind, ?string $body, ?array $meta): array
+    {
         try {
             $message = DB::transaction(function () use ($me, $conversation, $uuid, $kind, $body, $meta): ChatMessage {
                 $message = ChatMessage::query()->create([
@@ -440,7 +554,12 @@ final class ChatService
             throw ValidationException::withMessages(['message' => 'Wpisu o rozmowie nie można usunąć.']);
         }
         if ($message->deleted_at === null) {
+            $image = $message->kind === ChatMessage::KIND_IMAGE && is_array($message->meta) ? ($message->meta['image'] ?? null) : null;
             $message->forceFill(['body' => null, 'meta' => null, 'deleted_at' => now()])->save();
+            // usunięte zdjęcie znika też z dysku — wiersz bez meta i tak już go nie wskazuje
+            if (is_array($image) && Str::isUuid((string) ($image['key'] ?? ''))) {
+                Storage::disk('local')->delete(self::imagePath($image));
+            }
             $conversation = ChatConversation::query()->find($message->conversation_id);
             if ($conversation !== null) {
                 event(new ChatMessageDeleted($this->recipientIds($conversation), (int) $conversation->id, (int) $message->id));
@@ -485,8 +604,9 @@ final class ChatService
 
     /**
      * Wiadomości od najnowszych: w jednej rozmowie albo we wszystkich moich (`$conversation` = null), bez usuniętych
-     * i systemowych. `$q` (bez wielkości liter) szuka w treści, tytule linku i w temacie, nadawcy i treści maila.
-     * `$type`: links — karty linków i wiadomości z adresem http/https, mails — przekazane maile, calls — połączenia.
+     * i systemowych. `$q` (bez wielkości liter) szuka w treści (także podpisie zdjęcia), tytule linku i w temacie,
+     * nadawcy i treści maila. `$type`: links — karty linków i wiadomości z adresem http/https, mails — przekazane
+     * maile, calls — połączenia, images — zdjęcia.
      *
      * @return array{data: list<array{message: array<string, mixed>, conversation: array{id: int, type: string, name: string, everyone: bool, other_user_id: int|null}}>, has_more: bool}
      */
@@ -498,7 +618,7 @@ final class ChatService
         $query = ChatMessage::query()
             ->with('user:id,name')
             ->whereNull('deleted_at')
-            ->whereIn('kind', [ChatMessage::KIND_TEXT, ChatMessage::KIND_LINK, ChatMessage::KIND_MAIL, ChatMessage::KIND_CALL]);
+            ->whereIn('kind', [ChatMessage::KIND_TEXT, ChatMessage::KIND_LINK, ChatMessage::KIND_MAIL, ChatMessage::KIND_CALL, ChatMessage::KIND_IMAGE]);
         if ($conversation !== null) {
             $query->where('conversation_id', $conversation->id);
         } else {
@@ -514,6 +634,7 @@ final class ChatService
                 ->orWhere('body', 'like', '%https://%')),
             'mails' => $query->where('kind', ChatMessage::KIND_MAIL),
             'calls' => $query->where('kind', ChatMessage::KIND_CALL),
+            'images' => $query->where('kind', ChatMessage::KIND_IMAGE),
             default => null,
         };
 
@@ -856,6 +977,7 @@ final class ChatService
             ChatMessage::KIND_MAIL => (string) ($meta['mail']['subject'] ?? ''),
             ChatMessage::KIND_LINK => (string) ($message->body ?? $meta['link']['title'] ?? ''),
             ChatMessage::KIND_CALL => ($meta['call']['kind'] ?? null) === 'video' ? 'Rozmowa wideo' : 'Rozmowa głosowa',
+            ChatMessage::KIND_IMAGE => $message->body === null ? 'Zdjęcie' : 'Zdjęcie: '.$message->body,
             default => (string) $message->body,
         };
 

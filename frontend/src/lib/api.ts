@@ -2133,6 +2133,19 @@ export function manualMergeConflictPreview(ex: unknown): ManualMergePreview | nu
   return null
 }
 
+/** Plik z API jako Blob (z kluczem logowania) — np. obrazek do pokazania przez URL.createObjectURL. */
+export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const headers = new Headers({ Accept: 'application/json, */*' })
+  const t = token()
+  if (t) headers.set('Authorization', `Bearer ${t}`)
+  const res = await fetch(`${API_URL}${path}`, { headers, signal })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(typeof body.message === 'string' ? body.message : `Błąd API ${res.status}`, res.status, body)
+  }
+  return res.blob()
+}
+
 /**
  * `accept` — nagłówek Accept. Laravel oddaje błędy (422, 404, 429) jako JSON z komunikatem tylko wtedy, gdy JSON jest
  * pierwszy na liście — przy samym * / * walidacja kończy się przekierowaniem, a pobrany plik byłby stroną HTML.

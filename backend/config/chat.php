@@ -22,6 +22,9 @@ return [
     /** Najdłuższa treść wiadomości (znaki). */
     'max_body' => 4000,
 
+    /** Największe zdjęcie przed przekodowaniem (KB) — zrzut ekranu 4K w PNG to zwykle 3–8 MB. */
+    'image_max_kb' => 10240,
+
     /** Najdłuższy skrót wiadomości w zdarzeniu chat.message — zdarzenie Reverb ma limit 10 000 bajtów. */
     'preview_length' => 300,
 

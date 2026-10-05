@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * Wiadomość czatu. `kind`: text, link (meta.link — zapytanie albo przetarg), mail (meta.mail — przekazany mail),
  * call (meta.call — rozmowa głosowa/wideo: id, kind, status, duration_seconds; aktualizowana w miejscu, nie do usunięcia),
- * system. `user_id` NULL przy kind ≠ system znaczy „konto usunięte”. Usunięcie wiadomości czyści body i meta
+ * image (meta.image — zdjęcie: key, mime, width, height, size; plik na dysku `local`, body = opcjonalny podpis), system. `user_id` NULL przy kind ≠ system znaczy „konto usunięte”. Usunięcie wiadomości czyści body i meta
  * i ustawia `deleted_at` — wiersz zostaje, żeby rozmowa nie traciła ciągłości.
  */
 class ChatMessage extends Model
@@ -24,6 +24,8 @@ class ChatMessage extends Model
     public const KIND_SYSTEM = 'system';
 
     public const KIND_CALL = 'call';
+
+    public const KIND_IMAGE = 'image';
 
     protected $fillable = [
         'conversation_id',

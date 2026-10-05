@@ -9,8 +9,10 @@ use App\Models\User;
 use App\Services\Chat\ChatService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Wiadomości czatu. Trasy są poza grupą `log.activity` — treść wiadomości nie może trafić do dziennika aktywności.
@@ -68,8 +70,8 @@ class ChatMessageController extends Controller
 
     /**
      * Wyszukiwanie wiadomości (od najnowszych) we wszystkich moich rozmowach albo w jednej (`conversation_id`).
-     * `type`: all, links (karty linków i wiadomości z adresem http/https), mails, calls. Bez `q` tylko w jednej
-     * rozmowie — to jej historia.
+     * `type`: all, links (karty linków i wiadomości z adresem http/https), mails, calls, images. Bez `q` tylko
+     * w jednej rozmowie — to jej historia.
      */
     public function search(Request $request): JsonResponse
     {
@@ -100,6 +102,54 @@ class ChatMessageController extends Controller
             isset($data['before_id']) ? (int) $data['before_id'] : null,
             isset($data['limit']) ? (int) $data['limit'] : 30,
         ));
+    }
+
+    /**
+     * Zdjęcie z opcjonalnym podpisem (multipart: client_uuid, image, body). 201 — nowa wiadomość; 200 — powtórka
+     * tego samego client_uuid w tej rozmowie.
+     */
+    public function storeImage(Request $request, int $conversation): JsonResponse
+    {
+        $me = $this->me($request);
+        $row = $this->chat->findForUser($me, $conversation);
+        $maxBody = (int) config('chat.max_body', 4000);
+        $maxKb = (int) config('chat.image_max_kb', 10240);
+        $data = $request->validate([
+            'client_uuid' => ['required', 'string', 'uuid'],
+            'image' => ['required', 'file', 'max:'.$maxKb, 'mimes:jpg,jpeg,png,gif,webp'],
+            'body' => ['nullable', 'string', 'max:'.$maxBody],
+        ], [
+            'client_uuid.required' => 'Brak identyfikatora wiadomości (client_uuid).',
+            'client_uuid.uuid' => 'Identyfikator wiadomości (client_uuid) musi być w formacie UUID.',
+            'image.required' => 'Wybierz zdjęcie.',
+            'image.file' => 'Zdjęcie nie doszło na serwer — spróbuj jeszcze raz.',
+            'image.uploaded' => 'Zdjęcie nie doszło na serwer — może jest za duże (najwyżej '.intdiv($maxKb, 1024).' MB).',
+            'image.mimes' => 'Można wysłać zdjęcie JPG, PNG, GIF albo WEBP.',
+            'image.max' => 'Zdjęcie może mieć najwyżej '.intdiv($maxKb, 1024).' MB.',
+            'body.max' => 'Podpis może mieć najwyżej '.$maxBody.' znaków.',
+        ]);
+        [$message, $created] = $this->chat->sendImage(
+            $me,
+            $row,
+            (string) $data['client_uuid'],
+            $request->file('image'),
+            isset($data['body']) ? (string) $data['body'] : null,
+        );
+
+        return response()->json(['data' => $this->chat->presentMessage($message)], $created ? 201 : 200);
+    }
+
+    /** Plik zdjęcia — tylko dla uczestnika rozmowy. Adres stały dla wiadomości, więc przeglądarka może go trzymać. */
+    public function image(Request $request, int $message): StreamedResponse
+    {
+        $file = $this->chat->imageFile($this->me($request), $message);
+
+        return Storage::disk('local')->response($file['path'], null, [
+            'Content-Type' => $file['mime'],
+            'Cache-Control' => 'private, max-age=31536000, immutable',
+            'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => "default-src 'none'",
+        ]);
     }
 
     public function destroy(Request $request, int $message): JsonResponse
