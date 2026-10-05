@@ -1051,10 +1051,10 @@ final class CanisB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
     }
 
     /**
-     * Zdjęcia. Galeria strony należy do karty tylko wtedy, gdy wszystkie pozycje strony są na tej karcie — strona modelu
-     * SIRIUS ma zdjęcie całego modelu, które może pokazywać inną linię (BRIGHTON) niż karta (LUCIUS). Jeden kolor: galeria
-     * takiej strony, inaczej zdjęcie koloru. Kilka kolorów: po jednym zdjęciu koloru — galeria strony koloru, miniatura
-     * jego kafla „Wybierz wariant” albo pierwsza z galerii strony karty z tym kolorem; kolor bez zdjęcia — bez zdjęcia.
+     * Zdjęcia z portalu producenta. Najpierw zdjęcie koloru (galeria strony koloru albo miniatura jego kafla „Wybierz
+     * wariant”), a gdy portal go nie pokazał — galeria strony, na której jest ten wyrób (strona modelu SIRIUS ma zdjęcie
+     * całego modelu; decyzja użytkownika 05.10.2026: zdjęcie modelu od producenta jest lepsze niż żadne). Jeden kolor:
+     * cała galeria strony koloru albo strony wiodącej; kilka kolorów: po jednym zdjęciu koloru, kolor wiodący pierwszy.
      *
      * @param  array<string, mixed>  $lead
      * @param  list<int>  $pageIds
@@ -1064,26 +1064,42 @@ final class CanisB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
      */
     private function imagesOf(array $lead, array $pageIds, array $codes, array $colours, bool $manyColours): array
     {
-        if (! $manyColours && array_diff($lead['codes'], $codes) === []) {
+        if (! $manyColours) {
+            if (array_diff($lead['codes'], $codes) === [] && $lead['gallery'] !== []) {
+                return $lead['gallery'];
+            }
+            $colour = reset($colours);
+            $master = $colour['master'];
+            if ($master > 0 && ($this->pages[$master]['gallery'] ?? []) !== []) {
+                return $this->pages[$master]['gallery'];
+            }
+            foreach ($pageIds as $pageId) {
+                if ($master > 0 && isset($this->pages[$pageId]['colour_images'][$master])) {
+                    return [$this->pages[$pageId]['colour_images'][$master]];
+                }
+            }
+
             return $lead['gallery'];
         }
         $out = [];
         foreach ($colours as $colour) {
-            $url = $this->colourImage($colour, $pageIds, $codes);
+            $url = $this->colourImage($colour, $pageIds);
             if ($url !== null && ! in_array($url, $out, true)) {
                 $out[] = $url;
             }
         }
 
-        return $out;
+        return $out !== [] ? $out : array_slice($lead['gallery'], 0, 1);
     }
 
     /**
+     * Zdjęcie koloru: galeria strony koloru, miniatura jego kafla na stronie karty, pierwsza z galerii strony karty
+     * z tym kolorem; null = portal nie pokazał żadnego.
+     *
      * @param  array{label: string, first: string, master: int}  $colour
      * @param  list<int>  $pageIds
-     * @param  list<string>  $codes
      */
-    private function colourImage(array $colour, array $pageIds, array $codes): ?string
+    private function colourImage(array $colour, array $pageIds): ?string
     {
         $master = $colour['master'];
         if ($master > 0 && isset($this->pages[$master]['gallery'][0])) {
@@ -1096,8 +1112,8 @@ final class CanisB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
         }
         foreach ($pageIds as $pageId) {
             $page = $this->pages[$pageId] ?? null;
-            if ($page !== null && in_array($colour['first'], $page['codes'], true) && array_diff($page['codes'], $codes) === []) {
-                return $page['gallery'][0] ?? null;
+            if ($page !== null && in_array($colour['first'], $page['codes'], true) && isset($page['gallery'][0])) {
+                return $page['gallery'][0];
             }
         }
 

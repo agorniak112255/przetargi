@@ -247,10 +247,18 @@ final class CanisConnectorTest extends TestCase
         $codes = array_map(static fn ($i): string => $i->type.' '.$i->value.' → '.$i->remoteId, $lucius->identifiers);
         $this->assertSame(['source_code 1010-001-410-00 → 1010-001-410-46'], $codes);
 
-        $this->assertSame(['https://portal.canis.cz/imgserver/eshop/canis/19/2000000326/88905-1010_001_410_00.jpg'], $lucius->raw['images']);
+        // kolor 410 — zdjęcie ze swojej strony; 708 nie ma własnej strony — zdjęcie modelu SIRIUS ze strony, na której jest
+        $this->assertSame([
+            'https://portal.canis.cz/imgserver/eshop/canis/19/2000000326/88905-1010_001_410_00.jpg',
+            'https://portal.canis.cz/imgserver/eshop/canis/19/2000000326/17590-1010_001_00.jpg',
+        ], $lucius->raw['images']);
 
         $brighton = $products['1010-001-802-44'];
-        $this->assertSame([], $brighton->raw['images']);
+        // jeden kolor bez własnej strony — cała galeria strony modelu (zdjęcia od producenta lepsze niż żadne)
+        $this->assertSame([
+            'https://portal.canis.cz/imgserver/eshop/canis/19/2000000326/17590-1010_001_00.jpg',
+            'https://portal.canis.cz/imgserver/eshop/canis/19/2000000326/17590-1010_001_01.jpg',
+        ], $brighton->raw['images']);
         $this->assertSame('Bluza CXS SIRIUS BRIGHTON, męska, kolor czarno-żółty', $brighton->name);
         $this->assertSame([], $brighton->identifiers);
         $this->assertSame('44', $brighton->members[0]['size']);
@@ -422,8 +430,8 @@ final class CanisConnectorTest extends TestCase
         $this->assertSame('canis', $card->manufacturer_norms['source']['connector'] ?? null);
         $this->assertEqualsCanonicalizing(['EN ISO 13688', 'EN 340'], array_column($card->manufacturer_norms['rows'] ?? [], 'label'));
         $this->assertSame(3, ProductDocument::query()->where('product_id', $card->id)->count());
-        // kolor 410 ma własną stronę ze zdjęciem; 708 tylko zdjęcie całego modelu SIRIUS (może to być BRIGHTON) — bez zdjęcia
-        $this->assertSame(1, ProductImage::query()->where('product_id', $card->id)->count());
+        // zdjęcie koloru 410 i zdjęcie modelu SIRIUS dla koloru 708
+        $this->assertSame(2, ProductImage::query()->where('product_id', $card->id)->count());
         $this->assertNotNull(ProductShopCard::query()->where('product_id', $card->id)->value('fields'));
 
         // obca marka: producent 3M, bez norm i opisu „producenta” z witryny Canis
