@@ -1345,6 +1345,8 @@ function MoneyInput({
   const [draft, setDraft] = useState(moneyInputValue(value))
   const [focused, setFocused] = useState(false)
   const [lastValue, setLastValue] = useState(value)
+  // Escape: blur() woła onBlur od razu, a jego domknięcie ma jeszcze wpisany szkic — flaga każe tylko cofnąć.
+  const cancelRef = useRef(false)
   // Nowa wartość z serwera (np. „wstaw” sugerowaną) — pole idzie za nią, o ile człowiek właśnie w nim nie pisze.
   if (value !== lastValue && !focused) {
     setLastValue(value)
@@ -1366,12 +1368,17 @@ function MoneyInput({
         onKeyDown={(e) => {
           if (e.key === 'Enter') e.currentTarget.blur()
           if (e.key === 'Escape') {
-            setDraft(moneyInputValue(value))
+            cancelRef.current = true
             e.currentTarget.blur()
           }
         }}
         onBlur={() => {
           setFocused(false)
+          if (cancelRef.current) {
+            cancelRef.current = false
+            setDraft(moneyInputValue(value))
+            return
+          }
           const parsed = parseMoney(draft)
           if (parsed === undefined) {
             setDraft(moneyInputValue(value))
