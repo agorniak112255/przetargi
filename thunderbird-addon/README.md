@@ -223,6 +223,13 @@ z karty nie jest związana z żadnym mailem klienta.
   którego nie da się pobrać, zostaje linkiem.
 - Czerwone kropkowane linie wokół tabel w oknie pisania to obrysy edytora
   Thunderbirda — w wysłanym mailu ich nie ma.
+- Od 1.35.0 oferty z modułu **Oferty** w formie „Tylko PDF w załączniku” albo
+  „Treść maila i PDF” przychodzą z adresem PDF (`pdf_url`,
+  `/api/offers/compose/{id}/pdf`). Dodatek pobiera plik swoim kluczem i dołącza
+  go do nowej wiadomości (`compose.addAttachment`). Inny adres niż PDF oferty
+  z aplikacji jest pomijany. Gdy pobranie się nie uda, powiadomienie każe
+  dołączyć plik ręcznie („Pobierz PDF” w ofercie). Starsze wersje otwierają
+  samą treść, bez załącznika.
 
 ## Szablony listu
 

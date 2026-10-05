@@ -29,6 +29,9 @@ class OfferComposeRequest extends Model
         'body_text',
         'requested_at',
         'claimed_at',
+        // oferta z modułu Ofert (null = oferta z karty produktu) i czy dodatek ma dołączyć jej PDF
+        'offer_id',
+        'attach_pdf',
     ];
 
     protected function casts(): array
@@ -36,6 +39,7 @@ class OfferComposeRequest extends Model
         return [
             'requested_at' => 'datetime',
             'claimed_at' => 'datetime',
+            'attach_pdf' => 'boolean',
         ];
     }
 
@@ -47,6 +51,12 @@ class OfferComposeRequest extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
+    }
+
+    /** @return BelongsTo<Offer, $this> */
+    public function offer(): BelongsTo
+    {
+        return $this->belongsTo(Offer::class);
     }
 
     /**

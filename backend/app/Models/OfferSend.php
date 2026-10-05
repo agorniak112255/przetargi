@@ -19,6 +19,9 @@ class OfferSend extends Model
         'subject',
         'html',
         'text',
+        // forma użyta w tej wysyłce (Offer::DELIVERIES) i PDF, który dostali klienci (dysk local; null = bez PDF)
+        'delivery',
+        'pdf_path',
     ];
 
     /** @return BelongsTo<Offer, $this> */

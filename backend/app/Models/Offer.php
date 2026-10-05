@@ -15,6 +15,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Offer extends Model
 {
+    /** Forma oferty: body — produkty w treści maila; pdf — krótki mail, oferta w załączniku PDF; both — oba. */
+    public const DELIVERIES = ['body', 'pdf', 'both'];
+
+    /** @var array<string, mixed> jak domyślna kolumny — nowa oferta ma formę bez odczytu z bazy */
+    protected $attributes = ['delivery' => 'body'];
+
     protected $fillable = [
         'user_id',
         'code',
@@ -22,6 +28,7 @@ class Offer extends Model
         'intro',
         'layout',
         'valid_until',
+        'delivery',
         'last_sent_at',
         'last_copied_at',
     ];

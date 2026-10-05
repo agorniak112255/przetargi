@@ -9,12 +9,14 @@ use App\Models\User;
 use App\Models\UserMailAccount;
 use App\Services\Campaigns\CampaignBlocks;
 use App\Services\Campaigns\CampaignRenderer;
+use Illuminate\Support\Collection;
 
 /**
  * Mail oferty — wygląd kampanii (CampaignRenderer::renderItems: baner, kafelki, układ produktów), ale do jednego
  * klienta: bez linii wypisu i notki o administratorze danych mailingu, bez linków mierzonych, „Zapytaj o ofertę” na adres
  * autora. Podgląd i kopia do Thunderbirda są bez podpisu (program pocztowy doda podpis handlowca), wysyłka z aplikacji —
- * z podpisem ze skrzynki „Moja poczta”. Nie final — testy podmieniają zależności.
+ * z podpisem ze skrzynki „Moja poczta”. Forma „pdf” = krótki mail bez produktów (oferta w załączniku, OfferPdf).
+ * Nie final — testy podmieniają zależności.
  */
 class OfferRenderer
 {
@@ -23,9 +25,12 @@ class OfferRenderer
     /**
      * @param  string|null  $notice  informacja na górze maila (kopia dla nadawcy) — klient jej nie dostaje
      * @param  bool  $withSignature  false = bez podpisu (podgląd i kopia do Thunderbirda)
+     * @param  string|null  $delivery  forma (Offer::DELIVERIES); null = zapisana przy ofercie. 'pdf' = krótki mail
+     *                                 (wstęp albo „w załączeniu przesyłam ofertę…”) bez produktów i bez linii „Ceny netto…”
+     *                                 — oferta jest w załączniku; 'body' i 'both' = pełny mail z produktami
      * @return array{subject: string, from: string, html: string, text: string}
      */
-    public function render(Offer $offer, User $viewer, ?string $notice = null, bool $withSignature = true): array
+    public function render(Offer $offer, User $viewer, ?string $notice = null, bool $withSignature = true, ?string $delivery = null): array
     {
         $offer->loadMissing('user.mailAccount');
         // nadawcą i podpisem jest zawsze autor (oglądać ofertę może tylko on — $viewer liczy ceny tak samo)
@@ -33,18 +38,24 @@ class OfferRenderer
         /** @var UserMailAccount|null $account */
         $account = $author->mailAccount;
         $fromAddress = $account !== null ? trim((string) $account->from_address) : '';
+        $delivery ??= (string) ($offer->delivery ?? 'body');
 
         $blocks = [['type' => 'header', 'logo' => null]];
         $intro = trim((string) $offer->intro);
-        if ($intro !== '') {
-            $blocks[] = ['type' => 'text', 'text' => $intro];
+        if ($delivery === 'pdf') {
+            // linia „Ceny netto…” jest w szablonie częścią bloku produktów — bez bloku nie ma i jej
+            $blocks[] = ['type' => 'text', 'text' => $intro !== '' ? $intro : "Dzień dobry,\n\nw załączeniu przesyłam ofertę ".$offer->code.'.'];
+        } else {
+            if ($intro !== '') {
+                $blocks[] = ['type' => 'text', 'text' => $intro];
+            }
+            $blocks[] = ['type' => 'products', 'layout' => CampaignBlocks::layout((string) $offer->layout)];
         }
-        $blocks[] = ['type' => 'products', 'layout' => CampaignBlocks::layout((string) $offer->layout)];
         $blocks[] = ['type' => 'footer', 'text' => ''];
 
         $rendered = $this->renderer->renderItems(
-            // pozycje świeżo z bazy — załadowana relacja mogła się zestarzeć po zmianie ceny
-            OfferItemPresenter::campaignItems($offer->items()->get()),
+            // pozycje świeżo z bazy — załadowana relacja mogła się zestarzeć po zmianie ceny; krótki mail ich nie pokazuje
+            $delivery === 'pdf' ? new Collection : OfferItemPresenter::campaignItems($offer->items()->get()),
             $author,
             (string) $offer->code,
             false,

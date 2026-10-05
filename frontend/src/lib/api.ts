@@ -2133,8 +2133,12 @@ export function manualMergeConflictPreview(ex: unknown): ManualMergePreview | nu
   return null
 }
 
-export async function downloadFile(path: string, fallbackName: string): Promise<void> {
-  const headers = new Headers({ Accept: '*/*' })
+/**
+ * `accept` — nagłówek Accept. Laravel oddaje błędy (422, 404, 429) jako JSON z komunikatem tylko wtedy, gdy JSON jest
+ * pierwszy na liście — przy samym * / * walidacja kończy się przekierowaniem, a pobrany plik byłby stroną HTML.
+ */
+export async function downloadFile(path: string, fallbackName: string, accept = '*/*'): Promise<void> {
+  const headers = new Headers({ Accept: accept })
   const t = token()
   if (t) headers.set('Authorization', `Bearer ${t}`)
 

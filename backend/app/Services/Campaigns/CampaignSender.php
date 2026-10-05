@@ -466,17 +466,23 @@ class CampaignSender
     }
 
     /**
-     * Wysyłka jednej wiadomości (HTML + tekst); zwraca Message-ID albo null.
+     * Wysyłka jednej wiadomości (HTML + tekst); zwraca Message-ID albo null. Załączniki podaje tylko oferta (PDF) —
+     * kampanie wysyłają bez.
+     *
+     * @param  list<array{data: string, name: string, mime: string}>  $attachments
      */
-    public function deliver(UserMailAccount $account, string $to, ?string $toName, string $subject, string $html, string $text, ?string $unsubscribeUrl = null): ?string
+    public function deliver(UserMailAccount $account, string $to, ?string $toName, string $subject, string $html, string $text, ?string $unsubscribeUrl = null, array $attachments = []): ?string
     {
         $mailer = $this->mailers->make($account);
         $from = (string) $account->from_address;
         $sent = $mailer->send(
             ['html' => new HtmlString($html), 'text' => new HtmlString($text)],
             [],
-            static function (Message $m) use ($account, $from, $to, $toName, $subject, $unsubscribeUrl): void {
+            static function (Message $m) use ($account, $from, $to, $toName, $subject, $unsubscribeUrl, $attachments): void {
                 $m->from($from, (string) $account->from_name)->to($to, $toName)->subject($subject);
+                foreach ($attachments as $attachment) {
+                    $m->attachData($attachment['data'], $attachment['name'], ['mime' => $attachment['mime']]);
+                }
                 if ($unsubscribeUrl !== null) {
                     // RFC 8058: wypis jednym kliknięciem z poziomu programu pocztowego (Gmail, Outlook)
                     $headers = $m->getSymfonyMessage()->getHeaders();

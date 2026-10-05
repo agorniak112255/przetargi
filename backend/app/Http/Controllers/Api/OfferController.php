@@ -14,6 +14,7 @@ use App\Models\OfferSend;
 use App\Models\User;
 use App\Services\Erp\ErpItemCards;
 use App\Services\Offers\OfferItemPresenter;
+use App\Services\Offers\OfferPdf;
 use App\Services\Offers\OfferRenderer;
 use App\Services\Offers\OfferSender;
 use Illuminate\Database\Eloquent\Builder;
@@ -22,6 +23,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -38,6 +40,7 @@ class OfferController extends Controller
         private readonly OfferItemPresenter $presenter,
         private readonly OfferRenderer $renderer,
         private readonly OfferSender $sender,
+        private readonly OfferPdf $pdf,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -104,12 +107,16 @@ class OfferController extends Controller
             'intro' => ['sometimes', 'nullable', 'string', 'max:5000'],
             'layout' => ['sometimes', 'required', 'string', Rule::in(Campaign::LAYOUTS)],
             'valid_until' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
+            // forma: produkty w treści maila, krótki mail z PDF albo oba
+            'delivery' => ['sometimes', 'required', 'string', Rule::in(Offer::DELIVERIES)],
         ], [
             'subject.not_regex' => 'Temat musi być jedną linią.',
             'subject.max' => 'Temat może mieć najwyżej 200 znaków.',
             'intro.max' => 'Wstęp może mieć najwyżej 5000 znaków.',
             'layout.in' => 'Wybierz układ produktów z listy.',
             'valid_until.date_format' => 'Data ważności musi mieć postać RRRR-MM-DD.',
+            'delivery.in' => 'Wybierz formę oferty z listy.',
+            'delivery.required' => 'Wybierz formę oferty z listy.',
         ]);
 
         $data = [];
@@ -124,6 +131,9 @@ class OfferController extends Controller
         }
         if (array_key_exists('valid_until', $v)) {
             $data['valid_until'] = $v['valid_until'];
+        }
+        if (array_key_exists('delivery', $v)) {
+            $data['delivery'] = $v['delivery'];
         }
         if ($data !== []) {
             $offer->update($data);
@@ -210,8 +220,10 @@ class OfferController extends Controller
     public function preview(Request $request, Offer $offer): JsonResponse
     {
         $this->authorizeOwner($request, $offer);
-        // podgląd = to, co handlowiec kopiuje do Thunderbirda — bez podpisu, bo doda go program pocztowy
-        $rendered = $this->renderer->render($offer, $request->user(), null, false);
+        // podgląd = to, co handlowiec kopiuje do Thunderbirda — bez podpisu, bo doda go program pocztowy; forma
+        // „pdf” — krótki mail bez produktów (oferta w załączniku)
+        $delivery = $this->delivery($offer);
+        $rendered = $this->renderer->render($offer, $request->user(), null, false, $delivery);
 
         return response()->json([
             'subject' => $rendered['subject'],
@@ -220,7 +232,36 @@ class OfferController extends Controller
             'text' => $rendered['text'],
             'missing_prices' => OfferSender::missingPrices($offer->items()->get()),
             'public_url_missing' => rtrim((string) config('campaigns.public_url'), '/') === '',
+            'delivery' => $delivery,
+            'pdf_filename' => $delivery === 'body' ? null : OfferPdf::filename($offer),
         ]);
+    }
+
+    /**
+     * PDF bieżącej oferty (do podejrzenia i ręcznego dołączenia przy kopiowaniu) — pełna oferta z produktami i podpisem
+     * handlowca, niezależnie od formy. Te same warunki co wysyłka: pozycje w mailu i ceny.
+     */
+    public function pdf(Request $request, Offer $offer): Response
+    {
+        $this->authorizeOwner($request, $offer);
+        OfferSender::assertItemsReady($offer->items()->get(), 'przed pobraniem PDF');
+
+        return $this->pdfResponse($this->pdf->render($offer, $request->user()), OfferPdf::filename($offer));
+    }
+
+    /** PDF, który dostali klienci w tej wysyłce — zapisany przy wysyłce, nie składany na nowo. */
+    public function sendPdf(Request $request, Offer $offer, OfferSend $send): Response
+    {
+        $this->authorizeOwner($request, $offer);
+        if ((int) $send->offer_id !== (int) $offer->id || $send->pdf_path === null) {
+            abort(404);
+        }
+        $bytes = Storage::disk('local')->exists((string) $send->pdf_path) ? Storage::disk('local')->get((string) $send->pdf_path) : null;
+        if (! is_string($bytes) || $bytes === '') {
+            abort(404, 'Plik PDF tej wysyłki nie jest już dostępny.');
+        }
+
+        return $this->pdfResponse($bytes, OfferPdf::filename($offer));
     }
 
     /** Znacznik „skopiowana do wklejenia w programie pocztowym” — nic poza datą nie zapisuje. */
@@ -427,6 +468,21 @@ class OfferController extends Controller
         });
     }
 
+    private function pdfResponse(string $bytes, string $filename): Response
+    {
+        return response($bytes, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+            'Cache-Control' => 'private, no-store',
+        ]);
+    }
+
+    /** Forma zapisana przy ofercie; nieznana wartość = treść maila. */
+    private function delivery(Offer $offer): string
+    {
+        return in_array($offer->delivery, Offer::DELIVERIES, true) ? (string) $offer->delivery : 'body';
+    }
+
     /** Ofertę widzi i zmienia tylko autor; cudza = 404 (bez zdradzania, że istnieje). */
     private function authorizeOwner(Request $request, Offer $offer): void
     {
@@ -446,7 +502,7 @@ class OfferController extends Controller
     private function present(Offer $offer, User $viewer): array
     {
         $items = $offer->items()->get();
-        $sends = $offer->sends()->with('recipients')->get(['id', 'offer_id', 'created_at']);
+        $sends = $offer->sends()->with('recipients')->get(['id', 'offer_id', 'delivery', 'pdf_path', 'created_at']);
 
         return [
             'id' => (int) $offer->id,
@@ -455,12 +511,15 @@ class OfferController extends Controller
             'intro' => $offer->intro,
             'layout' => $offer->layout,
             'valid_until' => $offer->valid_until?->toDateString(),
+            'delivery' => $this->delivery($offer),
             'last_sent_at' => $offer->last_sent_at?->toIso8601String(),
             'last_copied_at' => $offer->last_copied_at?->toIso8601String(),
             'items' => $this->presenter->presentMany($items, $viewer),
             'sends' => $sends->map(static fn (OfferSend $s): array => [
                 'id' => (int) $s->id,
                 'created_at' => $s->created_at?->toIso8601String(),
+                'delivery' => in_array($s->delivery, Offer::DELIVERIES, true) ? (string) $s->delivery : 'body',
+                'has_pdf' => $s->pdf_path !== null,
                 'recipients' => $s->recipients->map(static fn (OfferRecipient $r): array => [
                     'email' => (string) $r->email,
                     'status' => (string) $r->status,

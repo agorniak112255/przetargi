@@ -463,6 +463,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/offers/compose', [OfferComposeController::class, 'store']);
         Route::get('/offers/compose/{offerCompose}', [OfferComposeController::class, 'show'])->whereNumber('offerCompose');
         Route::post('/offers/compose/{offerCompose}/claim', [OfferComposeController::class, 'claim'])->whereNumber('offerCompose');
+        // PDF oferty z modułu Ofert, który dodatek dołącza do nowego maila (prośba z attach_pdf)
+        Route::get('/offers/compose/{offerCompose}/pdf', [OfferComposeController::class, 'pdf'])->whereNumber('offerCompose')->middleware('throttle:30,1');
     });
 
     Route::get('/price-lists', [PriceListController::class, 'index'])->middleware('permission:price_lists.view');
@@ -611,6 +613,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/offers/{offer}/copied', [OfferController::class, 'copied'])->whereNumber('offer');
         Route::post('/offers/{offer}/send', [OfferController::class, 'send'])->whereNumber('offer')->middleware('throttle:5,1');
         Route::get('/offers/{offer}/sends/{send}', [OfferController::class, 'showSend'])->whereNumber(['offer', 'send']);
+        // PDF bieżącej oferty i PDF zapisany przy wysyłce (forma „pdf”/„both”); składanie PDF kosztuje — limit
+        Route::get('/offers/{offer}/pdf', [OfferController::class, 'pdf'])->whereNumber('offer')->middleware('throttle:30,1');
+        Route::get('/offers/{offer}/sends/{send}/pdf', [OfferController::class, 'sendPdf'])->whereNumber(['offer', 'send'])->middleware('throttle:30,1');
     });
 
     Route::middleware('permission:admin.access')->prefix('admin')->group(function (): void {

@@ -538,7 +538,60 @@ async function openOffer(offer) {
   if (written.length <= before.length + 20) {
     await notify('Nie udało się wstawić oferty', 'W aplikacji kliknij „Kopiuj do wklejenia w e-mail” i wklej ją ręcznie.')
   }
+  // okno od razu na wierzch — PDF składa się na serwerze kilka sekund i dołącza do otwartej już wiadomości
   await raiseComposeWindow(tab)
+  await attachOfferPdf(tab.id, offer)
+}
+
+/** Najdłużej tyle czekamy na PDF oferty (40 pozycji ze zdjęciami to ok. 3 s); dłużej — dołączenie ręczne. */
+const OFFER_PDF_TIMEOUT_MS = 30000
+
+/**
+ * PDF oferty w załączniku (forma „Tylko PDF w załączniku” albo „Treść maila i PDF”, od 1.35.0). Aplikacja podaje
+ * adres pliku przy ofercie; dodatek pobiera go swoim kluczem i dołącza do nowej wiadomości. Tylko adres PDF oferty
+ * z naszej aplikacji — nic spoza niej nie trafia do maila. Gdy się nie uda, handlowiec dołącza plik ręcznie
+ * („Pobierz PDF” w ofercie).
+ */
+async function attachOfferPdf(tabId, offer) {
+  const path = String(offer.pdf_url || '')
+  if (!/^\/api\/offers\/compose\/\d+\/pdf$/.test(path)) return
+  const name = String(offer.pdf_filename || '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'Oferta.pdf'
+  const manual = 'W aplikacji kliknij „Pobierz PDF” w ofercie i przeciągnij plik do wiadomości.'
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), OFFER_PDF_TIMEOUT_MS)
+  try {
+    const settings = await getSettings()
+    // JSON pierwszy: błąd (np. brak ceny) wraca jako JSON z komunikatem, a nie jako przekierowanie na stronę HTML
+    const res = await fetch(settings.baseUrl + path, {
+      headers: { Accept: 'application/json, application/pdf', Authorization: 'Bearer ' + settings.token },
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      let message = 'Błąd serwera (' + res.status + ').'
+      try {
+        const data = await res.json()
+        if (data && typeof data.message === 'string' && data.message !== '') message = data.message
+      } catch (e) {
+        // odpowiedź bez JSON — zostaje kod błędu
+      }
+      await notify('Nie udało się dołączyć PDF oferty', message + ' ' + manual)
+
+      return
+    }
+    // tylko prawdziwy PDF — strona HTML po przekierowaniu nie może trafić do klienta jako „oferta.pdf”
+    const type = String(res.headers.get('Content-Type') || '').toLowerCase()
+    if (res.redirected || !type.startsWith('application/pdf')) {
+      await notify('Nie udało się dołączyć PDF oferty', 'Aplikacja nie oddała pliku PDF. ' + manual)
+
+      return
+    }
+    const blob = await res.blob()
+    await browser.compose.addAttachment(tabId, { file: new File([blob], name, { type: 'application/pdf' }) })
+  } catch (e) {
+    await notify('Nie udało się dołączyć PDF oferty', manual)
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /**

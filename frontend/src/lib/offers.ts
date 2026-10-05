@@ -1,4 +1,4 @@
-import { api } from './api'
+import { api, downloadFile } from './api'
 import type { CampaignLayout } from './campaigns'
 
 /**
@@ -8,6 +8,14 @@ import type { CampaignLayout } from './campaigns'
  */
 
 export type OfferRecipientStatus = 'sent' | 'failed' | 'skipped'
+
+/**
+ * Forma oferty (zapamiętana przy ofercie): body — produkty w treści maila; pdf — krótki mail, oferta w załączniku PDF;
+ * both — treść maila i ten sam wygląd w załączniku PDF.
+ */
+export type OfferDelivery = 'body' | 'pdf' | 'both'
+
+export const OFFER_DELIVERIES: OfferDelivery[] = ['body', 'pdf', 'both']
 
 export type OfferItem = {
   id: number
@@ -44,6 +52,10 @@ export type OfferRecipient = {
 export type OfferSend = {
   id: number
   created_at: string
+  /** Forma użyta w tej wysyłce. */
+  delivery: OfferDelivery
+  /** Zapisany plik PDF, który dostali klienci (wysyłka w formie pdf albo both). */
+  has_pdf: boolean
   recipients: OfferRecipient[]
 }
 
@@ -53,6 +65,7 @@ export type Offer = {
   subject: string
   intro: string | null
   layout: CampaignLayout
+  delivery: OfferDelivery
   /** YYYY-MM-DD albo null. */
   valid_until: string | null
   last_sent_at: string | null
@@ -80,6 +93,7 @@ export type OfferPatch = {
   intro?: string | null
   layout?: CampaignLayout
   valid_until?: string | null
+  delivery?: OfferDelivery
 }
 
 export type OfferItemPatch = {
@@ -99,6 +113,10 @@ export type OfferPreview = {
   missing_prices: number[]
   /** Brak publicznego adresu aplikacji — w mailu nie będzie zdjęć ani baneru. */
   public_url_missing: boolean
+  /** Forma, w jakiej przygotowano podgląd (przy pdf html/text to krótki mail bez produktów). */
+  delivery: OfferDelivery
+  /** Nazwa pliku PDF w załączniku, np. „Oferta-OF-0001.pdf”. */
+  pdf_filename: string | null
 }
 
 export type OfferSendResult = { email: string; status: OfferRecipientStatus; error: string | null }
@@ -154,6 +172,19 @@ export function sendOffer(id: number, emails: string[]) {
 
 export function offerSentMail(id: number, sendId: number) {
   return api<OfferSentMail>(`/offers/${id}/sends/${sendId}`)
+}
+
+/** JSON pierwszy: błędy (422 brak ceny, 404, 429) wracają z polskim komunikatem, a nie jako przekierowanie/HTML. */
+const PDF_ACCEPT = 'application/json, application/pdf'
+
+/** PDF bieżącej oferty (wygląd jak mail). 422 z komunikatem serwera, gdy brak pozycji albo ceny. */
+export function downloadOfferPdf(id: number, fallbackName = `Oferta-${id}.pdf`) {
+  return downloadFile(`/offers/${id}/pdf`, fallbackName, PDF_ACCEPT)
+}
+
+/** Plik PDF dokładnie taki, jaki dostali klienci w danej wysyłce. */
+export function downloadSentPdf(id: number, sendId: number, fallbackName = `Oferta-${id}-wysylka-${sendId}.pdf`) {
+  return downloadFile(`/offers/${id}/sends/${sendId}/pdf`, fallbackName, PDF_ACCEPT)
 }
 
 /** Adresy wpisane w pole: przecinek, średnik, spacja albo nowa linia; bez powtórzeń (wielkość liter bez znaczenia). */

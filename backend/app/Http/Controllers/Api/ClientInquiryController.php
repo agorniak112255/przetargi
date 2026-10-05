@@ -19,6 +19,7 @@ use App\Models\User;
 use App\Services\Chat\RealtimeConfig;
 use App\Services\ClientInquiryService;
 use App\Services\InquiryFileText;
+use App\Services\Offers\OfferPdf;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Support\OfferValidity;
 use Carbon\CarbonImmutable;
@@ -625,6 +626,7 @@ class ClientInquiryController extends Controller
             $this->markOfferAddonSeen($user);
             $offers = OfferComposeRequest::query()
                 ->pendingFor($user)
+                ->with('offer:id,code')
                 ->orderBy('requested_at')
                 ->limit(5)
                 ->get()
@@ -634,6 +636,11 @@ class ClientInquiryController extends Controller
                     'body_html' => $row->body_html,
                     'body_text' => $row->body_text,
                     'requested_at' => $row->requested_at?->toIso8601String(),
+                    // oferta z modułu Ofert w formie z PDF — dodatek (1.35+) pobiera plik i dołącza go do maila
+                    ...($row->attach_pdf && $row->offer_id !== null && $row->offer !== null ? [
+                        'pdf_url' => '/api/offers/compose/'.$row->id.'/pdf',
+                        'pdf_filename' => OfferPdf::filename($row->offer),
+                    ] : []),
                 ]);
 
             return response()->json(['inquiries' => $rows, 'offers' => $offers])

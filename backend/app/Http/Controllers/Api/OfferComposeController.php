@@ -6,10 +6,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Events\Chat\QueueUpdated;
 use App\Http\Controllers\Controller;
+use App\Models\Offer;
 use App\Models\OfferComposeRequest;
 use App\Models\User;
+use App\Services\Offers\OfferPdf;
+use App\Services\Offers\OfferSender;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Validation\Rule;
 
 /**
  * „Otwórz w Thunderbirdzie” z okna oferty dla klienta. Przeglądarka zostawia treść oferty na serwerze, dodatek
@@ -42,20 +47,28 @@ class OfferComposeController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        /** @var User $user */
+        $user = $request->user();
         $data = $request->validate([
             'subject' => ['required', 'string', 'max:255'],
             'body_html' => ['required', 'string', 'max:'.self::MAX_HTML_BYTES],
             'body_text' => ['nullable', 'string', 'max:100000'],
             'product_id' => ['nullable', 'integer', 'exists:products,id'],
+            // oferta z modułu Ofert — tylko własna (cudzej nie widać, więc i jej PDF nie wolno dołączyć)
+            'offer_id' => ['nullable', 'integer', Rule::exists('offers', 'id')->where('user_id', $user->id)],
+            'attach_pdf' => ['sometimes', 'boolean'],
         ], [
             'body_html.max' => 'Oferta jest za duża, żeby przekazać ją do Thunderbirda — skopiuj ją i wklej ręcznie.',
+            'offer_id.exists' => 'Tej oferty nie ma na Twojej liście — odśwież stronę.',
         ]);
 
-        /** @var User $user */
-        $user = $request->user();
+        $offerId = isset($data['offer_id']) ? (int) $data['offer_id'] : null;
         $row = OfferComposeRequest::query()->create([
             'user_id' => $user->id,
             'product_id' => $data['product_id'] ?? null,
+            'offer_id' => $offerId,
+            // PDF dołącza się tylko do oferty z modułu Ofert
+            'attach_pdf' => $offerId !== null && (bool) ($data['attach_pdf'] ?? false),
             'subject' => $data['subject'],
             'body_html' => $data['body_html'],
             'body_text' => $data['body_text'] ?? null,
@@ -73,6 +86,26 @@ class OfferComposeController extends Controller
         $this->assertOwner($request, $offerCompose);
 
         return response()->json($this->present($offerCompose));
+    }
+
+    /**
+     * PDF oferty z prośby (attach_pdf) dla dodatku — bieżąca oferta, jak „Pobierz PDF” w oknie oferty. Prośba bez PDF
+     * albo bez oferty (także usuniętej: offer_id = null) — 404; braki cen — 422 jak przy wysyłce.
+     */
+    public function pdf(Request $request, OfferComposeRequest $offerCompose, OfferPdf $pdf): Response
+    {
+        $this->assertOwner($request, $offerCompose);
+        $offer = $offerCompose->attach_pdf && $offerCompose->offer_id !== null ? Offer::query()->find($offerCompose->offer_id) : null;
+        if ($offer === null || (int) $offer->user_id !== (int) $request->user()->id) {
+            abort(404, 'Ta prośba nie ma pliku PDF oferty.');
+        }
+        OfferSender::assertItemsReady($offer->items()->get(), 'przed pobraniem PDF');
+
+        return response($pdf->render($offer, $request->user()), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.OfferPdf::filename($offer).'"',
+            'Cache-Control' => 'private, no-store',
+        ]);
     }
 
     /**

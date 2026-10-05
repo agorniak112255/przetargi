@@ -298,6 +298,48 @@ export function OffersHelp() {
           ),
         },
         {
+          action: 'Forma oferty: w treści maila albo w PDF',
+          does: 'W sekcji „Wysyłka” wybierasz „Forma oferty”: „W treści maila” (produkty z cenami w treści wiadomości, jak dotąd), „Tylko PDF w załączniku” (krótki mail — Twój wstęp albo „Dzień dobry, w załączeniu przesyłam ofertę…” — a produkty z cenami w pliku PDF) albo „Treść maila i PDF” (oba naraz). Wybór zapisuje się od razu przy ofercie i obowiązuje przy wysyłce z aplikacji, kopiowaniu i „Otwórz w Thunderbirdzie”. PDF wygląda jak mail oferty: baner, kafelki produktów ze zdjęciem i ceną netto. „Pobierz PDF” pobiera plik z bieżącą ofertą — do obejrzenia przed wysyłką albo do ręcznego dołączenia. Przy kopiowaniu do schowka trafia tylko treść maila, więc PDF dołączasz sam: „Pobierz PDF” i przeciągnij plik do wiadomości w Thunderbirdzie. „Otwórz w Thunderbirdzie” dołącza PDF samo, gdy dodatek Thunderbirda ma wersję 1.35 lub nowszą. W „Historii wysyłek” przy wysyłce z PDF jest „Pobierz wysłany PDF” — dokładnie ten plik, który dostali klienci.',
+          click: 'Sekcja „Wysyłka” → „Forma oferty”: zaznacz jedną z trzech form; przy PDF obok pojawi się „Pobierz PDF”.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Oferty">
+              <Section title="Wysyłka">
+                <p className="mb-1.5 text-xs font-medium text-slate-700">Forma oferty</p>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {[
+                    { label: 'W treści maila', hint: 'produkty z cenami w treści wiadomości', on: false },
+                    { label: 'Tylko PDF w załączniku', hint: 'krótki mail, produkty z cenami w pliku PDF', on: true },
+                    { label: 'Treść maila i PDF', hint: 'produkty w treści wiadomości i ten sam wygląd w pliku PDF', on: false },
+                  ].map(({ label, hint, on }) => {
+                    const box = (
+                      <span
+                        className={`inline-block rounded border px-2.5 py-1.5 ${
+                          on ? 'border-blue-400 bg-blue-50 text-blue-900' : 'border-slate-300 bg-white text-slate-700'
+                        }`}
+                      >
+                        <span className="block font-medium">
+                          {on ? '◉' : '○'} {label}
+                        </span>
+                        <span className="block text-[10px] text-slate-500">{hint}</span>
+                      </span>
+                    )
+                    return <span key={label}>{on ? <Mark>{box}</Mark> : box}</span>
+                  })}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="rounded border border-slate-300 px-2 py-0.5">Pobierz PDF</span>
+                  <span className="text-slate-500">PDF wygląda jak oferta w treści maila — plik Oferta-OF-0008.pdf.</span>
+                </div>
+                <p className="mt-3 text-[11px] text-emerald-700">
+                  Skopiowano treść maila — wklej ją w nowej wiadomości w Thunderbirdzie (Ctrl+V). Dołącz PDF ręcznie: „Pobierz
+                  PDF” i przeciągnij plik do wiadomości.
+                </p>
+              </Section>
+            </AppFrame>
+          ),
+        },
+        {
           action: 'Kopia do wklejenia w Thunderbirdzie',
           does: 'Gdy wolisz wysłać ofertę sam, na przykład jako odpowiedź w wątku z klientem, kopiujesz gotowy mail i wklejasz go w nowej wiadomości Thunderbirda — wygląda tak samo jak wysłany z aplikacji, tylko bez podpisu — pod spodem Thunderbird doda Twój własny podpis (przy wysyłce z aplikacji podpis bierze się z Moje konto → Moja poczta). Temat wpisujesz w Thunderbirdzie sam (ten z pola „Temat wiadomości” albo własny). Przy kopiowaniu adresów nie sprawdzamy, bo odbiorcę wybierasz w Thunderbirdzie, a historia wysyłek takiego maila nie obejmuje — zapisuje się tylko data ostatniego kopiowania (kolumna „Skopiowana” na liście ofert). Osoby z dodatkiem Thunderbirda mogą też kliknąć „Otwórz w Thunderbirdzie” — nowa wiadomość z ofertą otworzy się sama, adresata wpisujesz w Thunderbirdzie.',
           click: '„Kopiuj do wklejenia w Thunderbirdzie”, potem w Thunderbirdzie nowa wiadomość albo odpowiedź i Ctrl+V w treści.',

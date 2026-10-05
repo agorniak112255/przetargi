@@ -24,8 +24,11 @@ import {
 } from '../lib/campaigns'
 import { copyRichHtml } from '../lib/clipboard'
 import {
+  OFFER_DELIVERIES,
   addOfferItems,
   deleteOffer,
+  downloadOfferPdf,
+  downloadSentPdf,
   getOffer,
   markOfferCopied,
   offerPreview,
@@ -36,6 +39,7 @@ import {
   updateOffer,
   updateOfferItem,
   type Offer,
+  type OfferDelivery,
   type OfferItem,
   type OfferItemPatch,
   type OfferPatch,
@@ -72,6 +76,26 @@ const RECIPIENT_STATUS: Record<OfferRecipientStatus, { label: string; tone: Chip
   skipped: { label: 'pominięto', tone: 'slate' },
 }
 
+const DELIVERY_LABEL: Record<OfferDelivery, string> = {
+  body: 'W treści maila',
+  pdf: 'Tylko PDF w załączniku',
+  both: 'Treść maila i PDF',
+}
+
+const DELIVERY_HINT: Record<OfferDelivery, string> = {
+  body: 'produkty z cenami w treści wiadomości',
+  pdf: 'krótki mail, produkty z cenami w pliku PDF',
+  both: 'produkty w treści wiadomości i ten sam wygląd w pliku PDF',
+}
+
+/** Jak forma oferty dociera do klienta — zdanie do potwierdzenia wysyłki i historii. */
+function deliverySentence(delivery: OfferDelivery, pdfName: string | null): string {
+  const file = pdfName ? ` (${pdfName})` : ''
+  if (delivery === 'pdf') return `krótki mail, oferta w załączniku PDF${file}`
+  if (delivery === 'both') return `oferta w treści maila i w załączniku PDF${file}`
+  return 'oferta w treści maila, bez załącznika'
+}
+
 type Content = { subject: string; intro: string; layout: CampaignLayout; valid_until: string }
 
 function contentOf(o: Offer): Content {
@@ -101,6 +125,15 @@ function apiErrorText(ex: unknown, fallback: string): string {
     if (lines.length > 0) return lines.join(' ')
   }
   return errorText(ex, fallback)
+}
+
+/** Błąd pobrania pliku (downloadFile rzuca zwykły Error z komunikatem serwera). */
+function downloadErrorText(ex: unknown, fallback: string): string {
+  // limit pobrań PDF — serwer odpowiada po angielsku „Too Many Attempts.”
+  if (ex instanceof Error && /too many attempts/i.test(ex.message)) {
+    return 'Za dużo prób w krótkim czasie — odczekaj minutę i spróbuj ponownie.'
+  }
+  return apiErrorText(ex, fallback)
 }
 
 export function OfferEditor() {
@@ -267,6 +300,15 @@ function Editor({ initial }: { initial: Offer }) {
 
   const previewFresh = preview !== null && preview.tick === tick && !previewLoading
 
+  // Forma oferty: zapis od razu (PATCH przez mutate — podgląd odświeża się sam); do odpowiedzi serwera pokazujemy
+  // wybór człowieka, po błędzie wraca forma zapisana na serwerze.
+  const [deliveryDraft, setDeliveryDraft] = useState<OfferDelivery | null>(null)
+  async function changeDelivery(next: OfferDelivery) {
+    setDeliveryDraft(next)
+    await mutate(() => updateOffer(offerId, { delivery: next }), 'Nie udało się zapisać formy oferty.')
+    setDeliveryDraft((d) => (d === next ? null : d))
+  }
+
   async function confirmDelete() {
     setDeleteBusy(true)
     setDeleteErr('')
@@ -329,6 +371,8 @@ function Editor({ initial }: { initial: Offer }) {
           <SendSection
             offer={offer}
             subject={content.subject}
+            delivery={deliveryDraft ?? offer.delivery}
+            onDelivery={(d) => void changeDelivery(d)}
             preview={preview?.data ?? null}
             previewFresh={previewFresh}
             saving={saving > 0}
@@ -1071,6 +1115,18 @@ function PreviewSection({
             <span>
               <b className="text-slate-800">Temat:</b> {preview.subject || <span className="text-amber-800">brak tematu</span>}
             </span>
+            {preview.delivery !== 'body' && (
+              <span>
+                <b className="text-slate-800">W załączniku:</b>{' '}
+                <span className="font-mono">{preview.pdf_filename || 'oferta w pliku PDF'}</span>
+              </span>
+            )}
+            {preview.delivery === 'pdf' && (
+              <span className="text-slate-500">
+                Forma „{DELIVERY_LABEL.pdf}”: poniżej krótki mail, produkty z cenami są w pliku PDF — obejrzysz go
+                przyciskiem „Pobierz PDF” w sekcji „Wysyłka”.
+              </span>
+            )}
           </div>
           {/* sandbox="" — bez skryptów, formularzy i dostępu do strony; HTML maila tylko do obejrzenia. */}
           <iframe
@@ -1163,6 +1219,8 @@ function localToday(): string {
 function SendSection({
   offer,
   subject,
+  delivery,
+  onDelivery,
   preview,
   previewFresh,
   saving,
@@ -1173,6 +1231,9 @@ function SendSection({
 }: {
   offer: Offer
   subject: string
+  /** Forma oferty na ekranie (wybór czekający na zapis albo zapisany na serwerze). */
+  delivery: OfferDelivery
+  onDelivery: (delivery: OfferDelivery) => void
   preview: OfferPreview | null
   previewFresh: boolean
   /** Trwa zapis zmiany (cena, opis, treść) — kopia albo wysyłka mogłyby wziąć stan sprzed niej. */
@@ -1228,6 +1289,32 @@ function SendSection({
     return ''
   })()
 
+  // PDF bieżącej oferty — serwer stosuje te same reguły co wysyłka (pozycje, ceny), tu tylko wcześniejsza podpowiedź
+  const pdfBlock = (() => {
+    if (offer.items.length === 0) return 'Dodaj produkty do oferty.'
+    if (contentFailed) return SAVE_FAILED
+    if (saving) return 'Poczekaj, aż zmiany się zapiszą.'
+    if (missingPrices) return 'Uzupełnij cenę przy każdej pozycji.'
+    return ''
+  })()
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const [pdfErr, setPdfErr] = useState('')
+  async function downloadPdf() {
+    setPdfBusy(true)
+    setPdfErr('')
+    try {
+      if (!(await ensureSaved())) {
+        setPdfErr('Nie udało się zapisać treści oferty — spróbuj ponownie za chwilę.')
+        return
+      }
+      await downloadOfferPdf(offer.id, preview?.pdf_filename || undefined)
+    } catch (ex) {
+      setPdfErr(downloadErrorText(ex, 'Nie udało się pobrać PDF.'))
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
   const [retrying, setRetrying] = useState(false)
   async function retrySave() {
     setRetrying(true)
@@ -1268,9 +1355,16 @@ function SendSection({
   function copy() {
     if (copyBlock || !preview) return
     setCopyMsg(null)
+    // kopia idzie z podglądu — forma też z podglądu (przy „Tylko PDF” to krótki mail)
+    const withPdf = preview.delivery !== 'body'
     void copyRichHtml(preview.html, preview.text).then((ok) => {
       if (ok) {
-        setCopyMsg({ ok: true, text: 'Skopiowano ofertę — wklej ją w treść nowej wiadomości w Thunderbirdzie (Ctrl+V).' })
+        setCopyMsg({
+          ok: true,
+          text: withPdf
+            ? 'Skopiowano treść maila — wklej ją w nowej wiadomości w Thunderbirdzie (Ctrl+V). Dołącz PDF ręcznie: „Pobierz PDF” i przeciągnij plik do wiadomości.'
+            : 'Skopiowano ofertę — wklej ją w treść nowej wiadomości w Thunderbirdzie (Ctrl+V).',
+        })
         void markOfferCopied(offer.id)
           .then(onCopied)
           .catch(() => {
@@ -1287,6 +1381,54 @@ function SendSection({
   return (
     <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
       <h2 className="app-card-title text-sm font-semibold text-slate-900">Wysyłka</h2>
+      <fieldset className="space-y-1.5">
+        <legend className="font-medium text-slate-700">
+          Forma oferty <span className="font-normal text-slate-500">— zapisuje się od razu, dotyczy wysyłki, kopiowania i Thunderbirda</span>
+        </legend>
+        <div className="flex flex-wrap gap-2">
+          {OFFER_DELIVERIES.map((d) => (
+            <label
+              key={d}
+              className={`flex cursor-pointer items-start gap-1.5 rounded border px-2.5 py-1.5 ${
+                delivery === d ? 'border-blue-400 bg-blue-50 text-blue-900' : 'border-slate-300 bg-white text-slate-700'
+              } ${sending ? 'cursor-not-allowed opacity-60' : ''}`}
+            >
+              <input
+                type="radio"
+                name={`offer-${offer.id}-delivery`}
+                className="mt-0.5"
+                value={d}
+                checked={delivery === d}
+                disabled={sending}
+                onChange={() => onDelivery(d)}
+              />
+              <span>
+                <span className="block font-medium">{DELIVERY_LABEL[d]}</span>
+                <span className="block text-[11px] font-normal text-slate-500">{DELIVERY_HINT[d]}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {delivery !== 'body' && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className={BTN_SM}
+              disabled={pdfBusy || pdfBlock !== ''}
+              title={pdfBlock || 'Pobiera PDF z bieżącą ofertą — do obejrzenia albo ręcznego dołączenia do wiadomości'}
+              onClick={() => void downloadPdf()}
+            >
+              {pdfBusy ? 'Przygotowuję PDF…' : 'Pobierz PDF'}
+            </button>
+            <span className="text-slate-500">
+              {pdfBlock
+                ? `PDF: ${pdfBlock}`
+                : `PDF wygląda jak oferta w treści maila${preview?.pdf_filename ? ` — plik ${preview.pdf_filename}` : ''}.`}
+            </span>
+          </div>
+        )}
+        {pdfErr && <ErrorBar message={pdfErr} onClose={() => setPdfErr('')} />}
+      </fieldset>
       <label className="block font-medium text-slate-700">
         Adresy e-mail klientów{' '}
         <span className="font-normal text-slate-500">— oddziel przecinkiem, średnikiem albo nową linią</span>
@@ -1331,6 +1473,7 @@ function SendSection({
         </button>
         {can(user, 'inquiries.use') && (
           <ThunderbirdButton
+            offerId={offer.id}
             preview={preview}
             subject={(preview?.subject || subject).trim() || `Oferta ${offer.code ?? ''}`.trim()}
             blocked={copyBlock !== ''}
@@ -1375,6 +1518,9 @@ function SendSection({
                 {plural(offer.items.length, 'pozycja', 'pozycje', 'pozycji')}. Każdy adres dostanie osobny mail z Twojej
                 skrzynki{preview?.from ? ` (${preview.from})` : ''}:
               </p>
+              <p>
+                Forma: <b>{DELIVERY_LABEL[delivery]}</b> — {deliverySentence(delivery, preview?.pdf_filename ?? null)}.
+              </p>
               <ul className="max-h-48 list-disc overflow-y-auto pl-5 font-mono text-xs">
                 {emails.map((e) => (
                   <li key={e}>{e}</li>
@@ -1413,7 +1559,19 @@ function RecipientList({ rows }: { rows: { email: string; status: OfferRecipient
  * kolejkę; pilnujemy podjęcia, bo okno Thunderbirda otwiera się poza przeglądarką. Przycisk tylko, gdy dodatek
  * odezwał się niedawno. Treść = HTML już wczytanego podglądu.
  */
-function ThunderbirdButton({ preview, subject, blocked }: { preview: OfferPreview | null; subject: string; blocked: boolean }) {
+function ThunderbirdButton({
+  offerId,
+  preview,
+  subject,
+  blocked,
+}: {
+  offerId: number
+  preview: OfferPreview | null
+  subject: string
+  blocked: boolean
+}) {
+  // treść idzie z podglądu — forma też (przy „Tylko PDF” to krótki mail); PDF pobiera i dołącza sam dodatek
+  const attachPdf = preview !== null && preview.delivery !== 'body'
   const [addonReady, setAddonReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -1450,7 +1608,13 @@ function ThunderbirdButton({ preview, subject, blocked }: { preview: OfferPrevie
     try {
       const res = await api<{ id: number }>('/offers/compose', {
         method: 'POST',
-        body: JSON.stringify({ subject: subject.slice(0, 255), body_html: preview.html, body_text: preview.text }),
+        body: JSON.stringify({
+          subject: subject.slice(0, 255),
+          body_html: preview.html,
+          body_text: preview.text,
+          offer_id: offerId,
+          attach_pdf: attachPdf,
+        }),
       })
       id = res.id
     } catch (ex) {
@@ -1470,7 +1634,12 @@ function ThunderbirdButton({ preview, subject, blocked }: { preview: OfferPrevie
         if (watchRef.current !== ticket) return
         if (row.claimed_at) {
           setBusy(false)
-          setMsg({ ok: true, text: 'Thunderbird otworzył nowego maila z ofertą — wpisz adresata i wyślij stamtąd.' })
+          setMsg({
+            ok: true,
+            text: attachPdf
+              ? 'Thunderbird otworzył nowego maila z ofertą — sprawdź, czy PDF jest w załącznikach (dołącza go dodatek w wersji 1.35 lub nowszej; starszy dodatek go pominie — wtedy „Pobierz PDF” i przeciągnij plik do wiadomości). Wpisz adresata i wyślij stamtąd.'
+              : 'Thunderbird otworzył nowego maila z ofertą — wpisz adresata i wyślij stamtąd.',
+          })
           return
         }
       } catch {
@@ -1499,6 +1668,9 @@ function ThunderbirdButton({ preview, subject, blocked }: { preview: OfferPrevie
           {busy ? 'Czekam na Thunderbirda…' : 'Otwórz w Thunderbirdzie'}
         </button>
       )}
+      {addonReady && attachPdf && (
+        <span className="text-[11px] text-slate-500">PDF dołączy dodatek (wersja 1.35 lub nowsza)</span>
+      )}
       {msg && (
         <p className={`w-full ${msg.ok ? 'text-emerald-700' : 'text-red-700'}`} role="status">
           {msg.text}
@@ -1512,6 +1684,21 @@ function ThunderbirdButton({ preview, subject, blocked }: { preview: OfferPrevie
 
 function HistorySection({ offer }: { offer: Offer }) {
   const [shown, setShown] = useState<OfferSend | null>(null)
+  const [pdfBusy, setPdfBusy] = useState<number | null>(null)
+  const [pdfErr, setPdfErr] = useState('')
+
+  async function downloadPdf(send: OfferSend) {
+    setPdfBusy(send.id)
+    setPdfErr('')
+    try {
+      await downloadSentPdf(offer.id, send.id)
+    } catch (ex) {
+      setPdfErr(downloadErrorText(ex, 'Nie udało się pobrać wysłanego PDF.'))
+    } finally {
+      setPdfBusy(null)
+    }
+  }
+
   return (
     <div className="rounded-xl bg-white text-xs shadow-sm">
       <h2 className="app-card-title border-b border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-900">
@@ -1529,10 +1716,29 @@ function HistorySection({ offer }: { offer: Offer }) {
                   <span className="text-slate-700">
                     <b className="font-medium tabular-nums text-slate-900">{fmtDateTime(s.created_at)}</b> · wysłano {sent} z{' '}
                     {s.recipients.length}
+                    {s.delivery && s.delivery !== 'body' && (
+                      <span className="text-slate-500">
+                        {' '}
+                        · {s.delivery === 'pdf' ? 'tylko PDF w załączniku' : 'treść maila i PDF'}
+                      </span>
+                    )}
                   </span>
-                  <button type="button" className={BTN_SM} onClick={() => setShown(s)}>
-                    Pokaż wysłaną
-                  </button>
+                  <span className="flex flex-wrap gap-1.5">
+                    {s.has_pdf && (
+                      <button
+                        type="button"
+                        className={BTN_SM}
+                        disabled={pdfBusy !== null}
+                        title="Plik PDF dokładnie taki, jaki dostali klienci"
+                        onClick={() => void downloadPdf(s)}
+                      >
+                        {pdfBusy === s.id ? 'Pobieram…' : 'Pobierz wysłany PDF'}
+                      </button>
+                    )}
+                    <button type="button" className={BTN_SM} onClick={() => setShown(s)}>
+                      Pokaż wysłaną
+                    </button>
+                  </span>
                 </div>
                 <RecipientList rows={s.recipients} />
               </li>
@@ -1540,8 +1746,14 @@ function HistorySection({ offer }: { offer: Offer }) {
           })}
         </ul>
       )}
+      {pdfErr && (
+        <div className="px-4 pt-2">
+          <ErrorBar message={pdfErr} onClose={() => setPdfErr('')} />
+        </div>
+      )}
       <p className="px-4 py-2 text-[11px] text-slate-500">
-        „Pokaż wysłaną” otwiera dokładnie ten mail, który dostali klienci — także gdy oferta zmieniła się później.
+        „Pokaż wysłaną” otwiera dokładnie ten mail, który dostali klienci — także gdy oferta zmieniła się później. „Pobierz
+        wysłany PDF” (przy wysyłce z PDF) pobiera plik, który był w załączniku.
       </p>
       {shown && <SentMailModal offerId={offer.id} send={shown} onClose={() => setShown(null)} />}
     </div>

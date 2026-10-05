@@ -16,13 +16,15 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
 /**
  * Wysyłka oferty ze skrzynki autora od razu w żądaniu (najwyżej offers.max_recipients adresów): osobny mail do
  * każdego adresu, ten sam HTML zapisany przed wysyłką (OfferSend), wynik każdego adresu (OfferRecipient), na końcu
- * kopia „[Kopia]” do nadawcy. Błąd skrzynki nadawcy przerywa wysyłkę — reszta adresów „pominięta”, skrzynka
+ * kopia „[Kopia]” do nadawcy. Forma „pdf”/„both”: jeden PDF (OfferPdf) w załączniku każdego maila i kopii, zapisany
+ * przy wysyłce (pdf_path). Błąd skrzynki nadawcy przerywa wysyłkę — reszta adresów „pominięta”, skrzynka
  * odpoczywa jak w kampaniach (CampaignSender::pause). Błędy walidacji: ValidationException (422). Nie final.
  */
 class OfferSender
@@ -44,6 +46,7 @@ class OfferSender
     public function __construct(
         private readonly OfferRenderer $renderer,
         private readonly CampaignSender $campaigns,
+        private readonly OfferPdf $pdf,
     ) {}
 
     /**
@@ -67,6 +70,27 @@ class OfferSender
     {
         return self::mailItems($items)->filter(static fn (OfferItem $i): bool => $i->price_net === null)
             ->map(static fn (OfferItem $i): int => (int) $i->id)->values()->all();
+    }
+
+    /**
+     * Wysłać i pobrać PDF można ofertę z co najmniej jedną pozycją w mailu i z ceną każdej z nich — inaczej 422.
+     *
+     * @param  Collection<int, OfferItem>  $items
+     * @param  string  $when  koniec komunikatu, np. „przed wysyłką”
+     */
+    public static function assertItemsReady(Collection $items, string $when): void
+    {
+        if (self::mailItems($items)->isEmpty()) {
+            throw ValidationException::withMessages(['items' => ['Dodaj do oferty co najmniej jeden produkt.']]);
+        }
+        $missing = self::missingPrices($items);
+        if ($missing !== []) {
+            throw ValidationException::withMessages(['items' => [
+                count($missing) === 1
+                    ? 'Jedna pozycja nie ma ceny — uzupełnij ją '.$when.'.'
+                    : 'Pozycje bez ceny: '.count($missing).' — uzupełnij je '.$when.'.',
+            ]]);
+        }
     }
 
     /**
@@ -99,18 +123,7 @@ class OfferSender
         }
         $emails = $this->validEmails($emails);
 
-        $items = $offer->items()->get();
-        if (self::mailItems($items)->isEmpty()) {
-            throw ValidationException::withMessages(['items' => ['Dodaj do oferty co najmniej jeden produkt.']]);
-        }
-        $missing = self::missingPrices($items);
-        if ($missing !== []) {
-            throw ValidationException::withMessages(['items' => [
-                count($missing) === 1
-                    ? 'Jedna pozycja nie ma ceny — uzupełnij ją przed wysyłką.'
-                    : 'Pozycje bez ceny: '.count($missing).' — uzupełnij je przed wysyłką.',
-            ]]);
-        }
+        self::assertItemsReady($offer->items()->get(), 'przed wysyłką');
         if (trim((string) $offer->subject) === '') {
             throw ValidationException::withMessages(['subject' => ['Wpisz temat maila.']]);
         }
@@ -137,14 +150,23 @@ class OfferSender
             throw ValidationException::withMessages(['offer' => ['Brak publicznego adresu aplikacji (CAMPAIGNS_PUBLIC_URL) — zdjęcia i baner nie dojdą do klienta.']]);
         }
 
-        // jeden render dla wszystkich adresów; zapis przed wysyłką — nawet przerwane żądanie zostawia ślad, co wyszło
-        $mail = $this->renderer->render($offer, $actor);
+        // jeden render dla wszystkich adresów (forma zapisana przy ofercie); PDF też raz — ten sam plik dostaje każdy
+        // klient i kopia dla nadawcy. Zapis przed wysyłką — nawet przerwane żądanie zostawia ślad, co wyszło.
+        $delivery = in_array($offer->delivery, Offer::DELIVERIES, true) ? (string) $offer->delivery : 'body';
+        $mail = $this->renderer->render($offer, $actor, null, true, $delivery);
+        $pdf = $delivery === 'body' ? null : $this->pdf->render($offer, $actor);
         $send = OfferSend::query()->create([
             'offer_id' => $offer->id,
             'subject' => mb_substr($mail['subject'], 0, 255),
             'html' => $mail['html'],
             'text' => $mail['text'],
+            'delivery' => $delivery,
         ]);
+        $attachments = [];
+        if ($pdf !== null) {
+            $this->storePdf($send, $pdf);
+            $attachments[] = ['data' => $pdf, 'name' => OfferPdf::filename($offer), 'mime' => 'application/pdf'];
+        }
 
         $results = [];
         $senderError = null;
@@ -156,7 +178,7 @@ class OfferSender
             }
             try {
                 // osobny mail na adres, bez nagłówków wypisu — to oferta do klienta, nie mailing
-                $messageId = $this->campaigns->deliver($account, $email, null, $mail['subject'], $mail['html'], $mail['text']);
+                $messageId = $this->campaigns->deliver($account, $email, null, $mail['subject'], $mail['html'], $mail['text'], null, $attachments);
             } catch (Throwable $e) {
                 $error = $this->campaigns->errorText($e, $account);
                 if ($this->campaigns->isSenderError($e)) {
@@ -178,7 +200,7 @@ class OfferSender
             $offer->forceFill(['last_sent_at' => Carbon::now()])->save();
             $offer->timestamps = true;
             if ($senderError === null) {
-                $this->copyToSender($offer, $actor, $account, array_column($sent, 'email'));
+                $this->copyToSender($offer, $actor, $account, array_column($sent, 'email'), $delivery, $attachments);
             }
         }
 
@@ -262,15 +284,37 @@ class OfferSender
     }
 
     /**
-     * Kopia dla nadawcy z listą adresów, do których wyszło — jej błąd nie zmienia wyników wysyłki.
+     * PDF wysyłki na dysku local (offer-sends/{oferta}/{wysyłka}.pdf) — dokładnie ten plik dostali klienci. Plik zostaje
+     * po usunięciu oferty (kaskada kasuje tylko wiersze). Bez zapisu nie wysyłamy: historia musiałaby kłamać.
+     */
+    private function storePdf(OfferSend $send, string $pdf): void
+    {
+        $path = 'offer-sends/'.$send->offer_id.'/'.$send->id.'.pdf';
+        try {
+            $stored = Storage::disk('local')->put($path, $pdf);
+        } catch (Throwable $e) {
+            Log::error('Oferta: zapis PDF wysyłki nie powiódł się', ['offer' => $send->offer_id, 'error' => $e->getMessage()]);
+            $stored = false;
+        }
+        if ($stored === false) {
+            $send->delete();
+            throw ValidationException::withMessages(['offer' => ['Nie udało się zapisać pliku PDF oferty — spróbuj ponownie za chwilę.']]);
+        }
+        $send->forceFill(['pdf_path' => $path])->save();
+    }
+
+    /**
+     * Kopia dla nadawcy z listą adresów, do których wyszło (w tej samej formie i z tym samym PDF co klienci) — jej błąd
+     * nie zmienia wyników wysyłki.
      *
      * @param  list<string>  $sentTo
+     * @param  list<array{data: string, name: string, mime: string}>  $attachments
      */
-    private function copyToSender(Offer $offer, User $actor, UserMailAccount $account, array $sentTo): void
+    private function copyToSender(Offer $offer, User $actor, UserMailAccount $account, array $sentTo, string $delivery, array $attachments): void
     {
         try {
-            $copy = $this->renderer->render($offer, $actor, 'Kopia dla Ciebie — wysłano do: '.implode(', ', $sentTo));
-            $this->campaigns->deliver($account, (string) $account->from_address, (string) $account->from_name, '[Kopia] '.$copy['subject'], $copy['html'], $copy['text']);
+            $copy = $this->renderer->render($offer, $actor, 'Kopia dla Ciebie — wysłano do: '.implode(', ', $sentTo), true, $delivery);
+            $this->campaigns->deliver($account, (string) $account->from_address, (string) $account->from_name, '[Kopia] '.$copy['subject'], $copy['html'], $copy['text'], null, $attachments);
         } catch (Throwable $e) {
             Log::warning('Oferta: kopia do nadawcy nie wyszła', ['offer' => $offer->id, 'error' => $this->campaigns->errorText($e, $account)]);
         }
