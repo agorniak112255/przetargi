@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
   fetchSystemGaps,
+  fetchSystemQueues,
   fetchSystemStatus,
   muteSystemAlert,
   unmuteSystemAlert,
   type SystemAlertRow,
   type SystemGapKind,
   type SystemGapRow,
+  type SystemQueues,
   type SystemStatus,
 } from '../lib/api'
 
@@ -154,6 +156,132 @@ function modelTile(s: SystemStatus) {
     .filter(Boolean)
     .join(' · ')
   return <Tile label="Dopasowywanie produktów" value={down ? 'nie odpowiada' : 'działa'} tone={down ? 'bad' : unavailable > 0 ? 'warn' : 'ok'} sub={sub} />
+}
+
+const QUEUES_REFRESH_MS = 10_000
+
+/**
+ * „Kolejki teraz”: kto zajmuje pracowników każdej kolejki i czyja praca czeka. 05.10.2026 opisy cennika Ansella stały
+ * 10 minut za 530 tłumaczeniami kart SIR w tej samej kolejce, a w panelu nie było tego widać.
+ */
+function QueuesCard() {
+  const [data, setData] = useState<SystemQueues | null>(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const next = await fetchSystemQueues()
+        if (alive) {
+          setData(next)
+          setErr('')
+        }
+      } catch (ex) {
+        if (alive) setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać kolejek.')
+      }
+    }
+    void load()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load()
+    }, QUEUES_REFRESH_MS)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const busy = (data?.queues ?? []).filter((q) => q.running + q.waiting + q.delayed > 0)
+  const idle = (data?.queues ?? []).filter((q) => q.running + q.waiting + q.delayed === 0)
+
+  return (
+    <Card title="Kolejki teraz" lead={`Co robią pracownicy kolejek i co czeka. Odświeżanie co 10 sekund${data ? ` · sprawdzono ${shortWhen(data.checked_at)}` : ''}.`}>
+      {err && <p className="mb-2 text-sm text-red-600">{err}</p>}
+      {!data && !err && <p className="text-xs text-slate-500">Ładowanie…</p>}
+      {data && (
+        <div className="space-y-3">
+          {busy.length === 0 && <p className="text-sm text-emerald-700">Wszystkie kolejki są puste — nic nie czeka.</p>}
+          {busy.map((q) => {
+            const runningTypes = q.jobs.filter((j) => j.running > 0).map((j) => j.label)
+            const blocked = q.jobs.filter((j) => j.running === 0 && j.waiting > 0)
+            return (
+              <div key={q.key} className="rounded-lg border border-slate-200 p-3">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="font-medium text-slate-800">{q.label}</span>
+                  <span className="text-sm text-slate-700 tabular-nums">
+                    w trakcie <b>{nf(q.running)}</b> · czeka <b>{nf(q.waiting)}</b>
+                    {q.delayed > 0 && <> · odłożone na później {nf(q.delayed)}</>}
+                  </span>
+                  {q.oldest_wait_seconds !== null && <span className="text-xs text-slate-500">najdłużej czeka {duration(q.oldest_wait_seconds)}</span>}
+                  {q.over_timeout > 0 && (
+                    <Chip tone="warn" title="Zadanie trwa dłużej niż jego limit czasu — pracownik zostaje przerwany, a zadanie samo wraca do kolejki.">
+                      {nf(q.over_timeout)} ponad limit czasu
+                    </Chip>
+                  )}
+                </div>
+                <ul className="mt-2 text-[13px]">
+                  {q.jobs.map((j) => (
+                    <li key={j.type} className="flex flex-wrap items-baseline gap-x-2 border-b border-slate-100 py-1 last:border-0">
+                      <span className="min-w-0 text-slate-800">{j.label}</span>
+                      <span className="text-slate-600 tabular-nums">
+                        {j.running > 0 ? `${nf(j.running)} w trakcie` : 'nic w trakcie'}
+                        {j.waiting > 0 ? `, ${nf(j.waiting)} czeka` : ''}
+                      </span>
+                      {j.sources.length > 0 && (
+                        <span className="text-xs text-slate-500">{j.sources.map((s) => `${s.label} ${nf(s.count)}`).join(' · ')}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {blocked.length > 0 && runningTypes.length > 0 && (
+                  <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                    Czeka: {blocked.map((j) => `${j.label} (${nf(j.waiting)})`).join(', ')} — wszyscy pracownicy tej kolejki zajmują się teraz:{' '}
+                    {runningTypes.join(', ')}.
+                  </p>
+                )}
+                {q.sampled && <p className="mt-1 text-xs text-slate-400">Rodzaje zadań policzone z pierwszych 5 000 w kolejce.</p>}
+              </div>
+            )
+          })}
+          {idle.length > 0 && <p className="text-xs text-slate-500">Puste: {idle.map((q) => q.label).join(', ')}.</p>}
+
+          {data.batches.length > 0 && (
+            <div>
+              <h3 className="mb-1 text-sm font-semibold text-slate-700">Pobieranie opisów w toku</h3>
+              <ul className="text-[13px]">
+                {data.batches.map((b) => (
+                  <li key={b.id} className="flex flex-wrap items-baseline gap-x-2 border-b border-slate-100 py-1 last:border-0">
+                    <span className="font-medium text-slate-800">#{b.id}</span>
+                    <span className="tabular-nums">
+                      gotowe {nf(b.done)} z {nf(b.total)}
+                      {b.failed > 0 ? `, błędów ${nf(b.failed)}` : ''}
+                    </span>
+                    {b.message && <span className="text-xs text-slate-500">{b.message}</span>}
+                    {b.created_at && <span className="text-xs text-slate-400">od {shortWhen(b.created_at)}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {data.failed_24h.length > 0 && (
+            <div>
+              <h3 className="mb-1 text-sm font-semibold text-slate-700">Nieudane zadania w ostatniej dobie</h3>
+              <ul className="text-[13px]">
+                {data.failed_24h.map((f) => (
+                  <li key={f.type} className="border-b border-slate-100 py-1 last:border-0">
+                    <span className="text-slate-800">{f.label}</span> <b className="tabular-nums">{nf(f.count)}</b>
+                    {f.last_at && <span className="text-xs text-slate-500"> · ostatnie {shortWhen(f.last_at)}</span>}
+                    {f.last_error && <div className="truncate text-xs text-slate-500" title={f.last_error}>{f.last_error}</div>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  )
 }
 
 function AlertsCard({ alerts, onChanged }: { alerts: AlertRow[]; onChanged: (a: AlertRow) => void }) {
@@ -427,6 +555,8 @@ export function AdminSystemStatus() {
             {queueTile(data)}
             {modelTile(data)}
           </div>
+
+          <QueuesCard />
 
           <AlertsCard
             alerts={data.alerts as AlertRow[]}

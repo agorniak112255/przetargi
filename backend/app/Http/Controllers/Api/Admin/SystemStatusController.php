@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\SystemAlert;
+use App\Services\System\QueueSnapshot;
 use App\Services\System\SystemAlertService;
 use App\Services\System\SystemGaps;
 use App\Services\System\SystemStatusService;
@@ -13,7 +14,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * Administracja › Stan systemu (GET /admin/system-status, …/gaps/{kind}, POST /admin/system-alerts/{alert}/mute|unmute).
+ * Administracja › Stan systemu (GET /admin/system-status, …/gaps/{kind}, …/queues, POST /admin/system-alerts/{alert}/mute|unmute).
  * Trasy: admin.access + admin.system.view (routes/api.php).
  */
 class SystemStatusController extends Controller
@@ -30,6 +31,12 @@ class SystemStatusController extends Controller
     public function show(Request $request): JsonResponse
     {
         return response()->json($this->status->build());
+    }
+
+    /** „Kolejki teraz” — osobno od reszty ekranu, bo odświeżane co kilka sekund. */
+    public function queues(QueueSnapshot $queues): JsonResponse
+    {
+        return response()->json($queues->build());
     }
 
     public function gaps(Request $request, string $kind): JsonResponse

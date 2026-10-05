@@ -415,6 +415,32 @@ export function fetchSystemStatus(): Promise<SystemStatus> {
   return api<SystemStatus>('/admin/system-status')
 }
 
+/** Stan systemu › „Kolejki teraz” (QueueSnapshot): kto zajmuje pracowników kolejek i co czeka. */
+export type SystemQueues = {
+  checked_at: string
+  queues: {
+    key: string
+    label: string
+    running: number
+    waiting: number
+    /** zadania odłożone na później (ponowienie z opóźnieniem) */
+    delayed: number
+    oldest_wait_seconds: number | null
+    longest_running_seconds: number | null
+    /** w trakcie dłużej niż limit zadania — pracownik został przerwany, zadanie wróci do kolejki */
+    over_timeout: number
+    jobs: { type: string; label: string; running: number; waiting: number; sources: { label: string; count: number }[] }[]
+    /** rodzaje policzone z części zadań (bardzo długa kolejka) */
+    sampled: boolean
+  }[]
+  batches: { id: number; status: string; total: number; done: number; failed: number; message: string | null; current_sku: string | null; created_at: string | null }[]
+  failed_24h: { type: string; label: string; count: number; last_at: string | null; last_error: string }[]
+}
+
+export function fetchSystemQueues(): Promise<SystemQueues> {
+  return api<SystemQueues>('/admin/system-status/queues')
+}
+
 export function fetchSystemGaps(kind: SystemGapKind): Promise<SystemGapRow[]> {
   return api<{ data: SystemGapRow[] }>(`/admin/system-status/gaps/${kind}`).then((r) => r.data)
 }

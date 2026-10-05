@@ -690,6 +690,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         // Stan systemu: przebiegi zadań, alerty, dane do uzupełnienia
         Route::middleware('permission:admin.system.view')->group(function (): void {
             Route::get('/system-status', [AdminSystemStatusController::class, 'show']);
+            Route::get('/system-status/queues', [AdminSystemStatusController::class, 'queues']);
             Route::get('/system-status/gaps/{kind}', [AdminSystemStatusController::class, 'gaps'])
                 ->whereIn('kind', AdminSystemStatusController::GAP_KINDS);
             Route::post('/system-alerts/{alert}/mute', [AdminSystemStatusController::class, 'mute'])->whereNumber('alert');
