@@ -2310,7 +2310,7 @@ final class ProductPageFetcher
 
     private function isJunkImageUrl(string $url): bool
     {
-        if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url)) {
+        if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url) || ProductImageDownloader::isSiteIdentityGraphicUrl($url)) {
             return true;
         }
         $u = mb_strtolower($url);

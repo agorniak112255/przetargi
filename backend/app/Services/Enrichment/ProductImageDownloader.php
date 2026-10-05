@@ -278,6 +278,19 @@ final class ProductImageDownloader
         return preg_match('#/(?:glove-size-finder|pim/taxonomy|icon|sustainability)/#', $path) === 1;
     }
 
+    /**
+     * Logo albo ikona witryny, nie zdjęcie wyrobu: WordPress zapisuje przycięte logo i ikonę witryny jako „cropped-…”
+     * (portolana.pl: cropped-photo_2025-07-14_18-39-36-Edited-1.png jako og:image karty Ringers 259, 05.10.2026),
+     * ikonę także jako „site-icon…”. Patrzymy tylko na nazwę pliku — „cropped” w środku nazwy (zdjęcie przycięte
+     * przez sklep) zostaje.
+     */
+    public static function isSiteIdentityGraphicUrl(string $url): bool
+    {
+        $file = mb_strtolower(urldecode(basename((string) (parse_url($url, PHP_URL_PATH) ?? ''))));
+
+        return str_starts_with($file, 'cropped-') || str_contains($file, 'site-icon');
+    }
+
     /** Zdjęcie wyrobu w użyciu („ringers-074-chemical-application---examining-barrels.ashx”), nie packshot. */
     public static function isApplicationShotUrl(string $url): bool
     {

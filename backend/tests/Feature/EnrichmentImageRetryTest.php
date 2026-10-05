@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\Product;
 use App\Models\ProductEnrichmentCache;
+use App\Models\ProductImage;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\HybridWebSearchService;
@@ -95,6 +96,27 @@ final class EnrichmentImageRetryTest extends TestCase
         $this->assertNull($product->enrichment_error);
         $steps = array_column((array) ($product->enrichment_trace['steps'] ?? []), 'm');
         $this->assertContains('zdjęcie z karty sklepu (sklepy bez strony producenta) — plik producenta zablokowany', $steps);
+    }
+
+    /** 05.10.2026: jeden obrazek ze sklepu trafił na Ringers R169SD i R840VP — plik innego modelu nie jest dowodem. */
+    public function test_shop_image_already_on_another_model_card_is_not_taken(): void
+    {
+        $other = Product::query()->create([
+            'sku' => '065-13', 'name' => 'Rękawice RINGERS R065', 'manufacturer' => 'Ansell',
+            'catalog_price_net' => 20, 'purchase_price' => 20, 'stock' => 1,
+        ]);
+        ProductImage::query()->create([
+            'product_id' => $other->id, 'path' => 'products/'.$other->id.'/a.jpg', 'source_url' => self::SHOP_IMAGE,
+            'is_primary' => true, 'sort_order' => 0, 'checksum' => str_repeat('c', 64),
+        ]);
+        $this->shopCards = static fn (): array => [['url' => self::SHOP, 'title' => 'Rękawice Ansell RINGERS R074', 'snippet' => '']];
+
+        $product = $this->runEnrichment(Http::response(
+            '<html><script src="/_Incapsula_Resource?SWJIYLWA=1"></script></html>', 200, ['Content-Type' => 'text/html']
+        ));
+
+        $this->assertSame(0, $product->images()->count());
+        $this->assertSame([self::IMAGE], $product->enrichment_payload[ProductImageRetry::PAYLOAD_KEY]['urls'] ?? null, 'czeka na plik producenta');
     }
 
     /** Brak pliku (404) to nie zapora — sklepów po zdjęcie nie dopytujemy. */

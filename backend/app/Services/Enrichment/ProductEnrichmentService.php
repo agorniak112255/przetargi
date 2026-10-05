@@ -1953,7 +1953,7 @@ final class ProductEnrichmentService
             if ($candidates === []) {
                 continue;
             }
-            $saved = $this->imageFromCandidateCards($product, $candidates);
+            $saved = $this->imageFromCandidateCards($product, $candidates, strict: $sourceRefused);
             if ($saved !== []) {
                 if ($sourceRefused) {
                     $this->attemptLog()->add(
@@ -2010,10 +2010,15 @@ final class ProductEnrichmentService
     }
 
     /**
+     * $strict — zdjęcie zamiast zablokowanego pliku producenta (sourceRefused). 05.10.2026 na ok. 100 takich zdjęć
+     * cztery były cudze: logo witryny i PU610 jako og:image potwierdzonej karty (ProductImageCandidateVerifier,
+     * trustStructured), 08-354 przy 08352 (imageUrlNamesForeignGloveModel — dla wszystkich dróg) i jeden plik
+     * na Ringers R169SD i R840VP (imageOnAnotherModelCard).
+     *
      * @param  list<array{url: string, title: string, snippet: string}>  $candidates
      * @return list<object>
      */
-    private function imageFromCandidateCards(Product $product, array $candidates): array
+    private function imageFromCandidateCards(Product $product, array $candidates, bool $strict = false): array
     {
         foreach ($candidates as $row) {
             $fetched = $this->pages->fetch([$row], (string) $product->sku, 1, [], $product);
@@ -2026,10 +2031,11 @@ final class ProductEnrichmentService
                 $fetched['image_urls'],
                 $pages,
                 3,
-                $fetched['trusted_image_urls']
+                $fetched['trusted_image_urls'],
+                trustStructured: ! $strict,
             );
             $hadImages = $fetched['image_urls'] !== [] || $fetched['trusted_image_urls'] !== [];
-            if ($urls === [] && ! $hadImages) {
+            if ($urls === [] && ! $hadImages && ! $strict) {
                 $urls = $this->cardImagesAfterConfirmation(
                     $fetched['trusted_image_urls'],
                     $fetched['image_urls'],
@@ -2037,23 +2043,52 @@ final class ProductEnrichmentService
                     $product
                 );
             }
-            $saved = $this->images->downloadMany(
+            $picked = $this->pickPrimaryImageUrls(
+                $urls,
+                [],
+                (string) $product->sku,
+                (string) $product->name,
                 $product,
-                $this->pickPrimaryImageUrls(
-                    $urls,
-                    [],
-                    (string) $product->sku,
-                    (string) $product->name,
-                    $product,
-                ),
-                1
             );
+            if ($strict) {
+                $picked = array_values(array_filter(
+                    $picked,
+                    fn (string $url): bool => ! $this->imageOnAnotherModelCard($url, $product)
+                ));
+            }
+            $saved = $this->images->downloadMany($product, $picked, 1);
             if ($saved !== []) {
                 return $saved;
             }
         }
 
         return [];
+    }
+
+    /**
+     * Ten sam plik ze sklepu stoi już na karcie innego modelu (05.10.2026: jeden obrazek imagedelivery.net na Ringers
+     * R169SD i R840VP) — sklep pokazuje wspólne zdjęcie albo nie to, więc nie jest dowodem dla żadnej z kart. Warianty
+     * rozmiaru i szerokości tego samego modelu (HyFlex 11250 N/W/XW, 11-250) mogą mieć wspólne zdjęcie.
+     */
+    private function imageOnAnotherModelCard(string $url, Product $product): bool
+    {
+        $keys = array_values(array_unique([$url, ProductImageDownloader::preferFullSizeUrl($url)]));
+        $others = ProductImage::query()
+            ->whereIn('source_url', $keys)
+            ->where('product_id', '!=', $product->id)
+            ->distinct()
+            ->limit(20)
+            ->pluck('product_id');
+        if ($others->isEmpty()) {
+            return false;
+        }
+        foreach (Product::query()->whereKey($others)->get() as $other) {
+            if (! $this->identity->sameGloveModel($product, $other)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2083,14 +2118,23 @@ final class ProductEnrichmentService
         if ($product->trustedShopUrl() !== null) {
             return true;
         }
-        foreach ($pages as $page) {
-            $hay = mb_strtolower(((string) ($page['url'] ?? '')).' '.((string) ($page['title'] ?? '')));
-            if ($hay !== ' ' && $this->identity->hayHasProductCode($hay, $product)) {
-                return true;
-            }
-        }
 
-        return false;
+        return $this->codedCardPages($pages, $product) !== [];
+    }
+
+    /**
+     * Karty, które niosą kod wyrobu w adresie albo tytule (jak cardsCarryProductCode).
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return list<array<string, mixed>>
+     */
+    private function codedCardPages(array $pages, Product $product): array
+    {
+        return array_values(array_filter($pages, function (array $page) use ($product): bool {
+            $hay = mb_strtolower(((string) ($page['url'] ?? '')).' '.((string) ($page['title'] ?? '')));
+
+            return $hay !== ' ' && $this->identity->hayHasProductCode($hay, $product);
+        }));
     }
 
     /**
@@ -2133,6 +2177,14 @@ final class ProductEnrichmentService
     {
         $trusted = is_array($fetched['trusted_image_urls'] ?? null) ? $fetched['trusted_image_urls'] : [];
         $all = is_array($fetched['image_urls'] ?? null) ? $fetched['image_urls'] : [];
+        if ($product->trustedShopUrl() === null) {
+            // Tylko zdjęcia kart z kodem wyrobu — nie wspólna pula wszystkich pobranych stron. 05.10.2026 kod dała
+            // karta labproinc.com „klngd-a40-overboot-white-univ-98800”, a zdjęcie przyszło z pobranej obok strony
+            // icd.pl „szybki do przyłbic ESAB Savage A40” (karta KleenGuard A40 #8662 dostała szybkę spawalniczą).
+            $own = $this->imagesFromDescriptionPages($this->codedCardPages($pages, $product));
+            $trusted = $own['trusted'];
+            $all = $own['all'];
+        }
         if ($trusted === [] && $all === []) {
             return [];
         }
@@ -4875,7 +4927,7 @@ final class ProductEnrichmentService
 
     private function isJunkImageUrl(string $url): bool
     {
-        if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url)) {
+        if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url) || ProductImageDownloader::isSiteIdentityGraphicUrl($url)) {
             return true;
         }
         $u = mb_strtolower($url);

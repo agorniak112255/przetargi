@@ -162,6 +162,47 @@ final class ProductImageAuditCommandTest extends TestCase
         return $product;
     }
 
+    /** 05.10.2026: zdjęcia ze sklepów za zablokowany plik ansell.com — inny model w nazwie pliku i logo witryny. */
+    public function test_foreign_glove_model_and_site_logo_go_and_unclear_cases_are_only_listed(): void
+    {
+        $alphatec = $this->ansell('8352100', 'AlphaTec 08352');
+        $wrongModel = $this->image($alphatec, 'https://cas-technik.eu/media/75/1c/80/1689063534/08-354tuseouxsipd4p.jpg?ts=1756127514', null, 0);
+        $ringers = $this->ansell('259-13', 'Ringers 259');
+        $logo = $this->image($ringers, 'https://portolana.pl/wp-content/uploads/2025/07/cropped-photo_2025-07-14_18-39-36-Edited-1.png', null, 0);
+        // ten sam plik na dwóch modelach — nie wiadomo, który jest właściwy
+        $shared = 'https://imagedelivery.net/ICWTp6FWPGokq8hKKaA1Qg/62c65932-d041-4246-2dd9-8fca64eb0800/large';
+        $r169 = $this->image($this->ansell('R169SD-13', 'Ringers 169SD'), $shared, null, 0);
+        $r840 = $this->image($this->ansell('840-12VP', 'Ringers R840VP'), $shared, null, 0);
+        // warianty szerokości tego samego modelu dzielą zdjęcie — to w porządku
+        $sizeShared = 'https://bhp-sklep.com.pl/wp-content/uploads/2023/11/01180035-17286.png';
+        $this->image($this->ansell('11250160-N', 'HyFlex 11250 NARROW NO THUMB S'), $sizeShared, null, 0);
+        $this->image($this->ansell('11250160-W', 'HyFlex 11250 WIDE NO THUMB SLO'), $sizeShared, null, 0);
+        // karta bez opisu ze zdjęciem, którego adres nie nazywa wyrobu
+        $kleenguard = $this->ansell('36920', 'KLNGD A10 Accessories Bouffant Wht/Grn L');
+        $kleenguard->forceFill(['enrichment_status' => Product::ENRICHMENT_MANUAL])->save();
+        $game = $this->image($kleenguard, 'https://agamecdn.com/assets/a10/og_image-0235b0fe.jpg', null, 0);
+
+        $this->artisan('products:images-audit --manufacturer=Ansell')
+            ->expectsOutputToContain('Obce zdjęcie z sieci:    2')
+            ->expectsOutputToContain('Do przejrzenia (--apply ich nie usuwa): 3 wierszy')
+            ->doesntExpectOutputToContain('11250160-N  ←')
+            ->assertSuccessful();
+
+        $this->artisan('products:images-audit --manufacturer=Ansell --apply')->assertSuccessful();
+
+        $this->assertNull(ProductImage::query()->find($wrongModel->id));
+        $this->assertNull(ProductImage::query()->find($logo->id));
+        foreach ([$r169, $r840, $game] as $kept) {
+            $this->assertNotNull(ProductImage::query()->find($kept->id), 'lista do przejrzenia nie jest kasowana');
+        }
+        $this->assertSame(2, ProductImageRejection::query()->count());
+    }
+
+    private function ansell(string $sku, string $name): Product
+    {
+        return Product::query()->create(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Ansell']);
+    }
+
     private function product(): Product
     {
         return Product::query()->create([

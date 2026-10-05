@@ -34,6 +34,11 @@ final class ProductImageCandidateVerifier
      * Najpierw zachowuje kandydatów jednoznacznych po SKU lub wskazanych przez
      * Product.image/og:image dopasowanej karty. Pozostałe ocenia AI Vision.
      *
+     * $trustStructured = false (zdjęcie z karty sklepu, gdy plik producenta zablokowany): og:image / JSON-LD bez kodu
+     * wyrobu w adresie nie przechodzi bez modelu wizyjnego, a bez jego odpowiedzi nie przechodzi wcale. 05.10.2026 tak
+     * weszły logo witryny portolana.pl na Ringers 259 i rękawica PU610 na HyFlex 11-135 — strona sklepu potwierdzała
+     * wyrób, a jej główny obrazek nie był jego zdjęciem. Brak zdjęcia wraca do ponowienia, złe zostaje na karcie.
+     *
      * @param  list<string>  $urls
      * @param  list<array{url: string, text: string}>  $pages
      * @param  list<string>  $trustedUrls
@@ -45,6 +50,7 @@ final class ProductImageCandidateVerifier
         array $pages,
         int $max = 1,
         array $trustedUrls = [],
+        bool $trustStructured = true,
     ): array {
         $max = max(1, min(5, $max));
         $urls = array_values(array_unique(array_filter(
@@ -84,7 +90,7 @@ final class ProductImageCandidateVerifier
             if (! $this->isPotentialProductImage($url)) {
                 continue;
             }
-            if (isset($trusted[mb_strtolower($url)])
+            if ($trustStructured && isset($trusted[mb_strtolower($url)])
                 && $this->trustedImageIsSafe($url, $product, $pages)
                 && $this->trustedImageMatchesVariant($url, $product)) {
                 $trustedHits[] = $url;
@@ -117,7 +123,7 @@ final class ProductImageCandidateVerifier
             }
         }
         if ($loaded === []) {
-            return $this->finishSelection($auto, $trusted, $urls, $max, $product, $pages);
+            return $this->finishSelection($auto, $trustStructured ? $trusted : [], $urls, $max, $product, $pages);
         }
 
         $expectedColor = $this->identity->expectedColorFamily($product);
@@ -142,7 +148,7 @@ final class ProductImageCandidateVerifier
                 'error' => $e->getMessage(),
             ]);
 
-            return $this->finishSelection($auto, $trusted, $urls, $max, $product, $pages);
+            return $this->finishSelection($auto, $trustStructured ? $trusted : [], $urls, $max, $product, $pages);
         }
 
         $verified = [];
@@ -215,7 +221,8 @@ final class ProductImageCandidateVerifier
         return $this->identity->imageUrlMentionsForeignBrand($url, $product)
             || $this->identity->imageUrlHasForeignType($url, $product)
             || $this->identity->imageUrlHasForeignVariantCode($url, $product)
-            || $this->identity->imageUrlNamesAnotherFootwearVariant($url, $product);
+            || $this->identity->imageUrlNamesAnotherFootwearVariant($url, $product)
+            || $this->identity->imageUrlNamesForeignGloveModel($url, $product);
     }
 
     /**
@@ -377,6 +384,11 @@ final class ProductImageCandidateVerifier
         }
 
         $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+        // WordPress: logo i ikona witryny zapisuje jako „cropped-…” (portolana.pl: cropped-photo_2025-07-14….png
+        // jako og:image karty Ringers 259, 05.10.2026), ikonę także jako „site-icon”.
+        if (ProductImageDownloader::isSiteIdentityGraphicUrl($url)) {
+            return false;
+        }
 
         return preg_match(
             '/(?:^|[\/_.-])(logo|icon|sprite|favicon|banner|newsletter|payment|shipping|avatar|flag|menu|seo)(?:[\/_.-]|$)/u',

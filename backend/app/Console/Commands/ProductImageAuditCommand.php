@@ -36,6 +36,14 @@ use Illuminate\Support\Collection;
  *   tylko wtedy, gdy producent ich nie ma — 207 kart Bolle z importu pliku miało zdjęcia ze specshop.pl,
  *   e-militaria.eu i innych, często innego wariantu. Ten sam ślad odrzucenia.
  *
+ * - zdjęcie z sieci z innym modelem rękawicy Ansella w nazwie pliku („08-354….jpg” na AlphaTec 08352) albo logo
+ *   i ikona witryny WordPress („cropped-…”, „site-icon”) — 05.10.2026, zdjęcia ze sklepów za zablokowany plik ansell.com.
+ *
+ * Osobna lista „do przejrzenia” (nigdy nie kasowana przez --apply — reguła nie wie, która karta ma rację):
+ * - ten sam plik z sieci na kartach różnych modeli (Ringers R169SD i R840VP z jednym obrazkiem),
+ * - zdjęcie z sieci bez kodu wyrobu w adresie na karcie bez opisu („wpisz ręcznie” / błąd): KleenGuard A10 z obrazkiem
+ *   gry „A10” z agamecdn.com, A40 z szybką do przyłbicy ESAB.
+ *
  * Zdjęcia dostawców nie są ruszane nigdy: to, co dostawca pokazuje przy swojej karcie, jest jego decyzją.
  * Pliki na dysku zostają — sprząta je `products:media-report --apply`, które liczy też miejsce.
  */
@@ -51,6 +59,12 @@ final class ProductImageAuditCommand extends Command
 
     /** @var Collection<int, B2bAccount>|null konta B2B po id — do rozpoznania zdjęć producenta */
     private ?Collection $accounts = null;
+
+    /** @var array<string, list<int>> klucz pliku (sameFileKey) → karty, na których to zdjęcie z sieci stoi */
+    private array $webOwners = [];
+
+    /** @var array<int, Product> */
+    private array $ownerCards = [];
 
     public function __construct(
         private readonly ProductSearchIdentity $identity,
@@ -71,13 +85,15 @@ final class ProductImageAuditCommand extends Command
 
         $duplicates = [];
         $foreign = [];
+        $review = [];
         $cards = 0;
 
+        $this->loadWebOwners($manufacturer);
         $this->line('Czytam galerie kart…');
-        $products->with('images')->chunk(200, function ($chunk) use (&$duplicates, &$foreign, &$cards): void {
+        $products->with('images')->chunk(200, function ($chunk) use (&$duplicates, &$foreign, &$review, &$cards): void {
             foreach ($chunk as $product) {
                 $cards++;
-                $this->collect($product, $duplicates, $foreign);
+                $this->collect($product, $duplicates, $foreign, $review);
             }
         });
 
@@ -88,6 +104,16 @@ final class ProductImageAuditCommand extends Command
 
         $this->examples('Powtórzony plik w karcie', $duplicates, $show);
         $this->examples('Zdjęcie, które dziś nie przeszłoby bramki', $foreign, $show);
+        if ($review !== []) {
+            $this->newLine();
+            $this->line('Do przejrzenia (--apply ich nie usuwa): '.count($review).' wierszy');
+            foreach (array_slice($review, 0, max($show, 50)) as $row) {
+                $this->line('  #'.$row['product_id'].'  '.$row['sku'].'  ←  '.$row['file'].'  ('.$row['why'].')');
+            }
+            if (count($review) > max($show, 50)) {
+                $this->line('  … i '.(count($review) - max($show, 50)).' więcej');
+            }
+        }
 
         // karta, w której wszystkie zdjęcia są do usunięcia, zostanie bez zdjęcia — człowiek ma to widzieć przed --apply
         $emptied = $this->cardsLeftWithoutImages(array_merge($duplicates, $foreign));
@@ -142,11 +168,58 @@ final class ProductImageAuditCommand extends Command
         return self::SUCCESS;
     }
 
+    /** Właściciele zdjęć z sieci po kluczu pliku — do listy „ten sam plik na kartach różnych modeli”. */
+    private function loadWebOwners(string $manufacturer): void
+    {
+        $this->webOwners = [];
+        ProductImage::query()
+            ->whereNull('b2b_account_id')
+            ->whereNotNull('source_url')
+            ->when($manufacturer !== '', static fn ($q) => $q->whereIn(
+                'product_id',
+                Product::query()->select('id')->where('manufacturer', $manufacturer)
+            ))
+            ->select(['id', 'product_id', 'source_url'])
+            ->chunkById(2000, function ($rows): void {
+                foreach ($rows as $row) {
+                    $key = ProductImageDownloader::sameFileKey((string) $row->source_url);
+                    $this->webOwners[$key][] = (int) $row->product_id;
+                }
+            });
+        $shared = [];
+        foreach ($this->webOwners as $key => $ids) {
+            $ids = array_values(array_unique($ids));
+            if (count($ids) > 1) {
+                $this->webOwners[$key] = $ids;
+                foreach ($ids as $id) {
+                    $shared[$id] = true;
+                }
+            } else {
+                unset($this->webOwners[$key]);
+            }
+        }
+        $this->ownerCards = $shared === [] ? [] : Product::query()->whereKey(array_keys($shared))->get()->keyBy('id')->all();
+    }
+
+    /** To zdjęcie z sieci stoi też na karcie innego modelu. */
+    private function sharedWithAnotherModel(string $key, Product $product): bool
+    {
+        foreach ($this->webOwners[$key] ?? [] as $id) {
+            $other = $this->ownerCards[$id] ?? null;
+            if ($id !== (int) $product->id && $other !== null && ! $this->identity->sameGloveModel($product, $other)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * @param  list<array{id: int, product_id: int, sku: string, file: string}>  $duplicates
      * @param  list<array{id: int, product_id: int, sku: string, file: string}>  $foreign
+     * @param  list<array{id: int, product_id: int, sku: string, file: string, why: string}>  $review
      */
-    private function collect(Product $product, array &$duplicates, array &$foreign): void
+    private function collect(Product $product, array &$duplicates, array &$foreign, array &$review): void
     {
         // wiersz dostawcy zostaje, więc przy tym samym pliku przegrywa zdjęcie bez konta; przy remisie
         // wcześniejszy wiersz (niższy identyfikator) — to on ma już swoje miejsce w galerii
@@ -183,8 +256,18 @@ final class ProductImageAuditCommand extends Command
                 || $this->identity->imageUrlMentionsForeignBrand($url, $product)
                 || $this->identity->imageUrlHasForeignVariantCode($url, $product)
                 || $this->identity->imageUrlHasForeignType($url, $product)
-                || $this->identity->imageUrlNamesAnotherFootwearVariant($url, $product)) {
+                || $this->identity->imageUrlNamesAnotherFootwearVariant($url, $product)
+                || $this->identity->imageUrlNamesForeignGloveModel($url, $product)
+                || ProductImageDownloader::isSiteIdentityGraphicUrl($url)) {
                 $foreign[] = $row;
+
+                continue;
+            }
+            if ($this->sharedWithAnotherModel($key, $product)) {
+                $review[] = $row + ['why' => 'ten sam plik na karcie innego modelu'];
+            } elseif (in_array($product->enrichment_status, [Product::ENRICHMENT_MANUAL, Product::ENRICHMENT_FAILED], true)
+                && ! $this->identity->imageUrlMentionsProduct($url, $product)) {
+                $review[] = $row + ['why' => 'karta bez opisu, adres nie nazywa wyrobu'];
             }
         }
     }

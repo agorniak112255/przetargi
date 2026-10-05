@@ -5584,6 +5584,39 @@ final class ProductSearchIdentity
         return $conflict;
     }
 
+    /**
+     * Nazwa pliku zdjęcia niesie inny model rękawicy Ansella tej samej numeracji: „08-354tuseouxsipd4p.jpg” przy AlphaTec
+     * 08352 (05.10.2026, zdjęcie z cas-technik.eu na karcie 08-352). Ta sama reguła co dla adresu karty
+     * (urlOrTitleHasForeignAnsellGloveModel), ale tylko na nazwie pliku — w ścieżce CDN stoją katalogi i znaczniki
+     * czasu. Nazwa z naszym modelem obok innego zostaje (plik z dwoma modelami).
+     */
+    public function imageUrlNamesForeignGloveModel(string $url, Product $product): bool
+    {
+        $file = $this->imageFileNameStem($url);
+
+        return $file !== '' && $this->urlOrTitleHasForeignAnsellGloveModel('', $file, $product);
+    }
+
+    /**
+     * Dwie karty tego samego modelu (warianty rozmiaru i szerokości: HyFlex 11250 N/W/XW) — wspólne zdjęcie jest wtedy
+     * w porządku. Model z kodu Ansella (11-250), rdzeń kodu rękawicy albo nazwa modelu z karty.
+     */
+    public function sameGloveModel(Product $a, Product $b): bool
+    {
+        foreach ([
+            fn (Product $p): ?string => $this->ansellGloveModel($p),
+            fn (Product $p): ?string => $this->gloveCodeCore($p),
+            static fn (Product $p): ?string => trim((string) $p->model_name) !== '' ? mb_strtolower(trim((string) $p->model_name)) : null,
+        ] as $key) {
+            $left = $key($a);
+            if ($left !== null && $left !== '' && $left === $key($b)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /** Nazwa pliku z adresu, bez rozszerzenia i bez parametrów zapytania. */
     private function imageFileNameStem(string $url): string
     {
