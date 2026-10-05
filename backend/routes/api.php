@@ -63,6 +63,7 @@ use App\Http\Controllers\Api\OfferController;
 use App\Http\Controllers\Api\PrestaExportController;
 use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\PriceListController;
+use App\Http\Controllers\Api\PriceListFileSourcesController;
 use App\Http\Controllers\Api\PriceListImportController;
 use App\Http\Controllers\Api\ProductAiSearchController;
 use App\Http\Controllers\Api\ProductCardConflictsAiController;
@@ -470,6 +471,14 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     });
 
     Route::get('/price-lists', [PriceListController::class, 'index'])->middleware('permission:price_lists.view');
+    // Cenniki → „Z pliku”: źródła opisów per cennik z pliku — przed /price-lists/{priceList}, inaczej „files”
+    // i „search-sites” trafiłyby w wiązanie cennika
+    Route::get('/price-lists/files', [PriceListFileSourcesController::class, 'index'])->middleware('permission:price_lists.view');
+    Route::get('/price-lists/search-sites', [PriceListFileSourcesController::class, 'searchSites'])
+        ->middleware('permission:price_lists.import');
+    Route::post('/price-lists/{priceList}/site-check', [PriceListFileSourcesController::class, 'siteCheck'])
+        ->whereNumber('priceList')
+        ->middleware(['permission:price_lists.import', 'throttle:20,1']);
     Route::get('/price-lists/{priceList}', [PriceListController::class, 'show'])->middleware('permission:price_lists.view');
     Route::patch('/price-lists/{priceList}', [PriceListController::class, 'update'])
         ->middleware('permission:price_lists.import');

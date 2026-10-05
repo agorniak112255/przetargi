@@ -77,6 +77,34 @@ final class ManufacturerDomainResolver
     }
 
     /**
+     * Domeny producenta przypisane świadomie: konfiguracja i manufacturer_sites ze źródłem „manual” (Administracja →
+     * „Strony wyszukiwarka”) albo „config” — bez wykrytych automatem („discovered”, pamięć podręczna). Wykrywanie
+     * zapisuje też sklep z nazwą marki w hoście, a ten przy stronach cennika z pliku ma zostać sklepem.
+     *
+     * @return list<string> hosty bez schematu, lowercase
+     */
+    public function assignedDomainsFor(Product $product): array
+    {
+        $brand = $this->brandKey((string) $product->manufacturer);
+        if ($brand === '') {
+            return [];
+        }
+        $sources = ['manual', 'config'];
+        $mapped = [...$this->domainsFromConfig($brand), ...ManufacturerSite::hostsForBrand($brand, $sources)];
+        if ($this->identity->looksLikeUrgentGloveSeries($product)) {
+            $mapped = [...$mapped, ...$this->domainsFromConfig('urgent')];
+        }
+        if (in_array($brand, ['aj-group', 'ajgroup'], true)) {
+            $mapped = [...$mapped, ...$this->domainsFromConfig('pros'), ...ManufacturerSite::hostsForBrand('pros', $sources)];
+        }
+        if ($brand === 'sir') {
+            $mapped = [...$mapped, ...$this->domainsFromConfig('sir-safety'), ...ManufacturerSite::hostsForBrand('sir-safety', $sources)];
+        }
+
+        return array_values(array_unique($mapped));
+    }
+
+    /**
      * Wykryj oficjalną domenę marki (gdy brak w config) — cache 30 dni.
      *
      * @return list<string>

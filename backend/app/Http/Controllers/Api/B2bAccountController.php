@@ -19,6 +19,7 @@ use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\B2b\B2bSizePriceMerger;
 use App\Services\Pricing\ProductEffectivePrice;
+use App\Support\EnrichmentSiteList;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\Client\HttpClientException;
 use Illuminate\Http\JsonResponse;
@@ -640,23 +641,7 @@ class B2bAccountController extends Controller
      */
     private function enrichmentSites(array $sites): ?array
     {
-        $hosts = [];
-        foreach ($sites as $site) {
-            $raw = trim((string) $site);
-            if ($raw === '') {
-                continue;
-            }
-            $host = ManufacturerSite::normalizeHost($raw);
-            // ta sama reguła co CatalogSearchHostService::looksLikeHost (Administracja → Strony wyszukiwarka)
-            if (preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i', $host) !== 1) {
-                throw ValidationException::withMessages([
-                    'enrichment_sites' => "Strony z opisami: „{$raw}” to nie jest poprawny adres strony ani domena (np. sklepbhp.pl).",
-                ]);
-            }
-            $hosts[$host] = true;
-        }
-
-        return $hosts === [] ? null : array_keys($hosts);
+        return EnrichmentSiteList::normalize($sites, 'enrichment_sites', 'Strony z opisami');
     }
 
     /**

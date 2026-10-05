@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Services\B2b\B2bDescriptionSupplement;
+use App\Support\EnrichmentSiteList;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
@@ -110,15 +111,7 @@ class B2bAccount extends Model
      */
     public function enrichmentHosts(): array
     {
-        $hosts = [];
-        foreach ((array) ($this->enrichment_sites ?? []) as $site) {
-            $host = is_string($site) ? ManufacturerSite::normalizeHost($site) : '';
-            if ($host !== '') {
-                $hosts[$host] = true;
-            }
-        }
-
-        return array_keys($hosts);
+        return EnrichmentSiteList::hosts($this->enrichment_sites);
     }
 
     /** Próg długości opisu z B2B (znaki samego tekstu), poniżej którego karta jest uzupełniana ze stron konta. */

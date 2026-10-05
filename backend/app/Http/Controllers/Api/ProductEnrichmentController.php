@@ -11,9 +11,14 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Services\Ai\AiSettingsService;
+use App\Services\B2b\B2bDescriptionSource;
 use App\Services\Enrichment\EnrichmentSlots;
+use App\Services\Enrichment\PriceListDescriptionSources;
+use App\Services\Enrichment\PriceListSourceSettings;
 use App\Services\Enrichment\ProductEnrichmentService;
+use App\Services\PriceListCards;
 use App\Services\Pricing\SupplierSpecialMask;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use RuntimeException;
@@ -106,7 +111,18 @@ class ProductEnrichmentController extends Controller
     {
         $data = $request->validate([
             'force' => ['sometimes', 'boolean'],
+            // Cenniki → „Z pliku” → „Pobierz opisy ponownie”: filtry kart i podgląd przed kolejką
+            'only_not_from_sites' => ['sometimes', 'boolean'],
+            'skip_manufacturer' => ['sometimes', 'boolean'],
+            'enriched_before' => ['sometimes', 'nullable', 'date'],
+            'apply' => ['sometimes', 'boolean'],
         ]);
+        $filtered = array_key_exists('only_not_from_sites', $data)
+            || array_key_exists('skip_manufacturer', $data)
+            || ($data['enriched_before'] ?? null) !== null;
+        if ($filtered || ! (bool) ($data['apply'] ?? true)) {
+            return $this->enrichPriceListFiltered($request, $priceList, $data, $filtered);
+        }
 
         try {
             $queued = $this->enrichment->enqueuePriceList(
@@ -122,6 +138,100 @@ class ProductEnrichmentController extends Controller
             'batch' => $this->batchPayload($queued['batch']),
             'product_ids' => $queued['product_ids'],
             'skipped_b2b' => $queued['skipped_b2b'],
+            'price_list_id' => $priceList->id,
+        ], 202);
+    }
+
+    /**
+     * Partia cennika z filtrami kart (Cenniki → „Z pliku”) albo sam podgląd (apply=false). Karty filtrowane PRZED
+     * enqueueProductIds — dalej ta sama droga co enqueuePriceList (zakres partii price_list, pomijanie opisów z B2B,
+     * limit partii z Ustawień AI). skip_manufacturer (domyślnie tak) działa tylko z którymkolwiek filtrem: karta
+     * z opisem ze strony producenta zostaje, bo strony cennika działają wyłącznie bez karty producenta w puli.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function enrichPriceListFiltered(Request $request, PriceList $priceList, array $data, bool $filtered): JsonResponse
+    {
+        $force = (bool) ($data['force'] ?? false);
+        // karty ze slotem pliku — do nich stosują się strony cennika (product_ids bywa listą kart konta B2B)
+        $ids = app(PriceListCards::class)->fileSlotIds($priceList);
+        if ($ids === []) {
+            return response()->json(['message' => 'Ten cennik nie ma zapisanych produktów do wzbogacenia (stary import?).'], 422);
+        }
+
+        $cards = app(PriceListDescriptionSources::class)->cards($ids, PriceListSourceSettings::fromList($priceList));
+        if ($filtered) {
+            $onlyNotFromSites = (bool) ($data['only_not_from_sites'] ?? false);
+            $skipManufacturer = (bool) ($data['skip_manufacturer'] ?? true);
+            $before = ($data['enriched_before'] ?? null) !== null
+                ? CarbonImmutable::parse((string) $data['enriched_before'])->getTimestamp()
+                : null;
+            $ids = array_values(array_filter($ids, static function (int $id) use ($cards, $onlyNotFromSites, $skipManufacturer, $before): bool {
+                $card = $cards[$id] ?? null;
+                if ($card === null) {
+                    return false;
+                }
+                if ($onlyNotFromSites && $card['source'] === PriceListDescriptionSources::SOURCE_PRICE_LIST_SITES) {
+                    return false;
+                }
+                if ($skipManufacturer && in_array($card['kind'], PriceListDescriptionSources::MANUFACTURER_KINDS, true)) {
+                    return false;
+                }
+
+                // karta bez daty opisu też jest „bez opisu od tej daty”
+                return $before === null || $card['enriched_at'] === null || $card['enriched_at'] < $before;
+            }));
+        }
+
+        // Opis z B2B zostaje — także opis AI z karty katalogowej albo uzupełnienia B2B (b2b_datasheet/b2b_supplement),
+        // którego enqueueProductIds sam nie rozpoznaje (patrzy tylko na zgodność skrótu opisu z powiązaniem B2B).
+        $matched = count($ids);
+        $b2bCards = array_values(array_filter(
+            $ids,
+            static fn (int $id): bool => ($cards[$id]['source'] ?? null) === PriceListDescriptionSources::SOURCE_B2B
+        ));
+        $ids = array_values(array_diff($ids, $b2bCards));
+
+        if (! (bool) ($data['apply'] ?? true)) {
+            // te same reguły co enqueueProductIds: bez force karty gotowe i ręczne odpadają, opis z B2B zostaje
+            $eligible = array_values(array_filter(
+                $ids,
+                static fn (int $id): bool => isset($cards[$id])
+                    && ($force || ! in_array($cards[$id]['status'], [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL], true)),
+            ));
+            $skippedB2b = $eligible === [] ? 0 : count(app(B2bDescriptionSource::class)->productIds($eligible));
+            $limit = $this->aiSettings->enrichmentBatchLimit();
+
+            return response()->json([
+                'preview' => true,
+                'matched' => $matched,
+                'will_queue' => min(max(0, count($eligible) - $skippedB2b), $limit),
+                'skipped_b2b' => $skippedB2b + count($b2bCards),
+                'limit' => $limit,
+            ]);
+        }
+
+        if ($ids === []) {
+            return response()->json(['message' => $b2bCards !== []
+                ? 'Wybrane karty mają opis z B2B — tych opisów ponowne pobieranie nie zastępuje.'
+                : 'Żadna karta cennika nie spełnia wybranych warunków.'], 422);
+        }
+        try {
+            $queued = $this->enrichment->enqueueProductIds(
+                $ids,
+                $request->user(),
+                $force,
+                ProductEnrichmentBatch::SCOPE_PRICE_LIST,
+                (int) $priceList->id,
+            );
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'batch' => $this->batchPayload($queued['batch']),
+            'product_ids' => $queued['product_ids'],
+            'skipped_b2b' => $queued['skipped_b2b'] + count($b2bCards),
             'price_list_id' => $priceList->id,
         ], 202);
     }

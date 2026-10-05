@@ -18,9 +18,12 @@ use App\Services\PriceListDeletionService;
 use App\Services\PriceListDiscountService;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Pricing\SupplierSpecialMask;
+use App\Support\EnrichmentSiteList;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class PriceListController extends Controller
@@ -300,11 +303,34 @@ class PriceListController extends Controller
             'version' => ['sometimes', 'string', 'min:1', 'max:120'],
             // ceny sugerowane bez cen zakupu (np. „ATG-sugerowany”) — decyzja użytkownika 23.09.2026
             'suggested_prices' => ['sometimes', 'boolean'],
+            // Cenniki → „Z pliku”: strony z opisami (kolejność = ważność) i tryb — prośba użytkownika 05.10.2026
+            'enrichment_sites' => ['sometimes', 'nullable', 'array', 'max:'.EnrichmentSiteList::MAX],
+            'enrichment_sites.*' => ['nullable', 'string', 'max:255'],
+            'enrichment_sites_mode' => ['sometimes', Rule::in(PriceList::MODES)],
         ]);
 
         if ($data === []) {
             return response()->json(['message' => 'Brak pól do aktualizacji.'], 422);
         }
+        $sitesGiven = array_key_exists('enrichment_sites', $data);
+        $hosts = $sitesGiven
+            ? EnrichmentSiteList::normalize((array) ($data['enrichment_sites'] ?? []), 'enrichment_sites', 'Źródła opisów')
+            : null;
+        if ($hosts !== null) {
+            $this->assertEnrichmentHostsAllowed($hosts);
+            if (! $this->hasFileCards($priceList)) {
+                throw ValidationException::withMessages([
+                    'enrichment_sites' => 'Źródła opisów można ustawić tylko przy cenniku z pliku — cennik '
+                        .$priceList->manufacturer.' nie ma kart z ceną z pliku.',
+                ]);
+            }
+        }
+        $oldHosts = $priceList->enrichmentHosts();
+        $oldMode = $priceList->enrichmentSitesMode();
+        $newHosts = $sitesGiven ? ($hosts ?? []) : $oldHosts;
+        $newMode = array_key_exists('enrichment_sites_mode', $data) ? (string) $data['enrichment_sites_mode'] : $oldMode;
+        // kolejność hostów to ważność, więc zmiana kolejności też jest zmianą; tryb liczy się tylko przy stronach
+        $sitesChanged = $newHosts !== $oldHosts || ($newMode !== $oldMode && ($newHosts !== [] || $oldHosts !== []));
         // Nazwę wolno poprawić także przy cenniku z kontem B2B: po zwinięciu Cenników do jednego wpisu
         // na producenta ten sam wiersz obsługuje import z pliku, więc blokada zabierałaby edycję czegoś,
         // co z kontem nie ma nic wspólnego. Przebieg B2B nie nadpisuje już nazwy istniejącego wpisu,
@@ -332,6 +358,9 @@ class PriceListController extends Controller
             $productIds,
             $oldManufacturer,
             $renamed,
+            $sitesGiven,
+            $hosts,
+            $sitesChanged,
             &$productsUpdated,
             &$productsOtherManufacturer,
             &$renamedIds,
@@ -346,6 +375,16 @@ class PriceListController extends Controller
             }
             if (array_key_exists('suggested_prices', $data)) {
                 $priceList->suggested_prices = (bool) $data['suggested_prices'];
+            }
+            if ($sitesGiven) {
+                $priceList->enrichment_sites = $hosts;
+            }
+            if (array_key_exists('enrichment_sites_mode', $data)) {
+                $priceList->enrichment_sites_mode = (string) $data['enrichment_sites_mode'];
+            }
+            // znacznik „opis sprzed zmiany stron” (Cenniki → „Z pliku”) — tylko przy realnej zmianie
+            if ($sitesChanged) {
+                $priceList->enrichment_sites_updated_at = now();
             }
             $priceList->save();
 
@@ -393,8 +432,11 @@ class PriceListController extends Controller
             'products_updated' => $productsUpdated,
             'products_other_manufacturer' => $productsOtherManufacturer,
             'prices_changed' => $pricesChanged,
+            'enrichment_sites' => $priceList->enrichmentHosts(),
+            'enrichment_sites_mode' => $priceList->enrichmentSitesMode(),
+            'enrichment_sites_updated_at' => $priceList->enrichment_sites_updated_at?->toIso8601String(),
             'message' => sprintf(
-                'Zapisano cennik%s%s%s%s.',
+                'Zapisano cennik%s%s%s%s%s.',
                 $renamed
                     ? sprintf(' (producent: „%s” → „%s”)', $oldManufacturer, $priceList->manufacturer)
                     : '',
@@ -410,9 +452,68 @@ class PriceListController extends Controller
                         $priceList->suggested_prices ? ' (cennik sugerowany — bez pierwszeństwa przed kontem B2B);' : ' (cennik zakupu producenta);',
                         $pricesChanged,
                     )
-                    : ''
+                    : '',
+                $sitesChanged ? ', źródła opisów: '.$this->enrichmentSitesLabel($priceList) : ''
             ),
         ]);
+    }
+
+    private function enrichmentSitesLabel(PriceList $priceList): string
+    {
+        $count = count($priceList->enrichmentHosts());
+        if ($count === 0) {
+            return 'bez stron cennika';
+        }
+        $noun = match (true) {
+            $count === 1 => 'strona',
+            in_array($count % 10, [2, 3, 4], true) && ! in_array($count % 100, [12, 13, 14], true) => 'strony',
+            default => 'stron',
+        };
+
+        return sprintf(
+            '%d %s (%s)',
+            $count,
+            $noun,
+            $priceList->enrichmentSitesMode() === PriceList::MODE_ONLY ? 'tylko producent i strony cennika' : 'najpierw strony cennika',
+        );
+    }
+
+    /**
+     * Host naszego sklepu (prestashop.shop_url) i hosty z enrichment.blocked_source_hosts — także ich subdomeny — nie
+     * mogą być źródłem opisu: ProductEnrichmentService i tak je odrzuca, a lista udawałaby, że coś z nich bierze.
+     *
+     * @param  list<string>  $hosts
+     *
+     * @throws ValidationException
+     */
+    private function assertEnrichmentHostsAllowed(array $hosts): void
+    {
+        $shopHost = parse_url(trim((string) config('prestashop.shop_url', '')), PHP_URL_HOST);
+        $blocked = [];
+        foreach ([...(array) config('enrichment.blocked_source_hosts', []), is_string($shopHost) ? $shopHost : ''] as $needle) {
+            $needle = is_string($needle) ? (preg_replace('/^www\./', '', mb_strtolower(trim($needle))) ?? '') : '';
+            if ($needle !== '') {
+                $blocked[] = $needle;
+            }
+        }
+        foreach ($hosts as $host) {
+            foreach ($blocked as $needle) {
+                if ($host === $needle || str_ends_with($host, '.'.$needle)) {
+                    throw ValidationException::withMessages([
+                        'enrichment_sites' => "Źródła opisów: „{$host}” jest wykluczony jako źródło opisów (nasz sklep albo host z listy wykluczonych).",
+                    ]);
+                }
+            }
+        }
+    }
+
+    /** Cennik z pliku = ma karty ze slotem ceny z pliku tego cennika. */
+    private function hasFileCards(PriceList $priceList): bool
+    {
+        return ProductSourcePrice::query()
+            ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+            ->where('price_list_id', $priceList->id)
+            ->exists();
     }
 
     /**

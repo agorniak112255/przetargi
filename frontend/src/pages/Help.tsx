@@ -15,6 +15,7 @@ import { useAuth } from '../auth'
 import { Clients } from './Clients'
 import { Inquiries } from './Inquiries'
 import { PriceLists } from './PriceLists'
+import { PriceListsFiles } from './PriceListsFiles'
 import { Products } from './Products'
 import { Tenders } from './Tenders'
 
@@ -1312,6 +1313,120 @@ function PriceListsHelp() {
                 <p className="text-xs text-slate-500">Cena katalogowa</p>
                 <p className="text-2xl font-semibold text-blue-600">12,40 zł</p>
                 <p className="mt-1 text-xs text-emerald-700">z cennika Lebon 2026-08</p>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Cenniki z plików: skąd są opisy',
+          does: 'Zakładka „Z pliku” pokazuje każdy cennik z pliku: ile kart ma opis od producenta, ze stron cennika, z B2B, z innych stron, a ile jest bez opisu; ile opisów pobrano przed zmianą stron i czy pobieranie trwa. Znacznik „ma też konto B2B” — karty z opisem z B2B nie są tu ruszane.',
+          click: 'Menu „Cenniki” → zakładka „Z pliku”. Nazwa producenta otwiera karty tego cennika.',
+          tone: 'slate',
+          screen: (
+            <LivePage
+              nav="Cenniki"
+              path="/price-lists/files"
+              page={<PriceListsFiles />}
+              allowed={can(user, 'price_lists.view')}
+              fallback={
+                <AppFrame nav="Cenniki">
+                  <h1 className="mb-3 text-xl font-semibold">Cenniki z plików — źródła opisów</h1>
+                  <Card>
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b bg-slate-50">
+                          <Th>Producent</Th>
+                          <Th>Kart</Th>
+                          <Th>Skąd są opisy</Th>
+                          <Th>Strony cennika</Th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="border-b">
+                          <td className="p-2 font-medium text-blue-700">Lebon</td>
+                          <td className="p-2">86</td>
+                          <td className="p-2">
+                            <div className="flex h-2 w-40 overflow-hidden rounded bg-slate-100">
+                              <div className="w-1/2 bg-violet-500" />
+                              <div className="w-1/4 bg-emerald-500" />
+                              <div className="w-1/12 bg-sky-400" />
+                            </div>
+                            <p className="mt-1 text-[11px] text-slate-600">
+                              od producenta 43 · ze stron cennika 21 · z innych stron 7 · bez opisu 15
+                            </p>
+                          </td>
+                          <td className="p-2">
+                            2 strony
+                            <span className="block text-slate-500">najpierw strony cennika</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </Card>
+                </AppFrame>
+              }
+            />
+          ),
+        },
+        {
+          action: 'Strony z opisami przy cenniku',
+          does: 'Wpisujesz strony, z których program bierze opisy kart tego cennika — jedna w wierszu, wyżej = ważniejsza (najwyżej 20) — albo wybierasz je z listy „Strony wyszukiwarka”. Tryb „Najpierw strony cennika” szuka dalej w internecie, gdy wyrobu tam nie ma; tryb „Tylko producent i strony cennika” odkłada wtedy kartę do ręcznego opisu. Karta producenta zawsze ma pierwszeństwo — strony cennika działają, gdy wyrób jej nie ma.',
+          click: '„Źródła opisów ▾” przy cenniku → wpisz strony, wybierz tryb, „Zapisz”. „Sprawdź na karcie” pokaże, na których stronach jest dany wyrób.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Cenniki">
+              <h1 className="mb-3 text-xl font-semibold">Cenniki z plików — źródła opisów</h1>
+              <Card className="text-xs">
+                <p className="mb-2 rounded bg-sky-50 px-3 py-2 text-sky-900">
+                  Strony cennika działają, gdy wyrób nie ma karty na stronie producenta — karta producenta zawsze ma
+                  pierwszeństwo.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Field label="Strony cennika (2 z 20)" value="sklepbhp.pl · hurtowniabhp.pl" mark />
+                    <div className="mt-2">
+                      <Btn label="Wybierz z listy „Strony wyszukiwarka”…" color="border" />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-medium">Gdzie szukać opisu, gdy wyrób nie ma karty producenta</p>
+                    <p>◉ Najpierw strony cennika, potem pozostałe strony z listy i reszta internetu</p>
+                    <p>○ Tylko producent i strony cennika (bez reszty internetu)</p>
+                    <div className="pt-1">
+                      <Mark>
+                        <Btn label="Zapisz" />
+                      </Mark>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Pobierz opisy ponownie',
+          does: 'Po zmianie stron dawne opisy zostają. Ten przycisk pobiera je jeszcze raz według nowych stron — najpierw liczy pasujące karty (np. tylko opisy spoza stron cennika, sprzed zmiany stron, bez kart opisanych przez producenta), zleca dopiero po potwierdzeniu. Nowy opis zastępuje stary; karty z opisem z B2B są pomijane.',
+          click: '„Pobierz opisy ponownie…” w panelu cennika → „Policz karty” → zaznacz zgodę → „Pobierz”. Postęp widać nad tabelą.',
+          tone: 'amber',
+          screen: (
+            <AppFrame nav="Cenniki">
+              <Card className="max-w-md text-xs">
+                <p className="text-sm font-semibold">Pobierz opisy ponownie — Lebon / 2026-08</p>
+                <p className="mt-2 rounded bg-amber-50 px-3 py-2 text-amber-900">
+                  Ponowne pobranie zastępuje obecny opis karty. Gdy program nie znajdzie strony wyrobu, karta może trafić
+                  do ręcznego opisu.
+                </p>
+                <p className="mt-2">☑ Tylko karty z opisem spoza stron cennika</p>
+                <p>☑ Pomiń karty opisane przez producenta</p>
+                <p>☑ Tylko opisy pobrane przed 05.10.2026 14:00</p>
+                <p className="mt-2 rounded bg-slate-50 px-3 py-2">
+                  Pasuje <b>28</b> kart, zostanie zleconych <b>28</b> (limit partii 50).
+                </p>
+                <div className="mt-3 flex justify-end">
+                  <Mark>
+                    <Btn label="Pobierz (28)" />
+                  </Mark>
+                </div>
               </Card>
             </AppFrame>
           ),

@@ -14,6 +14,7 @@ type Tab = { to: string; label: string; end?: boolean; permission: string | null
 
 const TABS: Tab[] = [
   { to: '/price-lists', label: 'Cenniki', end: true, permission: null },
+  { to: '/price-lists/files', label: 'Z pliku', permission: 'price_lists.view' },
   { to: '/price-lists/b2b', label: 'B2B', permission: 'b2b_accounts.view' },
   { to: '/price-lists/excluded', label: 'Usunięte z pominięciem', permission: 'products.delete' },
 ]

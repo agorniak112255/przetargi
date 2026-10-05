@@ -8,6 +8,7 @@ import { B2bSupplementProgressModal } from '../components/B2bSupplementProgressM
 import { B2bSyncProgressModal } from '../components/B2bSyncProgressModal'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { api, can, PERM_SUPPLIER_SPECIAL_VIEW } from '../lib/api'
+import { siteHref, siteLabel } from '../lib/priceListSources'
 
 type SyncFrequency = 'off' | 'daily' | 'weekly'
 
@@ -117,14 +118,6 @@ const FREQUENCY_LABEL: Record<SyncFrequency, string> = {
   off: 'wyłączone',
   daily: 'codziennie (w nocy)',
   weekly: 'raz w tygodniu (w nocy)',
-}
-
-function siteHref(site: string): string {
-  return /^https?:\/\//i.test(site) ? site : `https://${site}`
-}
-
-function siteLabel(site: string): string {
-  return site.replace(/^https?:\/\//i, '').replace(/\/$/, '')
 }
 
 function formatDate(value: string | null): string {

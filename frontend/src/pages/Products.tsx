@@ -325,6 +325,8 @@ export function Products() {
   // Karty z cennika z pliku (link z Cenników) — karty z listy ostatniego wgrania i ze slotem ceny tego cennika.
   const priceList = searchParams.get('price_list') ?? ''
   const priceListLabel = searchParams.get('price_list_label') ?? ''
+  // Cenniki → „Z pliku”: tylko karty ze slotem ceny z pliku (bez kart konta B2B z ostatniej aktualizacji wpisu)
+  const priceListFile = searchParams.get('price_list_file') === '1'
   const [statusFilter, setStatusFilter] = useState('')
   const [hasAccessories, setHasAccessories] = useState(false)
   /** Tylko karty powiązane z towarem ERP XL (pewne albo potwierdzone powiązanie). */
@@ -472,6 +474,7 @@ export function Products() {
     if (manufacturer) params.set('manufacturer', manufacturer)
     if (b2bAccount) params.set('b2b_account', b2bAccount)
     if (priceList) params.set('price_list', priceList)
+    if (priceList && priceListFile) params.set('price_list_file', '1')
     if (statusFilter) params.set('enrichment_status', statusFilter)
     if (hasAccessories) params.set('has_accessories', '1')
     if (erpLinkedOnly) params.set('erp_linked', '1')
@@ -507,7 +510,7 @@ export function Products() {
       })
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer/status
-  }, [debouncedQ, manufacturer, b2bAccount, priceList, statusFilter, hasAccessories, erpLinkedOnly, supplierSpecialOnly, canSupplierSpecial, page, perPage, sort, dir, aiMode])
+  }, [debouncedQ, manufacturer, b2bAccount, priceList, priceListFile, statusFilter, hasAccessories, erpLinkedOnly, supplierSpecialOnly, canSupplierSpecial, page, perPage, sort, dir, aiMode])
 
   async function runAiSearch(web = false, raw = aiQuery) {
     const query = raw.trim()
@@ -1143,6 +1146,7 @@ export function Products() {
                 const next = new URLSearchParams(searchParams)
                 next.delete('price_list')
                 next.delete('price_list_label')
+                next.delete('price_list_file')
                 setSearchParams(next)
                 setPage(1)
               }}

@@ -83,6 +83,25 @@ final class ProductEnrichmentService
     /** Tyle roznych norm wyciagnietych z surowego tekstu strony to slowniczek sklepu, nie karta. */
     private const NORMS_GLOSSARY_THRESHOLD = 5;
 
+    /** Na tylu pierwszych stronach cennika z pliku pytamy wyszukiwarkę (site:), gdy indeks nie ma karty z kodem. */
+    private const MAX_SITE_HOSTS = 4;
+
+    /**
+     * Strony z opisami cennika z pliku, z którego karta ma slot ceny (PriceListCards::sourceSettingsFor) — na czas
+     * jednego enrichProduct; null = karta bez takich ustawień i przebieg idzie jak dotąd. Worker kolejki trzyma serwis
+     * między zadaniami, więc enrichProduct zeruje to w finally.
+     */
+    private ?PriceListSourceSettings $listSources = null;
+
+    /**
+     * Domeny producenta przypisane świadomie (assignedDomainsFor: konfiguracja, manufacturer_sites „manual”/„config”).
+     * Host cennika spoza nich to sklep, nawet gdy wykrywanie uzna go po nazwie za domenę marki („portwest-sklep.pl”) —
+     * także gdy zapisało go wcześniej jako „discovered”.
+     *
+     * @var list<string>
+     */
+    private array $listSourcesManufacturerDomains = [];
+
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
         'ubranie', 'odziez', 'odzież', 'buty', 'obuwie', 'trzewiki', 'polbuty', 'półbuty', 'sandaly',
@@ -549,12 +568,17 @@ final class ProductEnrichmentService
      * Używane przy drugim podejściu, gdy pierwsze karty nie dały opisu.
      *
      * @param  list<array{url?: string, text?: string}>  $pages
-     * @return array{description: string, extracted: array<string, mixed>, pages: list<array{url?: string, text?: string}>, cut: bool}
+     * @return array{description: string, extracted: array<string, mixed>, pages: list<array{url?: string, text?: string}>, cut: bool, list_sites: bool}
      */
     private function describeFromPages(Product $product, array $pages): array
     {
         // Druga pula (indeks, sklepy, otwarty internet) bywa kartą producenta razem ze sklepami — ta sama reguła.
-        ['pages' => $pages, 'cut' => $cut] = $this->manufacturerOnlyPages($product, $pages);
+        // Strony cennika z pliku (listSources) działają tu tak samo jak w pierwszej puli.
+        ['pages' => $pages, 'cut' => $cut, 'list_sites' => $listSites] = $this->manufacturerOnlyPages($product, $pages);
+        if ($pages === []) {
+            // „tylko producent i strony cennika” bez strony z cennika — nie ma czego dać modelowi
+            return ['description' => '', 'extracted' => [], 'pages' => [], 'cut' => $cut, 'list_sites' => $listSites];
+        }
         $clean = $this->rememberOptionSizes(
             $this->sanitizePagesWithLlm($product, $pages),
             $this->collectOptionSizes($pages, $this->sizeCategoryHint($product))
@@ -573,7 +597,7 @@ final class ProductEnrichmentService
             $description = '';
         }
 
-        return ['description' => $description, 'extracted' => $extracted, 'pages' => $clean, 'cut' => $cut];
+        return ['description' => $description, 'extracted' => $extracted, 'pages' => $clean, 'cut' => $cut, 'list_sites' => $listSites];
     }
 
     /**
@@ -731,7 +755,13 @@ final class ProductEnrichmentService
         // pliki karty sprzed przebiegu z force (webFileIds) — ustalane po potwierdzeniu karty, potrzebne też w catch
         $previousWebFiles = null;
         try {
-            if (! $force && $product->trustedShopUrl() === null && $this->applyFromSkuCache($product)) {
+            $this->listSources = $this->priceListSourcesFor($product);
+            // Pamięć SKU niesie opis spoza stron cennika (inna karta tego kodu, wcześniejszy przebieg bez ustawień) —
+            // przy stronach cennika przebieg idzie pełną ścieżką.
+            if ($this->listSources !== null && ! $force && $product->trustedShopUrl() === null && $this->hasSkuCacheRow($product)) {
+                $this->attemptLog()->add('search', 'strony cennika '.$this->listSources->manufacturer.' — pamięć SKU pominięta');
+            }
+            if (! $force && $this->listSources === null && $product->trustedShopUrl() === null && $this->applyFromSkuCache($product)) {
                 $this->logEnrichmentTiming($timing, $started, extra: ['from_cache' => true]);
 
                 return;
@@ -747,10 +777,22 @@ final class ProductEnrichmentService
             $this->liveProgress()->step('wyszukiwarka');
             $t = microtime(true);
             $searchPack = $this->searchPackForEnrichment($product);
+            // Strony cennika z pliku dokładane tylko tutaj — nie w searchPackForEnrichment, z którego korzysta też
+            // uzupełnianie opisów B2B (supplementWebPages), a klucz paczki prefetchu zostaje bez zmian.
+            $listSearchErrors = [];
+            if ($this->listSources !== null) {
+                [$searchPack, $listSearchErrors] = $this->withPriceListSiteResults($product, $searchPack);
+            }
             $searchResults = $searchPack['results'];
             $searchEmptyDetail = ($searchPack['errors'] ?? []) !== []
                 ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
                 : 'brak wyników';
+            // „Tylko strony cennika”: awaria wyszukiwarki na tych stronach to nie „brak strony wyrobu” — przez
+            // $searchEmptyDetail rozpoznaje ją engineOutageDetail i przebieg kończy w failed, nie w „wpisz ręcznie”.
+            if ($listSearchErrors !== [] && $this->listSources?->onlyMode()) {
+                $listDetail = implode(' | ', array_slice($listSearchErrors, 0, 2));
+                $searchEmptyDetail = ($searchPack['errors'] ?? []) !== [] ? $searchEmptyDetail.' | '.$listDetail : $listDetail;
+            }
             // Katalog PDF producenta dopasowany po numerze katalogowym — źródło równorzędne
             // karcie producenta. Marki bez kart HTML per wyrób (SECURA) opisuje wyłącznie on,
             // więc gdy niesie blok tego kodu, brak wyników wyszukiwarki nie kończy przebiegu.
@@ -758,6 +800,9 @@ final class ProductEnrichmentService
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === [] && $catalogPages === []) {
                 $this->attemptLog()->add('search', $searchEmptyDetail);
+                if ($this->listSources?->onlyMode()) {
+                    throw new ProductSourcesNotFoundException($this->listSitesNotFoundMessage($product, $searchEmptyDetail));
+                }
                 $outage = $this->engineOutageDetail($searchEmptyDetail);
                 throw new ProductSourcesNotFoundException(
                     $outage !== null
@@ -778,16 +823,18 @@ final class ProductEnrichmentService
                 if ($this->manufacturers->domainsFor($product) === []) {
                     $this->manufacturers->discoverOfficialDomains($product);
                 }
-                $mfrDomains = $this->manufacturers->discoverFromResults(
+                $mfrDomains = $this->withoutListSitesAsManufacturer($product, $this->manufacturers->discoverFromResults(
                     $product,
                     array_column($searchResults, 'url')
-                );
+                ));
             }
             $timing['search_ms'] = $this->elapsedMs($t);
             $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
             $this->liveProgress()->step('pobieranie kart');
             $t = microtime(true);
-            $fetched = $this->pages->fetch($descResults, (string) $product->sku, 3, [], $product);
+            // „Tylko strony cennika”: sklepy spoza listy i tak nie wejdą do puli — nie zajmują trzech miejsc pobrania,
+            // a pusta pula otwiera kolejne partie indeksu (też tylko ze stron cennika).
+            $fetched = $this->pages->fetch($this->dropOutsideListSources($descResults, $product), (string) $product->sku, 3, [], $product);
             $this->attemptLog()->add(
                 'fetch',
                 count($fetched['pages']).' stron HTML, '.count($fetched['image_urls']).' zdjęć z kart'
@@ -887,6 +934,7 @@ final class ProductEnrichmentService
                     // Bez frazy „nie odpowiada”: to ma trafić do ręki, nie do kolejki —
                     // WAF, którego nie przeszedł reader, nie puści też za godzinę.
                     $openWebWalledCards !== [] => $this->walledCardsMessage($product, $openWebWalledCards),
+                    (bool) $this->listSources?->onlyMode() => $this->listSitesNotFoundMessage($product, $searchEmptyDetail),
                     default => 'Nie znaleziono karty potwierdzającej produkt '.$product->sku
                         .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.',
                 });
@@ -901,7 +949,12 @@ final class ProductEnrichmentService
 
             // Marka „tylko producent” z jego kartą w puli — od tego miejsca sklepy nie wchodzą ani do rozmiarów,
             // ani do filtra stron, ani do opisu, ani do zdjęć (te biorą się z kart źródłowych opisu).
-            ['pages' => $pageSnippets, 'cut' => $manufacturerOnly, 'listed' => $listedOnly] = $this->manufacturerOnlyPages($product, $pageSnippets);
+            ['pages' => $pageSnippets, 'cut' => $manufacturerOnly, 'listed' => $listedOnly, 'list_sites' => $listSitesPool] = $this->manufacturerOnlyPages($product, $pageSnippets);
+            // „Tylko producent i strony cennika” bez strony z cennika, katalogu PDF i adresu zaufanego — sklepy spoza
+            // listy nie wchodzą, więc nie ma z czego pisać opisu (model nie jest wołany).
+            if ($pageSnippets === [] && $this->listSources?->onlyMode()) {
+                throw new ProductSourcesNotFoundException($this->listSitesNotFoundMessage($product, $searchEmptyDetail));
+            }
 
             // opcje zakupu (radio/select) — zanim LLM wytnie je z tekstu karty
             $optionSizes = $this->collectOptionSizes(
@@ -1041,6 +1094,7 @@ final class ProductEnrichmentService
                         $pageSnippets = $retry['pages'];
                         // nowa pula zastępuje starą w całości — reguła „tylko producent” wg tej puli
                         $manufacturerOnly = $retry['cut'];
+                        $listSitesPool = $retry['list_sites'];
                         $extracted = $this->enrichStructuredFieldsFromPages($retry['extracted'], $pageSnippets);
                         $description = $retry['description'];
                         $confirmed = ! $this->looksLikeMissingCardMeta($description)
@@ -1140,7 +1194,8 @@ final class ProductEnrichmentService
             ));
             // Model wymienia w source_urls także adresy z wyników wyszukiwania, których nie czytał — przy marce
             // „tylko producent” źródłem jest wyłącznie strona z puli (inaczej sklep wracał jako źródło i dawca zdjęć).
-            if ($manufacturerOnly) {
+            // Tak samo pula zawężona do stron cennika z pliku.
+            if ($manufacturerOnly || $listSitesPool) {
                 $poolUrls = [];
                 foreach ($pageSnippets as $page) {
                     $url = (string) ($page['url'] ?? '');
@@ -1226,6 +1281,13 @@ final class ProductEnrichmentService
                 'confidence' => (float) ($extracted['confidence'] ?? 0),
                 'from_cache' => false,
             ];
+            // Z jakimi stronami cennika powstał opis — po zmianie stron w Cenniki → „Z pliku” widać, które opisy są
+            // sprzed zmiany. Tylko na karcie: pamięć SKU (storeSkuCache) dostaje $payload bez tego klucza.
+            $priceListSources = $this->listSources !== null ? [
+                'price_list_id' => $this->listSources->priceListId,
+                'mode' => $this->listSources->mode,
+                'hosts_sha1' => $this->listSources->hostsSha1,
+            ] : null;
 
             // Kolumna norm idzie za nowym opisem, także gdy nowa lista jest pusta. Zapis „tylko gdy puste” zostawiał
             // normy z poprzedniego (złego) pobrania na zawsze — AJ GROUP 906, 304/K, 604/K. Poza wzbogacaniem kolumnę
@@ -1326,10 +1388,10 @@ final class ProductEnrichmentService
             ));
             $this->assertBatchNotCancelled($batchId);
 
-            $mfrDomains = $this->manufacturers->discoverFromResults($product, array_merge(
+            $mfrDomains = $this->withoutListSitesAsManufacturer($product, $this->manufacturers->discoverFromResults($product, array_merge(
                 $documentUrls,
                 array_column($searchResults, 'url'),
-            ));
+            )));
             $preferredDocs = $this->preferManufacturerDocuments($documentUrls, $product, $mfrDomains);
             $documentLabels = is_array($fetched['document_labels'] ?? null) ? $fetched['document_labels'] : [];
             $savedDocs = $this->documents->downloadMany(
@@ -1374,11 +1436,16 @@ final class ProductEnrichmentService
             // Tylko na karcie: pamięć SKU (storeSkuCache) dostaje $payload bez tego klucza.
             $retryImages = $cachedImageUrls === [] && $imageRetryUrls !== [];
             $product->refresh();
+            $productPayload = $payload;
+            if ($retryImages) {
+                $productPayload[ProductImageRetry::PAYLOAD_KEY] = ProductImageRetry::fresh($imageRetryUrls);
+            }
+            if ($priceListSources !== null) {
+                $productPayload['price_list_sources'] = $priceListSources;
+            }
             $saved = [
                 'description' => mb_substr($description, 0, 10000),
-                'enrichment_payload' => $retryImages
-                    ? [...$payload, ProductImageRetry::PAYLOAD_KEY => ProductImageRetry::fresh($imageRetryUrls)]
-                    : $payload,
+                'enrichment_payload' => $productPayload,
                 'enrichment_status' => Product::ENRICHMENT_DONE,
                 'enriched_at' => now(),
                 'enrichment_error' => $cachedImageUrls === []
@@ -1452,6 +1519,11 @@ final class ProductEnrichmentService
         } finally {
             $this->pages->bypassCache(false);
             $this->liveProgress()->clear();
+            // worker kolejki trzyma serwis między zadaniami — kolejna karta nie może dostać stron tego cennika
+            $this->listSources = null;
+            $this->listSourcesManufacturerDomains = [];
+            // kody kart producenta (bramka wariantu) czytane na nowo przy kolejnej karcie — katalog rośnie między zadaniami
+            $this->manufacturerCatalogCodes = [];
         }
     }
 
@@ -2303,7 +2375,7 @@ final class ProductEnrichmentService
                 'row' => $row,
                 // remis rozstrzyga kolejność z wyszukiwarki, a nie przypadek sortowania
                 'position' => $position,
-                'score' => $this->descriptionSourceScore((string) ($row['url'] ?? ''), $product, $mfrDomains, $retailers, $ranks),
+                'score' => $this->descriptionSourceScore((string) ($row['url'] ?? ''), $product, $mfrDomains, $retailers, $ranks, (string) ($row['title'] ?? '')),
             ];
         }
         usort($rows, static fn (array $a, array $b): int => [-$a['score'], $a['position']] <=> [-$b['score'], $b['position']]);
@@ -2332,8 +2404,10 @@ final class ProductEnrichmentService
      * @param  list<string>  $mfrDomains
      * @param  list<string>  $retailers
      * @param  array<string, int>  $ranks  ręczna ranga domeny (1 = najwyżej) z panelu
+     * @param  string  $title  tytuł wyniku — strona cennika z pliku dostaje pierwszeństwo tylko z kodem karty w adresie
+     *                         albo tytule (jak hitsCarryProductCode)
      */
-    private function descriptionSourceScore(string $url, Product $product, array $mfrDomains, array $retailers, array $ranks = []): int
+    private function descriptionSourceScore(string $url, Product $product, array $mfrDomains, array $retailers, array $ranks = [], string $title = ''): int
     {
         if ($url === '') {
             return -100;
@@ -2341,7 +2415,9 @@ final class ProductEnrichmentService
         if ($product->isHintedShopUrl($url)) {
             return 100;
         }
-        if ($this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+        // host cennika z pliku spoza znanych domen producenta to sklep — nawet gdy nazwa hosta wygląda jak marka
+        $listPosition = $this->listSiteShopPosition($url, $product);
+        if ($listPosition === null && $this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
             $u = mb_strtolower($url);
             if (str_contains($u, '/blogs/') || str_contains($u, '/blog/')) {
                 return -80;
@@ -2363,6 +2439,13 @@ final class ProductEnrichmentService
             }
 
             return 0;
+        }
+        // Strona cennika z pliku z kodem karty: 90 dla pierwszej, 75 od szesnastej — nad rangą z panelu (21–70)
+        // i zmapowanymi sklepami, pod adresem wskazanym ręcznie (100). Kolejność na liście cennika to ważność. Bez kodu
+        // (strony sąsiednich wariantów) zwykłe reguły — inaczej zajmowały trzy miejsca pobrania.
+        if ($listPosition !== null
+            && $this->identity->hayHasProductCode(mb_strtolower(rawurldecode($url).' '.$title), $product)) {
+            return 90 - min($listPosition, 15);
         }
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
         $rank = $ranks[preg_replace('/^www\./', '', $host) ?? $host] ?? null;
@@ -2484,7 +2567,7 @@ final class ProductEnrichmentService
                 urls: array_column($hits, 'url')
             );
             // do $tried idą wszystkie trafienia (także wykluczone), żeby kolejna partia ich nie powtarzała
-            $more = $this->pages->fetch($this->dropBlockedSourceHosts($hits, $product), (string) $product->sku, 3, [], $product);
+            $more = $this->pages->fetch($this->dropOutsideListSources($this->dropBlockedSourceHosts($hits, $product), $product), (string) $product->sku, 3, [], $product);
             $confirmed = $this->keepConfirmedCardPages($product, $more['pages'] ?? []);
             if ($confirmed !== []) {
                 $this->mergeDocumentLabels($fetched, $more);
@@ -2670,7 +2753,7 @@ final class ProductEnrichmentService
 
         $pack = $this->search->searchWebWithoutLocalIndex($product);
         $fresh = [];
-        foreach ($this->dropBlockedSourceHosts($pack['results'], $product) as $row) {
+        foreach ($this->dropOutsideListSources($this->dropBlockedSourceHosts($pack['results'], $product), $product) as $row) {
             $url = mb_strtolower((string) ($row['url'] ?? ''));
             if ($url !== '' && ! isset($seen[$url])) {
                 $fresh[] = $row;
@@ -2723,7 +2806,10 @@ final class ProductEnrichmentService
             }
         }
 
-        $shopResults = $this->dropBlockedSourceHosts($this->search->searchMappedRetailers($product, $tried), $product);
+        $shopResults = $this->dropOutsideListSources(
+            $this->dropBlockedSourceHosts($this->search->searchMappedRetailers($product, $tried), $product),
+            $product
+        );
         if ($shopResults === []) {
             return [[], $fetched, []];
         }
@@ -2767,7 +2853,30 @@ final class ProductEnrichmentService
             }
         }
 
-        $candidates = $this->dropBlockedSourceHosts($searchResults, $product);
+        $candidates = $this->dropOutsideListSources($this->dropBlockedSourceHosts($searchResults, $product), $product);
+        // Strony cennika z pliku zamiast listy „Strony wyszukiwarka”: najpierw one (w kolejności z cennika), w trybie
+        // „tylko” wyłącznie one; w trybie „najpierw” dalej jak bez ustawień.
+        $listSites = $this->listSources;
+        if ($listSites !== null) {
+            $onList = [];
+            $offList = [];
+            foreach ($candidates as $i => $row) {
+                $position = $listSites->position((string) ($row['url'] ?? ''));
+                if ($position !== null) {
+                    $onList[] = ['row' => $row, 'rank' => $position, 'position' => $i];
+                } else {
+                    $offList[] = $row;
+                }
+            }
+            usort($onList, static fn (array $a, array $b): int => [$a['rank'], $a['position']] <=> [$b['rank'], $b['position']]);
+            if ($listSites->onlyMode()) {
+                $offList = array_values(array_filter(
+                    $offList,
+                    static fn (array $row): bool => $product->isTrustedShopUrl((string) ($row['url'] ?? ''))
+                ));
+            }
+            $candidates = [...array_column($onList, 'row'), ...$offList];
+        }
         // pula opisu zawężona do stron z listy „Strony wyszukiwarka” — uzupełnienie też tylko z nich
         $listed = $listedOnly
             ? app(CatalogSearchHostService::class)->listedHosts(array_map(
@@ -2781,13 +2890,16 @@ final class ProductEnrichmentService
             if ($u === '' || isset($used[$u])) {
                 continue;
             }
-            if ($listedOnly && ! isset($listed[ManufacturerSite::normalizeHost((string) parse_url($u, PHP_URL_HOST))])
+            $onListSite = $listSites?->covers((string) ($row['url'] ?? '')) ?? false;
+            if ($listedOnly && ! $onListSite && ! isset($listed[ManufacturerSite::normalizeHost((string) parse_url($u, PHP_URL_HOST))])
                 && ! $product->isTrustedShopUrl((string) ($row['url'] ?? ''))) {
                 continue;
             }
-            // uzupełnienie opisu wyłącznie ze sklepów — nie z karty producenta
+            // uzupełnienie opisu wyłącznie ze sklepów — nie z karty producenta (strona cennika spoza znanych domen
+            // producenta to sklep, choćby nazwą przypominała markę)
             if (ProductImageDownloader::looksLikeImageUrl((string) ($row['url'] ?? ''))
-                || $this->manufacturers->isManufacturerUrl((string) ($row['url'] ?? ''), $product)) {
+                || ($this->listSiteShopPosition((string) ($row['url'] ?? ''), $product) === null
+                    && $this->manufacturers->isManufacturerUrl((string) ($row['url'] ?? ''), $product))) {
                 continue;
             }
             $extraResults[] = $row;
@@ -2805,6 +2917,14 @@ final class ProductEnrichmentService
             // innego wyrobu (zestaw SECURA 3100 przy nagłowiu, karta półmaski przy pierścieniu
             // zaczepowym) dokładała „bogatszy” opis i podmieniała ten z właściwej karty.
             $extraCards = $this->keepConfirmedCardPages($product, $extraFetched['pages']);
+            if ($listSites !== null) {
+                // strona cennika idzie przed innymi tylko jako strona tego wariantu (jak w priceListSitePagesFirst)
+                $extraCards = array_values(array_filter(
+                    $extraCards,
+                    fn (array $page): bool => ! $listSites->covers((string) ($page['url'] ?? ''))
+                        || $this->supplementPageNamesCardVariant($product, $page)
+                ));
+            }
             $extraPages = $extraCards !== [] ? $this->sanitizePagesWithLlm($product, $extraCards) : [];
             foreach ($extraPages as $page) {
                 $pageSnippets[] = $page;
@@ -3002,7 +3122,9 @@ final class ProductEnrichmentService
             }
         }
         foreach ($urls as $url) {
-            if ($this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+            // strona cennika z pliku spoza znanych domen producenta to sklep (listSiteShopPosition)
+            if ($this->listSiteShopPosition($url, $product) === null
+                && $this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
                 return [$url, 'manufacturer'];
             }
         }
@@ -3029,14 +3151,22 @@ final class ProductEnrichmentService
     {
         $ranks = CatalogHostPriority::map();
         $manufacturer = [];
+        $listSites = [];
         $ranked = [];
         $rest = [];
         foreach ($pages as $position => $page) {
             $url = (string) ($page['url'] ?? '');
             $text = trim((string) ($page['text'] ?? ''));
-            if ($url !== '' && mb_strlen($text) >= self::MFR_CARD_MIN_CHARS
+            $listPosition = $url !== '' ? $this->listSiteShopPosition($url, $product) : null;
+            if ($url !== '' && $listPosition === null && mb_strlen($text) >= self::MFR_CARD_MIN_CHARS
                 && $this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
                 $manufacturer[] = $page;
+
+                continue;
+            }
+            // awans tylko dla strony tego wariantu (kod karty) — strona innego wariantu na tym hoście idzie dalej jak sklep
+            if ($listPosition !== null && $this->supplementPageNamesCardVariant($product, $page)) {
+                $listSites[] = ['page' => $page, 'rank' => $listPosition, 'position' => $position];
 
                 continue;
             }
@@ -3050,10 +3180,12 @@ final class ProductEnrichmentService
             $rest[] = $page;
         }
         // Hierarchia źródeł opisu: producent, potem strony z ręczną rangą (1 najpierw),
-        // na końcu pozostałe. Bez rang kolejność jest dokładnie ta, co przed zmianą.
+        // na końcu pozostałe. Bez rang kolejność jest dokładnie ta, co przed zmianą. Strony cennika z pliku (listSources)
+        // idą zaraz za producentem, w kolejności z listy cennika.
         usort($ranked, static fn (array $a, array $b): int => [$a['rank'], $a['position']] <=> [$b['rank'], $b['position']]);
+        usort($listSites, static fn (array $a, array $b): int => [$a['rank'], $a['position']] <=> [$b['rank'], $b['position']]);
 
-        return array_values(array_merge($manufacturer, array_column($ranked, 'page'), $rest));
+        return array_values(array_merge($manufacturer, array_column($listSites, 'page'), array_column($ranked, 'page'), $rest));
     }
 
     /**
@@ -3094,13 +3226,19 @@ final class ProductEnrichmentService
      * wyszukiwarka” przed resztą (listedSitePagesFirst). Uzupełnianie opisów B2B woła bez niej — tam przy Bolle
      * właściciel chciał 28.09 wszystkie sklepy.
      *
+     * Strony cennika z pliku (listSources, tylko w enrichProduct) działają wyłącznie w gałęzi bez karty producenta, przed
+     * listą „Strony wyszukiwarka”: strona cennika z treścią i kodem karty → pula = strony cennika + katalog PDF + adres
+     * zaufany (list_sites = true). Bez takiej strony tryb „tylko” zostawia katalog PDF, adres zaufany i stronę producenta
+     * z konfiguracji (pula bywa pusta), a tryb „najpierw” idzie dawną drogą (listedSitePagesFirst). Karta producenta tnie
+     * pulę jak dotąd.
+     *
      * @param  list<array<string, mixed>>  $pages
-     * @return array{pages: list<array<string, mixed>>, cut: bool, listed: bool}
+     * @return array{pages: list<array<string, mixed>>, cut: bool, listed: bool, list_sites: bool}
      */
     private function manufacturerOnlyPages(Product $product, array $pages, bool $sourceHierarchy = true): array
     {
         if ($pages === []) {
-            return ['pages' => $pages, 'cut' => false, 'listed' => false];
+            return ['pages' => $pages, 'cut' => false, 'listed' => false, 'list_sites' => false];
         }
         $byLink = $this->trustedManufacturerCardInPool($product, $pages);
         $hasCard = $byLink;
@@ -3117,11 +3255,20 @@ final class ProductEnrichmentService
         }
         if (! $hasCard) {
             if (! $sourceHierarchy) {
-                return ['pages' => $pages, 'cut' => false, 'listed' => false];
+                return ['pages' => $pages, 'cut' => false, 'listed' => false, 'list_sites' => false];
+            }
+            if ($this->listSources !== null) {
+                $fromList = $this->priceListSitePagesFirst($product, $pages);
+                if ($fromList !== null) {
+                    return ['pages' => $fromList, 'cut' => false, 'listed' => true, 'list_sites' => true];
+                }
+                if ($this->listSources->onlyMode()) {
+                    return ['pages' => $this->withoutPagesOutsideListSites($product, $pages), 'cut' => false, 'listed' => true, 'list_sites' => true];
+                }
             }
             $listed = $this->listedSitePagesFirst($product, $pages);
 
-            return ['pages' => $listed['pages'], 'cut' => false, 'listed' => $listed['cut']];
+            return ['pages' => $listed['pages'], 'cut' => false, 'listed' => $listed['cut'], 'list_sites' => false];
         }
         $kept = [];
         $dropped = [];
@@ -3145,7 +3292,7 @@ final class ProductEnrichmentService
             );
         }
 
-        return ['pages' => $kept, 'cut' => true, 'listed' => false];
+        return ['pages' => $kept, 'cut' => true, 'listed' => false, 'list_sites' => false];
     }
 
     /**
@@ -3207,6 +3354,348 @@ final class ProductEnrichmentService
         }
 
         return ['pages' => $kept, 'cut' => true];
+    }
+
+    /**
+     * Ustawienia „Źródła opisów” cennika z pliku dla tej karty (slot ceny „file”) i domeny producenta znane przed
+     * przebiegiem. Bez ustawień (karta bez slotu, niezapisana, cennik bez stron) — null i przebieg jak dotąd.
+     */
+    private function priceListSourcesFor(Product $product): ?PriceListSourceSettings
+    {
+        $this->listSourcesManufacturerDomains = [];
+        $settings = app(PriceListCards::class)->sourceSettingsFor($product);
+        if ($settings === null) {
+            return null;
+        }
+        $this->listSourcesManufacturerDomains = $this->manufacturers->assignedDomainsFor($product);
+        $this->attemptLog()->add(
+            'search',
+            'strony cennika '.$settings->manufacturer.' — '
+                .($settings->onlyMode() ? 'tylko producent i strony cennika' : 'najpierw strony cennika, potem dotychczasowa kolejność')
+                .': '.implode(', ', $settings->hosts)
+        );
+
+        return $settings;
+    }
+
+    /**
+     * Pozycja strony na liście cennika z pliku (0 = najważniejsza), gdy adres leży na hoście cennika, a ten host nie
+     * jest domeną producenta (konfiguracja albo domena znana przed przebiegiem). null = bez ustawień, spoza listy albo
+     * strona producenta — ta idzie gałęzią producenta jak dotąd.
+     */
+    private function listSiteShopPosition(string $url, Product $product): ?int
+    {
+        $position = $this->listSources?->position($url);
+        if ($position === null || $this->isKnownManufacturerUrl($url, $product)) {
+            return null;
+        }
+
+        return $position;
+    }
+
+    /**
+     * Strona producenta przypisanego świadomie: domena z konfiguracji (isOfficialCatalogUrl) albo przypisana producentowi
+     * w Administracji → „Strony wyszukiwarka” (assignedDomainsFor). Domeny wykryte automatem („discovered”, odgadnięte
+     * z wyników przez discoverFromResults) tu nie wchodzą.
+     */
+    private function isKnownManufacturerUrl(string $url, Product $product): bool
+    {
+        if ($this->identity->isOfficialCatalogUrl($url, $product)) {
+            return true;
+        }
+        $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
+        if ($host === '') {
+            return false;
+        }
+        foreach ($this->listSourcesManufacturerDomains as $domain) {
+            $domain = preg_replace('/^www\./', '', mb_strtolower(trim((string) $domain))) ?? '';
+            if ($domain !== '' && ($host === $domain || str_ends_with($host, '.'.$domain))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * discoverFromResults uznaje host za domenę marki po samej nazwie („portwest-sklep.pl” przy Portwest). Host cennika
+     * z pliku, którego nie znaliśmy jako domeny producenta przed przebiegiem, to w tym przebiegu sklep — inaczej jego
+     * strona szłaby gałęzią producenta (fetch dokumentów, źródło „manufacturer”).
+     *
+     * @param  list<string>  $domains
+     * @return list<string>
+     */
+    private function withoutListSitesAsManufacturer(Product $product, array $domains): array
+    {
+        if ($this->listSources === null) {
+            return $domains;
+        }
+        $kept = [];
+        $dropped = [];
+        foreach ($domains as $domain) {
+            $url = 'https://'.preg_replace('/^www\./', '', mb_strtolower(trim((string) $domain))).'/';
+            if ($this->listSiteShopPosition($url, $product) !== null) {
+                $dropped[] = (string) $domain;
+
+                continue;
+            }
+            $kept[] = $domain;
+        }
+        $message = 'strony cennika '.$this->listSources->manufacturer.' — host cennika to sklep, nie domena producenta: '
+            .implode(', ', array_values(array_unique($dropped)));
+        // wołane dwa razy w przebiegu (wyniki wyszukiwania, potem dokumenty) — ten sam wpis raz
+        if ($dropped !== [] && ! in_array($message, $this->attemptLog()->messagesOfType('search', includeReplayed: false), true)) {
+            $this->attemptLog()->add('search', $message);
+        }
+
+        return array_values($kept);
+    }
+
+    /**
+     * Wyniki ze stron cennika z pliku przed wynikami zwykłego szukania: najpierw indeks lokalny ograniczony do hostów
+     * cennika, a gdy nie dał trafienia z kodem karty — site: na pierwszych MAX_SITE_HOSTS hostach. Te same filtry co
+     * zwykłe wyniki (listing, hosty wykluczone), bez powtórzeń adresów. Drugi element: błędy wyszukiwarki z site:.
+     *
+     * @param  array{results: list<array<string, mixed>>, errors?: list<string>}  $pack
+     * @return array{0: array{results: list<array<string, mixed>>, errors?: list<string>}, 1: list<string>}
+     */
+    private function withPriceListSiteResults(Product $product, array $pack): array
+    {
+        $settings = $this->listSources;
+        if ($settings === null) {
+            return [$pack, []];
+        }
+        $label = 'strony cennika '.$settings->manufacturer;
+        $hits = $this->listSiteHits($product, $this->search->catalogHitsOnHosts($product, $settings->hosts, $label));
+        $errors = [];
+        if (! $this->hitsCarryProductCode($hits, $product)) {
+            $found = $this->search->searchOnHosts($product, array_slice($settings->hosts, 0, self::MAX_SITE_HOSTS), $label);
+            $errors = $this->search->lastHostSearchErrors();
+            $hits = [...$hits, ...$this->listSiteHits($product, $found)];
+        }
+
+        $seen = [];
+        $fresh = [];
+        foreach ($hits as $row) {
+            $key = mb_strtolower((string) ($row['url'] ?? ''));
+            if ($key === '' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $fresh[] = $row;
+        }
+        $rest = [];
+        foreach (is_array($pack['results'] ?? null) ? $pack['results'] : [] as $row) {
+            $key = mb_strtolower((string) ($row['url'] ?? ''));
+            if ($key !== '' && isset($seen[$key])) {
+                continue;
+            }
+            $rest[] = $row;
+        }
+        $pack['results'] = [...$fresh, ...$rest];
+        $this->attemptLog()->add(
+            'search',
+            $label.' — '.count($fresh).' adresów'.($errors !== [] ? ' (błędy wyszukiwarki: '.count($errors).')' : ''),
+            urls: array_column($fresh, 'url')
+        );
+
+        return [$pack, $errors];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $hits
+     * @return list<array<string, mixed>>
+     */
+    private function listSiteHits(Product $product, array $hits): array
+    {
+        $settings = $this->listSources;
+        if ($settings === null || $hits === []) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $this->dropBlockedSourceHosts($this->search->dropListingResults($hits, $product), $product),
+            static fn (array $row): bool => $settings->covers((string) ($row['url'] ?? ''))
+        ));
+    }
+
+    /** @param  list<array<string, mixed>>  $hits */
+    private function hitsCarryProductCode(array $hits, Product $product): bool
+    {
+        foreach ($hits as $row) {
+            $hay = mb_strtolower(rawurldecode((string) ($row['url'] ?? '')).' '.(string) ($row['title'] ?? ''));
+            if (trim($hay) !== '' && $this->identity->hayHasProductCode($hay, $product)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Bez karty producenta: strona z hostu cennika z treścią (≥ MFR_CARD_MIN_CHARS) i z kodem tej karty (bramka wariantu
+     * supplementPageNamesCardVariant) → zostają strony cennika tego wariantu, katalog PDF i adres zaufany. null = takiej
+     * strony nie ma (decyzja o reszcie należy do trybu) albo w puli jest karta znanego producenta (isKnownManufacturerUrl,
+     * z treścią) — ta ma pierwszeństwo także wtedy, gdy jego domenę zna tylko Administracja, a nie konfiguracja.
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return list<array<string, mixed>>|null
+     */
+    private function priceListSitePagesFirst(Product $product, array $pages): ?array
+    {
+        $settings = $this->listSources;
+        if ($settings === null) {
+            return null;
+        }
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS
+                && $this->isKnownManufacturerUrl($url, $product)) {
+                $this->attemptLog()->add(
+                    'page',
+                    'strony cennika '.$settings->manufacturer.' — w puli jest karta producenta, strony cennika bez pierwszeństwa',
+                    urls: [$url]
+                );
+
+                return null;
+            }
+        }
+        $variantOk = [];
+        $hasCard = false;
+        $otherVariant = [];
+        foreach ($pages as $i => $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url === '' || ! $settings->covers($url)) {
+                continue;
+            }
+            if (! $this->supplementPageNamesCardVariant($product, $page)) {
+                $otherVariant[] = $url;
+
+                continue;
+            }
+            $variantOk[$i] = true;
+            if (mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS) {
+                $hasCard = true;
+            }
+        }
+        if ($otherVariant !== []) {
+            $this->attemptLog()->add(
+                'page',
+                'strony cennika '.$settings->manufacturer.' — strona innego wariantu albo bez kodu karty, bez pierwszeństwa',
+                urls: $otherVariant
+            );
+        }
+        if (! $hasCard) {
+            return null;
+        }
+        $kept = [];
+        $dropped = [];
+        foreach ($pages as $i => $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && (isset($variantOk[$i])
+                || $this->catalogPdf()->isConfiguredCatalogUrl($url)
+                || $product->isTrustedShopUrl($url))) {
+                $kept[] = $page;
+
+                continue;
+            }
+            $dropped[] = $url;
+        }
+        // kolejność bez zmian: pierwsza pula przyszła już z orderPagesForDescription (strony cennika po pozycji) i z blokiem
+        // katalogu PDF na początku (withCatalogPages — katalog jest równorzędny karcie producenta)
+        $this->attemptLog()->add(
+            'page',
+            'strony cennika '.$settings->manufacturer.' — opis ze stron cennika'
+                .($dropped !== [] ? ', pominięte inne strony: '.count($dropped) : ''),
+            urls: $dropped !== [] ? array_values(array_filter($dropped)) : array_column($kept, 'url')
+        );
+
+        return $kept;
+    }
+
+    /**
+     * Tryb „tylko producent i strony cennika” bez strony z cennika: zostają katalog PDF, strona znanego producenta
+     * (isKnownManufacturerUrl) i adres zaufany — sklepy spoza listy nie są źródłem. Pula bywa pusta (enrichProduct
+     * kończy wtedy przebieg bez wołania modelu).
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return list<array<string, mixed>>
+     */
+    private function withoutPagesOutsideListSites(Product $product, array $pages): array
+    {
+        $kept = [];
+        $dropped = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && ($this->catalogPdf()->isConfiguredCatalogUrl($url)
+                || $this->isKnownManufacturerUrl($url, $product)
+                || $product->isTrustedShopUrl($url))) {
+                $kept[] = $page;
+
+                continue;
+            }
+            $dropped[] = $url;
+        }
+        $this->attemptLog()->add(
+            'page',
+            'strony cennika '.($this->listSources?->manufacturer ?? '').' — brak strony wyrobu na stronach cennika'
+                .($dropped !== [] ? ', pominięte strony spoza cennika: '.count($dropped) : ''),
+            urls: array_values(array_filter($dropped))
+        );
+
+        return $kept;
+    }
+
+    /**
+     * Tryb „tylko producent i strony cennika”: ścieżki zapasowe (kolejne partie indeksu, zmapowane sklepy, internet
+     * bez indeksu, uzupełnienie opisu) nie pobierają stron spoza hostów cennika, strony znanego producenta
+     * (isKnownManufacturerUrl), adresu zaufanego i katalogu PDF. W trybie „najpierw” i bez ustawień — bez zmian.
+     *
+     * @param  list<array<string, mixed>>  $results
+     * @return list<array<string, mixed>>
+     */
+    private function dropOutsideListSources(array $results, Product $product): array
+    {
+        $settings = $this->listSources;
+        if ($settings === null || ! $settings->onlyMode()) {
+            return $results;
+        }
+        $kept = [];
+        $dropped = [];
+        foreach ($results as $row) {
+            $url = (string) ($row['url'] ?? '');
+            if ($url !== '' && ($settings->covers($url)
+                || $this->isKnownManufacturerUrl($url, $product)
+                || $product->isTrustedShopUrl($url)
+                || $this->catalogPdf()->isConfiguredCatalogUrl($url))) {
+                $kept[] = $row;
+
+                continue;
+            }
+            $dropped[] = ['url' => $url, 'reason' => CandidateRejection::OUTSIDE_LIST_SOURCES];
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->addRejections('strony cennika '.$settings->manufacturer, $dropped);
+        }
+
+        return $kept;
+    }
+
+    private function listSitesNotFoundMessage(Product $product, string $searchEmptyDetail): string
+    {
+        $settings = $this->listSources;
+        $manufacturer = $settings !== null ? $settings->manufacturer : (string) $product->manufacturer;
+        $outage = $this->engineOutageDetail($searchEmptyDetail);
+        if ($outage !== null) {
+            return 'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
+                .' — nie wiadomo, czy strona wyrobu jest na stronach cennika '.$manufacturer
+                .'. Ponów po przywróceniu wyszukiwarki. '.$outage;
+        }
+        $hosts = $settings !== null ? array_slice($settings->hosts, 0, 4) : [];
+
+        return 'Nie znaleziono strony wyrobu '.$product->sku.' na stronach cennika '.$manufacturer
+            .($hosts !== [] ? ' ('.implode(', ', $hosts).')' : '')
+            .' — tryb „tylko producent i strony cennika”. Opis wpisz ręcznie albo dopisz stronę w Cenniki → Z pliku.';
     }
 
     /**

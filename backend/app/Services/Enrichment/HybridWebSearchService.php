@@ -753,11 +753,12 @@ class HybridWebSearchService
      * przy koncie (ProductEnrichmentService::supplementB2bDescription). Filtr hostów stoi w SQL indeksu
      * (CatalogIndexSearch::findFor $onlyHosts), a trafienia przechodzą ten sam filtr tożsamości co zwykłe trafienia
      * z indeksu (confirmedCatalogHits). Poza tą ścieżką nic się nie zmienia: zwykłe wyszukiwanie nie widzi tych hostów.
+     * Tej samej ścieżki używa opis karty z cennika z pliku ze stronami cennika — $label to podpis w przebiegu.
      *
      * @param  list<string>  $hosts
      * @return list<array{url: string, title: string, snippet: string}>
      */
-    public function catalogHitsOnHosts(Product $product, array $hosts): array
+    public function catalogHitsOnHosts(Product $product, array $hosts, string $label = 'strony konta'): array
     {
         $hosts = $this->normalizedHosts($hosts);
         if ($hosts === []) {
@@ -779,12 +780,12 @@ class HybridWebSearchService
             fn (array $row): bool => $this->urlOnHosts((string) $row['url'], $hosts)
         ));
         $this->attemptLog()->addRejections(
-            'indeks — strony konta',
+            'indeks — '.$label,
             array_merge($this->catalog->lastRejections(), $rejected)
         );
         $this->attemptLog()->add(
             'catalog',
-            'indeks — strony konta ('.implode(', ', array_slice($hosts, 0, 4)).'): '.count($hits).' kart',
+            'indeks — '.$label.' ('.implode(', ', array_slice($hosts, 0, 4)).'): '.count($hits).' kart',
             urls: array_column($hits, 'url')
         );
 
@@ -799,11 +800,15 @@ class HybridWebSearchService
      * tokeny adresu, a wyszukiwarka widzi treść strony. Host, na którym fraza dała kartę z kodem, nie dostaje już
      * zapytania o kod; szukanie kończy się, gdy uzbiera się tyle kart z kodem, ile stron trafia do modelu.
      *
+     * Błędy wyszukiwarki z ostatniego wywołania oddaje lastHostSearchErrors() — pusta lista przy awarii wyszukiwarki
+     * to nie „brak karty”, a tryb „tylko strony cennika” musi to rozróżnić.
+     *
      * @param  list<string>  $hosts
      * @return list<array{url: string, title: string, snippet: string}> wyłącznie adresy z tych hostów
      */
-    public function searchOnHosts(Product $product, array $hosts): array
+    public function searchOnHosts(Product $product, array $hosts, string $label = 'strony konta'): array
     {
+        $this->lastHostSearchErrors = [];
         $hosts = $this->normalizedHosts($hosts);
         if ($hosts === [] || $this->localSearchOnly) {
             return [];
@@ -869,13 +874,28 @@ class HybridWebSearchService
         if ($errors !== []) {
             Log::info('Account host search errors', [
                 'product_id' => $product->id,
+                'label' => $label,
                 'errors' => array_slice($errors, 0, 4),
             ]);
         }
+        $this->lastHostSearchErrors = array_values(array_map('strval', $errors));
         $coded = $this->resultsCarryProductCode($out, $product);
 
         return $coded !== [] ? array_values(array_merge($coded, $this->hitsWithoutCodedUrls($out, $coded))) : $out;
     }
+
+    /**
+     * Błędy wyszukiwarki z ostatniego searchOnHosts (pusta lista = wyszukiwarka odpowiadała albo nie pytano jej wcale).
+     *
+     * @return list<string>
+     */
+    public function lastHostSearchErrors(): array
+    {
+        return $this->lastHostSearchErrors;
+    }
+
+    /** @var list<string> */
+    private array $lastHostSearchErrors = [];
 
     /**
      * @param  list<string>  $hosts

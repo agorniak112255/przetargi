@@ -152,7 +152,11 @@ class ProductController extends Controller
         // (whereIntegerInRaw) — duży cennik nie dochodzi do limitu parametrów zapytania.
         if ($request->filled('price_list')) {
             $priceList = PriceList::query()->find($request->integer('price_list'));
-            $listIds = $priceList !== null ? app(PriceListCards::class)->ids($priceList) : [];
+            // price_list_file=1 (Cenniki → „Z pliku”): tylko karty ze slotem ceny z pliku — product_ids wpisu wspólnego
+            // z kontem B2B bywa listą kart konta
+            $listIds = $priceList === null ? [] : ($request->boolean('price_list_file')
+                ? app(PriceListCards::class)->fileSlotIds($priceList)
+                : app(PriceListCards::class)->ids($priceList));
             if ($listIds === []) {
                 $query->whereRaw('1 = 0');
             } else {

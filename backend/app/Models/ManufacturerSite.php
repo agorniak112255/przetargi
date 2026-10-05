@@ -46,9 +46,10 @@ class ManufacturerSite extends Model
     }
 
     /**
+     * @param  list<string>|null  $sources  null = wszystkie źródła; np. ['manual', 'config'] bez wykrytych automatem
      * @return list<string>
      */
-    public static function hostsForBrand(string $brandKey): array
+    public static function hostsForBrand(string $brandKey, ?array $sources = null): array
     {
         $brandKey = mb_strtolower(trim($brandKey));
         if ($brandKey === '' || ! self::tableReady()) {
@@ -57,6 +58,7 @@ class ManufacturerSite extends Model
 
         return self::query()
             ->where('brand_key', $brandKey)
+            ->when($sources !== null, static fn ($q) => $q->whereIn('source', $sources))
             ->pluck('host')
             ->all();
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Support\EnrichmentSiteList;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -15,6 +16,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class PriceList extends Model
 {
+    /** Źródła opisów: strony cennika, potem dotychczasowa hierarchia (lista „Strony wyszukiwarka”, reszta internetu). */
+    public const MODE_FIRST = 'first';
+
+    /** Źródła opisów: tylko producent i strony cennika — bez reszty internetu. */
+    public const MODE_ONLY = 'only';
+
+    public const MODES = [self::MODE_FIRST, self::MODE_ONLY];
+
     protected $fillable = [
         'manufacturer',
         'manufacturer_key',
@@ -33,6 +42,9 @@ class PriceList extends Model
         'updated_products',
         'skipped_details',
         'product_ids',
+        'enrichment_sites',
+        'enrichment_sites_mode',
+        'enrichment_sites_updated_at',
     ];
 
     protected function casts(): array
@@ -44,7 +56,30 @@ class PriceList extends Model
             'updated_products' => 'array',
             'skipped_details' => 'array',
             'product_ids' => 'array',
+            'enrichment_sites' => 'array',
+            'enrichment_sites_updated_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Strony cennika do opisów (hosty) w kolejności ważności.
+     *
+     * @return list<string>
+     */
+    public function enrichmentHosts(): array
+    {
+        return EnrichmentSiteList::hosts($this->enrichment_sites);
+    }
+
+    public function enrichmentSitesMode(): string
+    {
+        return in_array($this->enrichment_sites_mode, self::MODES, true) ? $this->enrichment_sites_mode : self::MODE_FIRST;
+    }
+
+    /** Odcisk ustawień: tryb + hosty w kolejności (kolejność to ważność, więc bez sortowania). */
+    public function enrichmentHostsSha1(): string
+    {
+        return sha1($this->enrichmentSitesMode()."\n".implode("\n", $this->enrichmentHosts()));
     }
 
     public function importer(): BelongsTo

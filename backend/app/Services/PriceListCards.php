@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\PriceList;
+use App\Models\Product;
 use App\Models\ProductSourcePrice;
+use App\Services\Enrichment\PriceListSourceSettings;
 
 /**
  * Karty cennika producenta: price_lists.product_ids (karty OSTATNIEGO importu) razem z kartami, które mają slot ceny
@@ -66,6 +68,63 @@ final class PriceListCards
         }
 
         return $out;
+    }
+
+    /**
+     * Źródła opisów cennika z pliku, z którego karta ma slot ceny (slot „file” jest jeden na kartę, więc cennik też).
+     * null: karta niezapisana, bez slotu pliku, slot bez cennika albo cennik bez stron — przebieg idzie jak dotąd.
+     * Celowo bez zakresu partii: ta sama karta ma te same źródła z „Pobierz” na karcie i z partii cennika.
+     */
+    public function sourceSettingsFor(Product $product): ?PriceListSourceSettings
+    {
+        if ($product->id === null) {
+            return null;
+        }
+        $listId = ProductSourcePrice::query()
+            ->where('product_id', $product->id)
+            ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+            ->value('price_list_id');
+        if ($listId === null) {
+            return null;
+        }
+        $list = PriceList::query()->find((int) $listId);
+
+        return $list !== null ? PriceListSourceSettings::fromList($list) : null;
+    }
+
+    /**
+     * Karty ze slotem ceny z pliku tego cennika — tylko do nich stosują się źródła opisów cennika (sourceSettingsFor).
+     * Bez product_ids: przy wpisie wspólnym z kontem B2B ostatnią aktualizacją bywa synchronizacja konta (Bolle: 414
+     * kart konta, 1 z pliku).
+     *
+     * @return list<int>
+     */
+    public function fileSlotIds(PriceList $list): array
+    {
+        return $list->id === null ? [] : ($this->fileSlotIdsByList([(int) $list->id])[(int) $list->id] ?? []);
+    }
+
+    /**
+     * @param  list<int>  $listIds
+     * @return array<int, list<int>> id cennika => karty ze slotem pliku
+     */
+    public function fileSlotIdsByList(array $listIds): array
+    {
+        if ($listIds === []) {
+            return [];
+        }
+        $byList = [];
+        $rows = ProductSourcePrice::query()
+            ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+            ->whereIn('price_list_id', $listIds)
+            ->select(['price_list_id', 'product_id'])
+            ->toBase()
+            ->cursor();
+        foreach ($rows as $row) {
+            $byList[(int) $row->price_list_id][] = (int) $row->product_id;
+        }
+
+        return array_map(fn (array $ids): array => $this->normalized($ids), $byList);
     }
 
     /**
