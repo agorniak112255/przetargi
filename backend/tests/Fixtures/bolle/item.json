@@ -12,6 +12,7 @@
     },
     "onlinecustomerprice": 30.15,
     "pricelevel1": 67,
+    "custitem_b2bminimum": 10,
     "dontshowprice": false,
     "ispurchasable": true,
     "urlcomponent": "TRYON_BSSI_PSSTRYOC13B",

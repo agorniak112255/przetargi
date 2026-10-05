@@ -9,6 +9,7 @@ use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
+use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
@@ -62,6 +63,9 @@ final class BolleConnectorTest extends TestCase
     private ?string $environment = null;
 
     private bool $profileWithoutCurrency = false;
+
+    /** Konto zwolnione z minimum zamówienia Bolle (custentity_c25_allowlowquantity „T”). */
+    private bool $profileAllowsLowQuantity = false;
 
     /** Profil zawsze gościa, choć logowanie przyjmuje dane. */
     private bool $profileAlwaysGuest = false;
@@ -321,6 +325,10 @@ final class BolleConnectorTest extends TestCase
             [$clear, '103', ProductIdentifier::TYPE_MANUFACTURER_CODE, 'PSSCLEAR03', 'itemid', 'Bolle'],
         ], $rows());
         $stored = $rows();
+        $slot = ProductSourcePrice::query()->where('product_id', (int) $tryon)->where('b2b_account_id', $account->id)->sole();
+        $this->assertSame(10.0, (float) $slot->order_min_qty);
+        $this->assertSame(10.0, (float) $slot->order_step_qty);
+        $this->assertNull($slot->order_unit);
 
         $second = app(B2bAccountSyncRunner::class)->run($account->fresh(), delayMs: 0, withImages: false);
 
@@ -425,6 +433,51 @@ final class BolleConnectorTest extends TestCase
         $belowNet = new B2bRemoteProduct('106', 'Y', 'Y', raw: ['status' => 'ok', 'onlinecustomerprice' => 25.004, 'pricelevel1' => 20]);
         $this->assertSame(25.0, $connector->price($belowNet)?->net);
         $this->assertNull($connector->price($belowNet)?->base);
+    }
+
+    public function test_order_quantity_is_the_item_minimum_and_its_multiples_like_the_shop_cart(): void
+    {
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $products = $this->productsById($connector);
+
+        // STKS 420 w sklepie: „Quantity - Multiples of 10” — minimum 10, krok 10, bez jednostki
+        $order = $connector->price($products['101'])?->order;
+        $this->assertSame(10.0, $order?->min);
+        $this->assertSame(10.0, $order?->step);
+        $this->assertNull($order?->unit);
+        $this->assertFalse($order->varies);
+
+        $withMinimum = static fn (mixed $minimum): B2bRemoteProduct => new B2bRemoteProduct('107', 'Z', 'Z', raw: [
+            'status' => 'ok', 'onlinecustomerprice' => 10, 'pricelevel1' => 20, 'custitem_b2bminimum' => $minimum,
+        ]);
+        // skrypt sklepu: puste albo 0 = 1, czyli bez ograniczenia
+        foreach ([null, '', 0, 1, '1'] as $free) {
+            $order = $connector->price($withMinimum($free))?->order;
+            $this->assertSame(1.0, $order?->min, var_export($free, true));
+            $this->assertNull($order?->step, var_export($free, true));
+        }
+        $withoutField = new B2bRemoteProduct('108', 'Z', 'Z', raw: ['status' => 'ok', 'onlinecustomerprice' => 10, 'pricelevel1' => 20]);
+        $this->assertSame(1.0, $connector->price($withoutField)?->order?->min);
+        $this->assertSame(6.0, $connector->price($withMinimum('6'))?->order?->step);
+        // wartość nieznanego kształtu = warunku nie znamy (zapisany zostaje), cena bez zmian
+        $odd = $connector->price($withMinimum('10 pcs'));
+        $this->assertSame(10.0, $odd?->net);
+        $this->assertNull($odd?->order);
+    }
+
+    public function test_account_exempt_from_the_minimum_gives_no_order_quantity(): void
+    {
+        $this->profileAllowsLowQuantity = true;
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $products = $this->productsById($connector);
+
+        $price = $connector->price($products['101']);
+        $this->assertSame(30.15, $price?->net);
+        $this->assertNull($price?->order);
     }
 
     public function test_name_joins_family_with_distinct_short_description(): void
@@ -1013,6 +1066,13 @@ final class BolleConnectorTest extends TestCase
                 $profile = json_decode($this->fixture('profile.json'), true);
                 if ($this->profileWithoutCurrency) {
                     unset($profile['currency']);
+                }
+                if ($this->profileAllowsLowQuantity) {
+                    foreach ($profile['customfields'] as $i => $field) {
+                        if ($field['name'] === 'custentity_c25_allowlowquantity') {
+                            $profile['customfields'][$i]['value'] = 'T';
+                        }
+                    }
                 }
 
                 return Http::response($profile);

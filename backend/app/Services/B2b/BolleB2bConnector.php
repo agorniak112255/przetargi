@@ -77,7 +77,7 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
     private const RAW_FIELDS = [
         'internalid', 'itemid', 'upccode', 'storedisplayname2', 'displayname', 'storedescription', 'storedetaileddescription',
         'featureddescription', 'onlinecustomerprice_detail', 'onlinecustomerprice', 'pricelevel1', 'dontshowprice',
-        'ispurchasable', 'urlcomponent', 'custitem_atlas_item_image',
+        'ispurchasable', 'urlcomponent', 'custitem_b2bminimum', 'custitem_atlas_item_image',
         'custitem_bb_item_image_2', 'custitem_bb_item_image_3', 'custitem_bb_item_image_4', 'custitem_bb_item_image_5',
         'custitem_bb_item_image_6', 'custitem_bb_item_image_7', 'custitem_bb_item_image_8', 'custitem_bb_item_image_9',
         'custitem_bb_item_image_10', 'custitem_bb_item_image_11',
@@ -191,7 +191,7 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
      * Cena konta = onlinecustomerprice (sklep podaje ją bez oznaczenia VAT — przyjmujemy jako netto zakupu, jak
      * w JSP). Katalogowa = pricelevel1: 15.09.2026 równa cenie katalogowej z cennika EMEA dla 194 z 207 wspólnych
      * kodów (13 różnic ±0,1 i jedna zmiana ceny) i zawsze ≥ cena konta. pricelevel1 niższe od ceny konta = brak
-     * katalogowej (null), nie zgadujemy. Waluta z profilu konta.
+     * katalogowej (null), nie zgadujemy. Waluta z profilu konta. Warunek zamawiania — orderQuantity().
      */
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
     {
@@ -217,7 +217,37 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
             base: $base,
             discountPercent: 0.0,
             currency: $this->client->currency(),
+            order: $this->orderQuantity($product->raw),
         );
+    }
+
+    /**
+     * Warunek zamawiania jak w skrypcie sklepu (extensions/shopping_5.js, odczyt 05.10.2026): minimum pozycji =
+     * custitem_b2bminimum, a gdy puste lub 0 — 1; koszyk przyjmuje tylko wielokrotności minimum (ilość % minimum == 0,
+     * „Quantity - Multiples of 10”), więc minimum jest też krokiem. 05.10.2026 w trzech kategoriach okularów: 140
+     * pozycji po 10, 70 po 1, 31 bez pola. Konto zwolnione z minimum (allowsLowQuantity) i wartość nieliczbowa = null:
+     * warunku nie znamy, zapisany zostaje. Bez jednostki — sklep jej nie podaje.
+     *
+     * @param  array<string, mixed>  $raw
+     */
+    private function orderQuantity(array $raw): ?B2bOrderQuantity
+    {
+        if ($this->client->allowsLowQuantity()) {
+            return null;
+        }
+        $value = $raw['custitem_b2bminimum'] ?? null;
+        if ($value === null || $value === '' || $value === false) {
+            return new B2bOrderQuantity(min: 1.0, step: null);
+        }
+        if (! is_numeric($value)) {
+            return null;
+        }
+        $minimum = (float) $value;
+        if ($minimum <= 1) {
+            return new B2bOrderQuantity(min: 1.0, step: null);
+        }
+
+        return new B2bOrderQuantity(min: $minimum, step: $minimum);
     }
 
     /**

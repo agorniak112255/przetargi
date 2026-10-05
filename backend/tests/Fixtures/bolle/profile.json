@@ -14,5 +14,12 @@
         "symbol": "€",
         "currencyname": "Euro"
     },
-    "priceLevel": "46"
+    "priceLevel": "46",
+    "customfields": [
+        {"name": "custentity_bb_channel", "value": "53"},
+        {"name": "custentity_customersegment_hide_prices", "value": "F"},
+        {"name": "custentity_c25_allowaddressediting", "value": "F"},
+        {"name": "custentity_c25_allowlowquantity", "value": "F"},
+        {"name": "custentity_c25_pendingdetails", "value": "F"}
+    ]
 }

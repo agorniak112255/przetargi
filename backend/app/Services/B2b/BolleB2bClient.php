@@ -78,6 +78,13 @@ final class BolleB2bClient
     /** Waluta cen konta z profilu (currency.code), znana po zalogowaniu. */
     private ?string $currency = null;
 
+    /**
+     * Pole konta custentity_c25_allowlowquantity (customfields profilu): „T” = konto zwolnione z minimum Bolle
+     * (custitem_b2bminimum) — skrypt sklepu bierze wtedy standardowe minimumquantity, którego /api/items nie podaje.
+     * Konto #4: „F” (05.10.2026).
+     */
+    private bool $allowsLowQuantity = false;
+
     private int $consecutiveFailures = 0;
 
     /** @var Closure(int): void */
@@ -108,6 +115,7 @@ final class BolleB2bClient
         $this->jar = new CookieJar;
         $this->loggedIn = false;
         $this->currency = null;
+        $this->allowsLowQuantity = false;
 
         try {
             $response = $this->send(
@@ -145,7 +153,14 @@ final class BolleB2bClient
         }
 
         $this->currency = $code;
+        $this->allowsLowQuantity = self::customField($profile, 'custentity_c25_allowlowquantity') === 'T';
         $this->loggedIn = true;
+    }
+
+    /** Konto zwolnione z minimum zamówienia Bolle (custentity_c25_allowlowquantity „T”); znane po zalogowaniu. */
+    public function allowsLowQuantity(): bool
+    {
+        return $this->allowsLowQuantity;
     }
 
     public function isLoggedIn(): bool
@@ -346,6 +361,22 @@ final class BolleB2bClient
         $json = $response->json();
 
         return is_array($json) ? $json : null;
+    }
+
+    /**
+     * Wartość pola konta z customfields profilu (lista {name, value}); brak pola = null.
+     *
+     * @param  array<string, mixed>  $profile
+     */
+    private static function customField(array $profile, string $name): ?string
+    {
+        foreach (is_array($profile['customfields'] ?? null) ? $profile['customfields'] : [] as $field) {
+            if (is_array($field) && ($field['name'] ?? null) === $name && is_scalar($field['value'] ?? null)) {
+                return trim((string) $field['value']);
+            }
+        }
+
+        return null;
     }
 
     /**
