@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
+use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -310,8 +311,13 @@ final class ErpItemAdminApiTest extends TestCase
 
         $viewer = Role::findOrCreate('podglad-erp', 'web');
         $viewer->givePermissionTo(['admin.access', 'admin.erp_links.view']);
+        // sam podgląd ekranu nie wystarcza — eksport ma osobne uprawnienie, domyślnie tylko admin
         Sanctum::actingAs(User::factory()->create()->assignRole($viewer));
+        $this->getJson('/api/admin/erp-items/export')->assertForbidden();
+        $viewer->givePermissionTo('admin.erp_links.export');
         $this->get('/api/admin/erp-items/export')->assertOk();
+        $this->assertSame(['admin'], Permission::findByName('admin.erp_links.export', 'web')->roles()
+            ->where('name', '!=', 'podglad-erp')->pluck('name')->all());
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
         $this->getJson('/api/admin/erp-items/export')->assertForbidden();
     }

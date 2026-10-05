@@ -295,6 +295,7 @@ function tileNumberClass(tone: Tile['tone']): string {
 export function AdminErpItems() {
   const { user } = useAuth()
   const canManage = can(user, 'admin.erp_links.manage')
+  const canExport = can(user, 'admin.erp_links.export')
   const [params, setParams] = useSearchParams()
 
   const status = pick<StatusFilter>(
@@ -869,15 +870,17 @@ export function AdminErpItems() {
             {meta ? itemsLabel(meta.total) : ''}
             {loading ? (meta ? ' · ładowanie…' : 'Ładowanie…') : ''}
           </span>
-          <button
-            type="button"
-            disabled={exportBusy || !meta || meta.total === 0}
-            onClick={() => void exportExcel()}
-            title="Wszystkie towary przy tych filtrach i tym sortowaniu (wszystkie strony), z arkuszem „Zestawienie”"
-            className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs hover:bg-slate-50 disabled:opacity-40"
-          >
-            {exportBusy ? 'Przygotowuję plik…' : 'Eksport do Excela'}
-          </button>
+          {canExport && (
+            <button
+              type="button"
+              disabled={exportBusy || !meta || meta.total === 0}
+              onClick={() => void exportExcel()}
+              title="Wszystkie towary przy tych filtrach i tym sortowaniu (wszystkie strony), z arkuszem „Zestawienie”"
+              className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs hover:bg-slate-50 disabled:opacity-40"
+            >
+              {exportBusy ? 'Przygotowuję plik…' : 'Eksport do Excela'}
+            </button>
+          )}
           {resultLinkers.length > 0 && (
             <span className="flex flex-wrap items-center gap-1 text-slate-500" title="Liczone przy tych filtrach, bez filtra „Połączył”">
               Połączyli:

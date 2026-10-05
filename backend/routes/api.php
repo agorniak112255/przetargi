@@ -651,7 +651,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         // Powiązania towarów Comarch ERP XL z kartami
         Route::get('/erp-items', [ErpItemController::class, 'index'])->middleware('permission:admin.erp_links.view');
         Route::get('/erp-items/summary', [ErpItemController::class, 'summary'])->middleware('permission:admin.erp_links.view');
-        Route::get('/erp-items/export', [ErpItemController::class, 'export'])->middleware('permission:admin.erp_links.view');
+        Route::get('/erp-items/export', [ErpItemController::class, 'export'])->middleware(['permission:admin.erp_links.view', 'permission:admin.erp_links.export']);
         Route::middleware('permission:admin.erp_links.manage')->group(function (): void {
             Route::post('/erp-items/{item}/link', [ErpItemController::class, 'link']);
             Route::post('/erp-links/bulk-confirm', [ErpItemController::class, 'bulkConfirm']);
