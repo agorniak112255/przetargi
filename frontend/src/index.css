@@ -18,8 +18,11 @@ body {
 
 /* Pasek akcji odpowiedzi na zapytanie przykleja się u góry ekranu (sticky). Przewija się cała
    strona, a obszar główny z overflow:auto łapie sticky w swoim pudełku, które się nie przewija —
-   więc na tym ekranie nie jest kontenerem przewijania. Inne ekrany bez zmian. */
-.app-main:has(.app-inquiry-reply) {
+   więc na tym ekranie nie jest kontenerem przewijania. Inne ekrany bez zmian.
+   To samo dla przypiętego paska dobierania do kampanii (Produkty; w Zapasach także pasek zaznaczonych)
+   — tylko gdy pasek coś zawiera. */
+.app-main:has(.app-inquiry-reply),
+.app-main:has(.app-sticky-bar:not(:empty)) {
   overflow: visible;
   min-width: 0;
 }

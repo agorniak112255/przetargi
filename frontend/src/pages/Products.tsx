@@ -864,7 +864,7 @@ export function Products() {
       />
       {canCampaign && campaignPick.campaignId !== null && (
         // przypięty u góry: widać, do której kampanii dobierasz karty, i przycisk dodania przy przewijaniu listy
-        <div className="sticky top-0 z-30 -mx-1 mb-4 px-1">
+        <div className="app-sticky-bar sticky top-0 z-30 -mx-1 mb-4 px-1">
           <CampaignPickBanner
             {...campaignPick}
             what="karty"
