@@ -393,6 +393,7 @@ function ItemsSection({
 }) {
   const { user } = useAuth()
   const [adding, setAdding] = useState(false)
+  const searchBox = useRef<HTMLDivElement>(null)
   const items = offer.items
   const max = offer.limits.max_items
   const full = items.length >= max
@@ -408,6 +409,10 @@ function ItemsSection({
     setAdding(true)
     await mutate(() => addOfferItems(offer.id, { product_ids: [productId] }), 'Nie udało się dodać produktu.')
     setAdding(false)
+  }
+
+  function focusSearch() {
+    searchBox.current?.querySelector('input')?.focus()
   }
 
   const noPrice = items.filter((i) => i.warnings.no_price && (i.erp_item_id != null || i.product_id != null)).length
@@ -427,7 +432,7 @@ function ItemsSection({
           {noImage > 0 && <Chip tone="amber">bez zdjęcia: {noImage}</Chip>}
         </div>
         {canSearch ? (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <div ref={searchBox} className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
             <span>Dodaj kartę produktu:</span>
             {/* pole zawsze puste: wybór karty od razu dodaje pozycję, a pole wraca do szukania */}
             <ProductSearchSelect
@@ -442,6 +447,19 @@ function ItemsSection({
               }}
             />
             {adding && <span className="text-slate-500">dodaję…</span>}
+            {items.length > 0 && (
+              <>
+                <span>albo zaznacz w</span>
+                <Link to="/products" className={`${BTN_SM} inline-block`}>
+                  Produktach
+                </Link>
+                {canInventory && (
+                  <Link to="/zapasy" className={`${BTN_SM} inline-block`}>
+                    Zapasach
+                  </Link>
+                )}
+              </>
+            )}
           </div>
         ) : (
           <span className="text-xs text-slate-500">Wyszukiwanie kart wymaga uprawnienia „Produkty — podgląd”.</span>
@@ -481,24 +499,32 @@ function ItemsSection({
             ))}
             {items.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-8 text-center text-slate-500">
-                  Oferta nie ma jeszcze produktów. Wyszukaj kartę powyżej albo zaznacz towar w{' '}
-                  {canSearch ? (
-                    <Link to="/products" className="text-blue-600 hover:underline">
-                      Produktach
-                    </Link>
-                  ) : (
-                    'Produktach'
-                  )}{' '}
-                  lub{' '}
-                  {canInventory ? (
-                    <Link to="/zapasy" className="text-blue-600 hover:underline">
-                      Zapasach
-                    </Link>
-                  ) : (
-                    'Zapasach'
-                  )}{' '}
-                  i wybierz „Dodaj do oferty”.
+                <td colSpan={6} className="p-6">
+                  <div className="mx-auto max-w-xl text-center">
+                    <p className="text-sm font-medium text-slate-700">Oferta nie ma jeszcze produktów — dodaj je:</p>
+                    <div className="mt-3 flex flex-wrap justify-center gap-2">
+                      {canSearch && (
+                        <button type="button" className={BTN_PRIMARY} onClick={focusSearch}>
+                          Wyszukaj kartę produktu
+                        </button>
+                      )}
+                      {canSearch && (
+                        <Link to="/products" className={`${BTN} inline-block`}>
+                          Wybierz w Produktach
+                        </Link>
+                      )}
+                      {canInventory && (
+                        <Link to="/zapasy" className={`${BTN} inline-block`}>
+                          Wybierz w Zapasach
+                        </Link>
+                      )}
+                    </div>
+                    <p className="mt-3 text-[11px] text-slate-500">
+                      „Wyszukaj kartę produktu” — wpisz nazwę albo kod w polu w prawym górnym rogu i kliknij produkt na
+                      liście. W Produktach i Zapasach zaznacz pozycje kwadracikami po lewej, kliknij „Dodaj do oferty”
+                      i wybierz {offer.code ?? 'tę ofertę'}.
+                    </p>
+                  </div>
                 </td>
               </tr>
             )}
