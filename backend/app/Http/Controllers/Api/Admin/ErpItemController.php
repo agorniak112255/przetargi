@@ -11,6 +11,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Services\Erp\ErpLinkDecisions;
 use App\Support\PolishTime;
+use App\Support\XlsxStreamWriter;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
@@ -20,6 +21,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
  * Ekran „Powiązania z ERP XL”: towary XL (aktywne, bez usuniętych z XL) z wynikiem łączenia i powiązanymi kartami,
@@ -69,11 +71,61 @@ class ErpItemController extends Controller
     /** „Połączył” w filtrze i zestawieniu: automat zamiast osoby. */
     private const LINKER_AUTO = 'auto';
 
+    /** Filtr statusu: potwierdzone przez człowieka karty, które automat już wcześniej połączył (auto_linked_at). */
+    private const STATUS_AFTER_AUTO = 'confirmed_after_auto';
+
+    /** Status w eksporcie — jak plakietki na ekranie. */
+    private const OUTCOME_LABELS = [
+        'auto' => 'połączone automatycznie',
+        'confirmed' => 'potwierdzone',
+        'suggested' => 'do decyzji',
+        'ambiguous' => 'do decyzji: kilka kart',
+        'name_suggested' => 'do decyzji: z nazwy karty',
+        'search_suggested' => 'do decyzji: z wyszukiwarki',
+        'no_match' => 'kod bez karty',
+        'family_conflict' => 'kod bez karty (inna rodzina)',
+        'no_code' => 'bez kodu',
+        'rejected' => 'odrzucone',
+    ];
+
+    private const STATUS_FILTER_LABELS = [
+        'unlinked' => 'bez karty (wszystko poza połączonymi)',
+        'review' => 'do decyzji',
+        'no_card' => 'kod bez karty w katalogu',
+        'no_code' => 'bez kodu w nazwie',
+        'linked' => 'połączone (auto + potwierdzone)',
+        'auto' => 'połączone automatycznie',
+        'confirmed' => 'potwierdzone ręcznie',
+        self::STATUS_AFTER_AUTO => 'potwierdzone po automacie',
+        'rejected' => 'odrzucone',
+    ];
+
+    private const METHOD_LABELS = [
+        'name' => 'z nazwy XL',
+        'name1' => 'z Nazwa1',
+        'xl_code' => 'z kodu XL',
+        'card_name' => 'z nazwy karty',
+        'search' => 'z wyszukiwarki',
+        'manual' => 'wybrane ręcznie',
+    ];
+
+    private const SORT_LABELS = [
+        'stock' => 'stan HANDEL',
+        'last_sale' => 'ostatnia sprzedaż',
+        'last_purchase' => 'ostatni zakup',
+        'code' => 'kod XL',
+        'name' => 'nazwa XL',
+        'status' => 'status',
+        'card' => 'karta',
+        'linked_at' => 'data połączenia',
+        'linked_by' => 'kto połączył',
+    ];
+
     /**
      * Wartości powiązania łączącego towar (linking()): kiedy — potwierdzenie człowieka albo założenie przez automat;
      * kto — id osoby, 0 = automat, -1 = potwierdzenie osoby usuniętej z systemu.
      */
-    private const LINKED_AT_SQL = "case when pl.status = 'confirmed' then coalesce(pl.decided_at, pl.created_at) else pl.created_at end";
+    private const LINKED_AT_SQL = "case when pl.status = 'confirmed' then coalesce(pl.decided_at, pl.created_at) else coalesce(pl.auto_linked_at, pl.created_at) end";
 
     private const LINKER_SQL = "case when pl.status = 'confirmed' then coalesce(pl.decided_by, -1) else 0 end";
 
@@ -92,8 +144,90 @@ class ErpItemController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $v = $request->validate([
-            'status' => ['nullable', 'string', Rule::in([...array_keys(self::STATUS_OUTCOMES), 'unlinked'])],
+        $v = $request->validate($this->listRules($request) + [
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
+        ]);
+        $query = $this->filtered($v);
+        // zestawienie „kto ile połączył” dla tych samych filtrów, bez filtra osoby — widać wszystkich w okresie
+        $linkers = $this->linkers(clone $query);
+        $this->filterLinkerAndSort($query, $v);
+        $page = $query
+            ->with(['links.product:id,sku,name,manufacturer', 'links.decider:id,name'])
+            ->paginate((int) ($v['per_page'] ?? 50));
+
+        return response()->json([
+            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item))->values()->all(),
+            'meta' => [
+                'current_page' => $page->currentPage(),
+                'last_page' => $page->lastPage(),
+                'per_page' => $page->perPage(),
+                'total' => $page->total(),
+                'linkers' => $linkers,
+            ],
+        ]);
+    }
+
+    /**
+     * Plik Excel z towarami przy tych samych filtrach i sortowaniu co lista (wszystkie strony) — arkusz „Towary”
+     * i „Zestawienie” (użyte filtry, kto ile połączył). Zapis strumieniowy: pełna lista to ponad 30 tys. wierszy.
+     */
+    public function export(Request $request): BinaryFileResponse
+    {
+        $v = $request->validate($this->listRules($request));
+        $query = $this->filtered($v);
+        $linkers = $this->linkers(clone $query);
+        $this->filterLinkerAndSort($query, $v);
+        $ids = $query->pluck('id')->all();
+
+        $path = tempnam(sys_get_temp_dir(), 'erpxl');
+        if ($path === false) {
+            abort(500, 'Nie udało się przygotować pliku.');
+        }
+        $xlsx = new XlsxStreamWriter($path);
+        $xlsx->addSheet('Towary', [14, 45, 18, 7, 10, 10, 12, 12, 26, 30, 22, 45, 16, 14, 18, 22, 17, 17, 22], header: true);
+        $xlsx->addRow(['Kod XL', 'Nazwa XL', 'Nazwa1', 'Jedn.', 'Stan HANDEL', 'Stan wszystkie magazyny', 'Ostatnia sprzedaż',
+            'Ostatni zakup', 'Ostatni dostawca', 'Status', 'Karta (SKU)', 'Nazwa karty', 'Producent karty', 'Skąd kod',
+            'Kod z XL', 'Połączył', 'Data połączenia', 'Automat połączył', 'Odrzucone karty (SKU)']);
+        foreach (array_chunk($ids, 500) as $chunk) {
+            $items = ErpItem::query()
+                ->whereIn('id', $chunk)
+                ->with(['links.product:id,sku,name,manufacturer', 'links.decider:id,name'])
+                ->get()
+                ->keyBy('id');
+            foreach ($chunk as $id) {
+                $item = $items->get($id);
+                if ($item !== null) {
+                    $xlsx->addRow($this->exportRow($this->present($item)));
+                }
+            }
+        }
+
+        $xlsx->addSheet('Zestawienie', [40, 40]);
+        $xlsx->addRow(['Powiązania z ERP XL — eksport', XlsxStreamWriter::dateTime(PolishTime::now())]);
+        $xlsx->addRow(['Towarów w pliku', count($ids)]);
+        $xlsx->addRow([]);
+        $xlsx->addRow(['Filtry']);
+        foreach ($this->filterLabels($v) as [$label, $value]) {
+            $xlsx->addRow([$label, $value]);
+        }
+        $xlsx->addRow([]);
+        $xlsx->addRow(['Kto połączył (te filtry, bez filtra „Połączył”)', 'Towarów']);
+        foreach ($linkers as $l) {
+            $xlsx->addRow([$l['name'], $l['count']]);
+        }
+        $xlsx->close();
+
+        return response()->download($path, 'powiazania-erp-xl-'.PolishTime::now()->format('Y-m-d').'.xlsx', [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend();
+    }
+
+    /** @return array<string, list<mixed>> */
+    private function listRules(Request $request): array
+    {
+        return [
+            'status' => ['nullable', 'string', Rule::in([...array_keys(self::STATUS_OUTCOMES), 'unlinked', self::STATUS_AFTER_AUTO])],
             'group' => ['nullable', 'string', Rule::in([...self::GROUPS, 'other'])],
             'in_stock' => ['nullable', 'boolean'],
             'sold_months' => ['nullable', 'integer', Rule::in([3, 6, 12])],
@@ -104,14 +238,24 @@ class ErpItemController extends Controller
             'linked_to' => ['nullable', 'date_format:Y-m-d', ...($request->filled('linked_from') ? ['after_or_equal:linked_from'] : [])],
             'sort' => ['nullable', 'string', Rule::in([...array_keys(self::SORTS), ...self::LINK_SORTS])],
             'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
-            'page' => ['nullable', 'integer', 'min:1'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
-        ]);
+        ];
+    }
 
+    /**
+     * Filtry listy bez filtra „Połączył” (ten dokłada filterLinkerAndSort — zestawienie liczy się bez niego).
+     *
+     * @param  array<string, mixed>  $v
+     * @return Builder<ErpItem>
+     */
+    private function filtered(array $v): Builder
+    {
         $query = $this->active();
         $status = (string) ($v['status'] ?? '');
         if ($status === 'unlinked') {
             $query->where(fn (Builder $q) => $q->whereNull('match_outcome')->orWhereNotIn('match_outcome', ['auto', 'confirmed']));
+        } elseif ($status === self::STATUS_AFTER_AUTO) {
+            $after = $this->linking('pl.auto_linked_at');
+            $query->where('match_outcome', 'confirmed')->whereRaw('('.$after->toSql().') is not null', $after->getBindings());
         } elseif ($status !== '') {
             $query->whereIn('match_outcome', self::STATUS_OUTCOMES[$status]);
         }
@@ -147,13 +291,20 @@ class ErpItemController extends Controller
         if (! empty($v['linked_to'])) {
             $query->where($this->linking(self::LINKED_AT_SQL), '<', $this->polishDayStart((string) $v['linked_to'], 1));
         }
-        // zestawienie „kto ile połączył” dla tych samych filtrów, bez filtra osoby — widać wszystkich w okresie
-        $linkers = $this->linkers(clone $query);
+
+        return $query;
+    }
+
+    /**
+     * @param  Builder<ErpItem>  $query
+     * @param  array<string, mixed>  $v
+     */
+    private function filterLinkerAndSort(Builder $query, array $v): void
+    {
         $linkedBy = (string) ($v['linked_by'] ?? '');
         if ($linkedBy !== '') {
             $query->where($this->linking(self::LINKER_SQL), '=', $linkedBy === self::LINKER_AUTO ? 0 : (int) $linkedBy);
         }
-
         $sort = (string) ($v['sort'] ?? 'stock');
         $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         if (in_array($sort, self::LINK_SORTS, true)) {
@@ -161,21 +312,94 @@ class ErpItemController extends Controller
         } else {
             $query->orderBy(self::SORTS[$sort], $dir);
         }
-        $page = $query
-            ->orderBy('id')
-            ->with(['links.product:id,sku,name,manufacturer', 'links.decider:id,name'])
-            ->paginate((int) ($v['per_page'] ?? 50));
+        $query->orderBy('id');
+    }
 
-        return response()->json([
-            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item))->values()->all(),
-            'meta' => [
-                'current_page' => $page->currentPage(),
-                'last_page' => $page->lastPage(),
-                'per_page' => $page->perPage(),
-                'total' => $page->total(),
-                'linkers' => $linkers,
-            ],
-        ]);
+    /**
+     * Wiersz arkusza z present() — te same reguły co ekran (kto i kiedy, kolejność kart).
+     *
+     * @param  array<string, mixed>  $row
+     * @return list<mixed>
+     */
+    private function exportRow(array $row): array
+    {
+        /** @var list<array<string, mixed>> $links */
+        $links = $row['links'];
+        $visible = array_values(array_filter($links, static fn (array $l): bool => $l['status'] !== ErpItemLink::STATUS_REJECTED));
+        $rejected = array_values(array_filter($links, static fn (array $l): bool => $l['status'] === ErpItemLink::STATUS_REJECTED));
+        $first = $visible[0] ?? null;
+        $skus = static fn (array $list): string => implode('; ', array_map(
+            static fn (array $l): string => $l['product']['sku'] ?? 'karta usunięta',
+            $list,
+        ));
+        /** @var array{auto: bool, by: string|null, at: string|null, auto_at: string|null}|null $linked */
+        $linked = $row['linked'];
+
+        return [
+            $row['code'],
+            $row['name'],
+            $row['name1'],
+            $row['unit'],
+            $row['stock_trade'],
+            $row['stock_total'],
+            XlsxStreamWriter::date($row['last_sale_at']),
+            XlsxStreamWriter::date($row['last_purchase_at']),
+            $row['last_supplier'],
+            $this->statusLabel($row['outcome'], $linked),
+            $skus($visible),
+            $first['product']['name'] ?? null,
+            $first['product']['manufacturer'] ?? null,
+            $first !== null ? (self::METHOD_LABELS[$first['method']] ?? $first['method']) : null,
+            $first['matched_value'] ?? $row['match_value'],
+            $linked === null ? null : ($linked['auto'] ? 'automat' : $linked['by']),
+            XlsxStreamWriter::dateTime($this->polish($linked['at'] ?? null)),
+            XlsxStreamWriter::dateTime($this->polish($linked['auto_at'] ?? null)),
+            $rejected === [] ? null : $skus($rejected),
+        ];
+    }
+
+    /** @param  array{auto: bool, by: string|null, at: string|null, auto_at: string|null}|null  $linked */
+    private function statusLabel(?string $outcome, ?array $linked): string
+    {
+        $label = self::OUTCOME_LABELS[$outcome ?? ''] ?? 'nie przeliczone';
+
+        return $outcome === 'confirmed' && ($linked['auto_at'] ?? null) !== null ? $label.' po automacie' : $label;
+    }
+
+    private function polish(?string $iso): ?CarbonImmutable
+    {
+        return $iso === null ? null : CarbonImmutable::parse($iso)->setTimezone(PolishTime::TIMEZONE);
+    }
+
+    /**
+     * Użyte filtry po ludzku — arkusz „Zestawienie”.
+     *
+     * @param  array<string, mixed>  $v
+     * @return list<array{0: string, 1: string}>
+     */
+    private function filterLabels(array $v): array
+    {
+        $status = (string) ($v['status'] ?? '');
+        $linkedBy = (string) ($v['linked_by'] ?? '');
+        $labels = [
+            ['Status', self::STATUS_FILTER_LABELS[$status] ?? 'wszystkie'],
+            ['Grupa', ($v['group'] ?? '') !== '' ? (string) $v['group'] : 'wszystkie'],
+            ['Sprzedaż', ! empty($v['sold_months']) ? 'w ostatnich '.$v['sold_months'].' mies.' : 'dowolna'],
+            ['Tylko ze stanem HANDEL', ! empty($v['in_stock']) ? 'tak' : 'nie'],
+            ['Dostawca', trim((string) ($v['supplier'] ?? '')) ?: '—'],
+            ['Szukaj', trim((string) ($v['search'] ?? '')) ?: '—'],
+            ['Połączył', match (true) {
+                $linkedBy === '' => 'wszyscy',
+                $linkedBy === self::LINKER_AUTO => 'automat',
+                default => (string) (User::query()->whereKey((int) $linkedBy)->value('name') ?? 'użytkownik #'.$linkedBy),
+            }],
+            ['Połączone od', (string) ($v['linked_from'] ?? '') ?: '—'],
+            ['Połączone do', (string) ($v['linked_to'] ?? '') ?: '—'],
+        ];
+        $sort = (string) ($v['sort'] ?? 'stock');
+        $labels[] = ['Sortowanie', (self::SORT_LABELS[$sort] ?? $sort).', '.(($v['dir'] ?? 'desc') === 'asc' ? 'rosnąco' : 'malejąco')];
+
+        return $labels;
     }
 
     public function summary(): JsonResponse
@@ -362,7 +586,10 @@ class ErpItemController extends Controller
     /**
      * Kto i kiedy połączył towar z kartą — powiązanie wybrane jak w linking().
      *
-     * @return array{auto: bool, by: string|null, at: string|null}|null
+     * auto_at — kiedy automat połączył tę kartę (przy potwierdzonej: „po automacie”; null = automat nie łączył albo
+     * potwierdzenie sprzed zapisywania tej daty).
+     *
+     * @return array{auto: bool, by: string|null, at: string|null, auto_at: string|null}|null
      */
     private function linkedBy(ErpItem $item): ?array
     {
@@ -380,12 +607,14 @@ class ErpItemController extends Controller
             return null;
         }
         $auto = $link->status === ErpItemLink::STATUS_AUTO;
-        $at = $auto ? $link->created_at : ($link->decided_at ?? $link->created_at);
+        $autoAt = $link->auto_linked_at ?? ($auto ? $link->created_at : null);
+        $at = $auto ? $autoAt : ($link->decided_at ?? $link->created_at);
 
         return [
             'auto' => $auto,
             'by' => $auto ? null : ($link->decider?->name ?? ($link->decided_by !== null ? 'użytkownik #'.$link->decided_by : 'osoba usunięta z systemu')),
             'at' => $at?->toIso8601String(),
+            'auto_at' => $autoAt?->toIso8601String(),
         ];
     }
 
@@ -408,6 +637,7 @@ class ErpItemController extends Controller
                 'evidence' => $l->evidence,
                 'decided_at' => $l->decided_at?->toIso8601String(),
                 'decided_by' => $l->decider?->name,
+                'auto_linked_at' => $l->auto_linked_at?->toIso8601String(),
                 'product' => $l->product === null ? null : [
                     'id' => $l->product->id,
                     'sku' => (string) $l->product->sku,

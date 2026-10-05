@@ -6,6 +6,7 @@ import { applyCheckboxRange } from '../lib/checkboxRange'
 import {
   api,
   can,
+  downloadFile,
   type ErpAdminItem,
   type ErpAdminLink,
   type ErpAdminLinker,
@@ -21,7 +22,17 @@ type ItemsPage = {
   meta: { current_page: number; last_page: number; per_page: number; total: number; linkers: ErpAdminLinker[] }
 }
 
-type StatusFilter = '' | 'linked' | 'auto' | 'confirmed' | 'review' | 'no_card' | 'no_code' | 'rejected' | 'unlinked'
+type StatusFilter =
+  | ''
+  | 'linked'
+  | 'auto'
+  | 'confirmed'
+  | 'confirmed_after_auto'
+  | 'review'
+  | 'no_card'
+  | 'no_code'
+  | 'rejected'
+  | 'unlinked'
 type SortKey = 'stock' | 'last_sale' | 'last_purchase' | 'code' | 'name' | 'status' | 'card' | 'linked_at' | 'linked_by'
 type SortDir = 'asc' | 'desc'
 const SORT_KEYS: readonly SortKey[] = [
@@ -46,6 +57,7 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: 'linked', label: 'Połączone (auto + potwierdzone)' },
   { value: 'auto', label: 'Połączone automatycznie' },
   { value: 'confirmed', label: 'Potwierdzone ręcznie' },
+  { value: 'confirmed_after_auto', label: 'Potwierdzone po automacie' },
   { value: 'rejected', label: 'Odrzucone' },
 ]
 
@@ -144,7 +156,17 @@ function OutcomeBadge({ item }: { item: ErpAdminItem }) {
     case 'auto':
       return <span className={`${BADGE_BASE} bg-green-100 text-green-800`}>połączone auto</span>
     case 'confirmed':
-      return <span className={`${BADGE_BASE} bg-emerald-700 text-white`}>potwierdzone</span>
+      return item.linked?.auto_at && !item.linked.auto ? (
+        <span
+          className={`${BADGE_BASE} bg-emerald-700 text-white`}
+          title={`Automat połączył tę kartę ${formatDateTime(item.linked.auto_at)}, potem potwierdził ją człowiek`}
+        >
+          potwierdzone
+          <span className="block font-normal">po automacie</span>
+        </span>
+      ) : (
+        <span className={`${BADGE_BASE} bg-emerald-700 text-white`}>potwierdzone</span>
+      )
     case 'suggested':
       return (
         <span className={`${BADGE_BASE} bg-amber-100 text-amber-800`} title="Jedna karta, ale bez mocnego dowodu">
@@ -324,6 +346,7 @@ export function AdminErpItems() {
   const [msg, setMsg] = useState('')
   const [busyItemId, setBusyItemId] = useState<number | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({})
   const [selected, setSelected] = useState<Record<number, boolean>>({})
   const [pickFor, setPickFor] = useState<ErpAdminItem | null>(null)
@@ -565,6 +588,24 @@ export function AdminErpItems() {
       setBulkBusy(false)
       void loadSummary()
       await loadList()
+    }
+  }
+
+  /** Wszystkie towary przy bieżących filtrach i sortowaniu (bez stronicowania) — plik Excel z serwera. */
+  async function exportExcel() {
+    const qs = new URLSearchParams(apiQuery)
+    qs.delete('page')
+    qs.delete('per_page')
+    setExportBusy(true)
+    setMsg('')
+    setActionErr('')
+    try {
+      await downloadFile(`/admin/erp-items/export?${qs.toString()}`, 'powiazania-erp-xl.xlsx')
+      setMsg('Pobrano plik Excel z towarami przy tych filtrach.')
+    } catch (ex) {
+      setActionErr(ex instanceof Error ? ex.message : 'Nie udało się pobrać pliku Excel')
+    } finally {
+      setExportBusy(false)
     }
   }
 
@@ -828,6 +869,15 @@ export function AdminErpItems() {
             {meta ? itemsLabel(meta.total) : ''}
             {loading ? (meta ? ' · ładowanie…' : 'Ładowanie…') : ''}
           </span>
+          <button
+            type="button"
+            disabled={exportBusy || !meta || meta.total === 0}
+            onClick={() => void exportExcel()}
+            title="Wszystkie towary przy tych filtrach i tym sortowaniu (wszystkie strony), z arkuszem „Zestawienie”"
+            className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs hover:bg-slate-50 disabled:opacity-40"
+          >
+            {exportBusy ? 'Przygotowuję plik…' : 'Eksport do Excela'}
+          </button>
           {resultLinkers.length > 0 && (
             <span className="flex flex-wrap items-center gap-1 text-slate-500" title="Liczone przy tych filtrach, bez filtra „Połączył”">
               Połączyli:
@@ -972,6 +1022,11 @@ export function AdminErpItems() {
                           {item.linked.auto ? 'automat' : item.linked.by}
                         </div>
                         {item.linked.at && <div className="text-slate-500">{formatDateTime(item.linked.at)}</div>}
+                        {!item.linked.auto && item.linked.auto_at && (
+                          <div className="text-slate-400" title="Automat połączył tę kartę wcześniej">
+                            automat: {formatDate(item.linked.auto_at)}
+                          </div>
+                        )}
                       </>
                     ) : (
                       <span className="text-slate-400">—</span>

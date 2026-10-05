@@ -45,8 +45,9 @@ final class ErpLinkDecisions
     {
         return DB::transaction(function () use ($item, $product, $user): ErpItem {
             $link = ErpItemLink::query()->firstOrNew(['erp_item_id' => $item->id, 'product_id' => $product->id]);
+            // karta, którą automat już połączył (auto), zachowuje datę automatu — „potwierdzone po automacie”
             if (! $link->exists || $link->status === ErpItemLink::STATUS_REJECTED) {
-                $link->fill(['method' => ErpItemLink::METHOD_MANUAL, 'matched_value' => null, 'matched_code' => null, 'evidence' => null]);
+                $link->fill(['method' => ErpItemLink::METHOD_MANUAL, 'matched_value' => null, 'matched_code' => null, 'evidence' => null, 'auto_linked_at' => null]);
             }
             $link->fill(['status' => ErpItemLink::STATUS_CONFIRMED, 'decided_by' => $user->id, 'decided_at' => now()])->save();
             $this->dropUndecided((int) $item->id, (int) $link->id);

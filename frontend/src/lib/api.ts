@@ -942,6 +942,8 @@ export type ErpAdminLink = {
   decided_at: string | null
   /** Imię / nazwa użytkownika. */
   decided_by: string | null
+  /** Kiedy automat połączył tę kartę (zostaje po potwierdzeniu); null = automat jej nie łączył albo nie wiadomo. */
+  auto_linked_at: string | null
   product: { id: number; sku: string; name: string; manufacturer: string | null } | null
 }
 
@@ -963,8 +965,11 @@ export type ErpAdminItem = {
   outcome: ErpOutcome
   /** Kod z XL, którym próbowano łączyć (także przy no_match). */
   match_value: string | null
-  /** Kto i kiedy połączył towar z kartą (najnowsze potwierdzenie, bez niego automat); null = niepołączony. */
-  linked: { auto: boolean; by: string | null; at: string | null } | null
+  /**
+   * Kto i kiedy połączył towar z kartą (najnowsze potwierdzenie, bez niego automat); null = niepołączony.
+   * auto_at przy potwierdzonej karcie = automat połączył ją wcześniej („po automacie”).
+   */
+  linked: { auto: boolean; by: string | null; at: string | null; auto_at: string | null } | null
   links: ErpAdminLink[]
 }
 

@@ -52,6 +52,8 @@ class ErpItemLink extends Model
         'evidence',
         'decided_by',
         'decided_at',
+        // kiedy automat połączył (status auto); zostaje po potwierdzeniu — „potwierdzone po automacie”
+        'auto_linked_at',
         'last_seen_at',
     ];
 
@@ -60,6 +62,7 @@ class ErpItemLink extends Model
         return [
             'evidence' => 'array',
             'decided_at' => 'datetime',
+            'auto_linked_at' => 'datetime',
             'last_seen_at' => 'datetime',
         ];
     }

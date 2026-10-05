@@ -12,6 +12,8 @@ use App\Services\Erp\ErpItemMatcher;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -187,8 +189,9 @@ final class ErpItemAdminApiTest extends TestCase
         $this->postJson('/api/admin/erp-items/'.$byBartek->id.'/link', ['product_id' => $cardA->id])->assertOk();
 
         $rows = collect($this->getJson('/api/admin/erp-items?sort=code&dir=asc')->assertOk()->json('data'))->keyBy('code');
-        $this->assertSame(['auto' => true, 'by' => null, 'at' => '2026-09-29T07:00:00+00:00'], $rows['SAUTO']['linked']);
-        $this->assertSame(['auto' => false, 'by' => 'Ala', 'at' => '2026-10-01T10:00:00+00:00'], $rows['SALA']['linked']);
+        $this->assertSame(['auto' => true, 'by' => null, 'at' => '2026-09-29T07:00:00+00:00', 'auto_at' => '2026-09-29T07:00:00+00:00'], $rows['SAUTO']['linked']);
+        // potwierdzona propozycja — automat jej nie łączył
+        $this->assertSame(['auto' => false, 'by' => 'Ala', 'at' => '2026-10-01T10:00:00+00:00', 'auto_at' => null], $rows['SALA']['linked']);
         $this->assertSame('Bartek', $rows['SBART']['linked']['by']);
         $this->assertNull($rows['SOPEN']['linked']);
 
@@ -219,6 +222,98 @@ final class ErpItemAdminApiTest extends TestCase
         $this->assertSame(['SALA2', 'SALA', 'SAUTO', 'SBART', 'SOPEN'], $this->codes('sort=linked_by&dir=asc'));
         $this->assertSame(['SALA', 'SALA2', 'SBART', 'SAUTO', 'SOPEN'], $this->codes('sort=status&dir=asc&per_page=5'));
         $this->assertSame(['SBART', 'SOPEN', 'SALA', 'SALA2', 'SAUTO'], $this->codes('sort=card&dir=asc'));
+    }
+
+    public function test_confirming_what_the_automat_linked_keeps_the_automat_mark(): void
+    {
+        $user = User::factory()->withRole('admin')->create(['name' => 'Ala']);
+        Sanctum::actingAs($user);
+        $uvex = $this->card('9174.065', 'UVEX', 'Okulary Skylite 9174.065');
+        $auto = $this->item('SOK9174065', 'OKULARY UVEX 9174.065', null, suppliers: ['UVEX']);
+        $manualCard = $this->card('RR-TACTYL', 'Reis', 'Rękawice Tactyl');
+        $manual = $this->item('ARĘKTACTYL', 'RĘKAWICE TACTYL', null);
+
+        $this->travelTo('2026-10-01 08:00:00');
+        app(ErpItemMatcher::class)->refresh();
+        $link = ErpItemLink::query()->where('erp_item_id', $auto->id)->sole();
+        $this->assertSame(ErpItemLink::STATUS_AUTO, $link->status);
+        $this->assertSame('2026-10-01 08:00:00', $link->auto_linked_at?->format('Y-m-d H:i:s'));
+        // kolejny przebieg nie przesuwa daty automatu
+        $this->travelTo('2026-10-02 08:00:00');
+        app(ErpItemMatcher::class)->refresh();
+        $this->assertSame('2026-10-01 08:00:00', $link->refresh()->auto_linked_at?->format('Y-m-d H:i:s'));
+
+        $this->travelTo('2026-10-03 09:00:00');
+        $item = $this->postJson('/api/admin/erp-links/'.$link->id.'/confirm')->assertOk()->json('item');
+        $this->assertSame('confirmed', $item['outcome']);
+        $this->assertSame(['auto' => false, 'by' => 'Ala', 'at' => '2026-10-03T09:00:00+00:00', 'auto_at' => '2026-10-01T08:00:00+00:00'], $item['linked']);
+        $this->assertSame('2026-10-01T08:00:00+00:00', $item['links'][0]['auto_linked_at']);
+        $this->postJson('/api/admin/erp-items/'.$manual->id.'/link', ['product_id' => $manualCard->id])->assertOk()
+            ->assertJsonPath('item.linked.auto_at', null);
+
+        $this->assertSame(['SOK9174065'], $this->codes('status=confirmed_after_auto'));
+        $this->assertSame(['ARĘKTACTYL', 'SOK9174065'], $this->codes('status=confirmed&sort=code&dir=asc'));
+        // potwierdzenie przetrwało następny przebieg automatu razem z datą
+        app(ErpItemMatcher::class)->refresh();
+        $this->assertSame([ErpItemLink::STATUS_CONFIRMED, '2026-10-01 08:00:00'], [$link->refresh()->status, $link->auto_linked_at?->format('Y-m-d H:i:s')]);
+
+        // odrzucone powiązanie automatu połączone potem ręcznie to już wybór człowieka, nie automatu
+        $this->postJson('/api/admin/erp-links/'.$link->id.'/reject')->assertOk();
+        $this->postJson('/api/admin/erp-items/'.$auto->id.'/link', ['product_id' => $uvex->id])->assertOk()
+            ->assertJsonPath('item.linked.auto_at', null)
+            ->assertJsonPath('item.links.0.method', 'manual');
+    }
+
+    public function test_excel_export_follows_filters_and_sorting(): void
+    {
+        $ala = User::factory()->withRole('admin')->create(['name' => 'Ala']);
+        $cardA = $this->card('A-1', 'UVEX', 'Okulary A');
+        $cardB = $this->card('B-1', 'UVEX', 'Okulary B');
+        $this->travelTo('2026-09-29 07:00:00');
+        $auto = $this->item('SAUTO', 'OKULARY "AUTO" <A&B>', 'auto', stock: 5, sold: '-1 day');
+        $this->link($auto, $cardA, ErpItemLink::STATUS_AUTO);
+        $byAla = $this->item('SALA', 'ALA', 'suggested', stock: 2);
+        $alaLink = $this->link($byAla, $cardB, ErpItemLink::STATUS_SUGGESTED);
+        $this->item('SOPEN', 'OTWARTY', 'no_code', stock: 9);
+        $this->travelTo('2026-10-01 10:00:00');
+        Sanctum::actingAs($ala);
+        $this->postJson('/api/admin/erp-links/'.$alaLink->id.'/confirm')->assertOk();
+
+        $response = $this->get('/api/admin/erp-items/export?status=linked&sort=code&dir=asc')->assertOk();
+        $this->assertStringContainsString('powiazania-erp-xl-2026-10-01.xlsx', (string) $response->headers->get('Content-Disposition'));
+        $book = IOFactory::load($response->baseResponse->getFile()->getPathname());
+
+        $rows = $book->getSheetByName('Towary')?->toArray(null, false, false);
+        $this->assertNotNull($rows);
+        $this->assertSame('Kod XL', $rows[0][0]);
+        $this->assertSame(['SALA', 'SAUTO'], [$rows[1][0], $rows[2][0]]);
+        $this->assertCount(3, $rows);
+        $this->assertSame('OKULARY "AUTO" <A&B>', $rows[2][1]);
+        $this->assertSame(5, (int) $rows[2][4]);
+        $this->assertSame(['potwierdzone', 'B-1', 'Ala'], [$rows[1][9], $rows[1][10], $rows[1][15]]);
+        $this->assertSame(['połączone automatycznie', 'A-1', 'automat'], [$rows[2][9], $rows[2][10], $rows[2][15]]);
+        // data połączenia: prawdziwa data Excela w czasie polskim (10:00 UTC = 12:00)
+        $at = $book->getSheetByName('Towary')?->getCell('Q2');
+        $this->assertSame('2026-10-01 12:00', ExcelDate::excelToDateTimeObject((float) $at?->getValue())->format('Y-m-d H:i'));
+        $this->assertSame('yyyy-mm-dd hh:mm', $at?->getStyle()->getNumberFormat()->getFormatCode());
+
+        $summary = $book->getSheetByName('Zestawienie')?->toArray(null, false, false) ?? [];
+        $flat = array_map(static fn (array $r): string => implode('|', array_map('strval', array_filter($r, static fn ($c) => $c !== null))), $summary);
+        $this->assertContains('Towarów w pliku|2', $flat);
+        $this->assertContains('Status|połączone (auto + potwierdzone)', $flat);
+        $this->assertContains('automat|1', $flat);
+        $this->assertContains('Ala|1', $flat);
+
+        // filtr osoby zawęża towary, zestawienie zostaje bez niego
+        $book = IOFactory::load($this->get('/api/admin/erp-items/export?linked_by='.$ala->id)->assertOk()->baseResponse->getFile()->getPathname());
+        $this->assertSame([['Kod XL'], ['SALA']], array_map(static fn (array $r): array => [$r[0]], $book->getSheetByName('Towary')?->toArray(null, false, false) ?? []));
+
+        $viewer = Role::findOrCreate('podglad-erp', 'web');
+        $viewer->givePermissionTo(['admin.access', 'admin.erp_links.view']);
+        Sanctum::actingAs(User::factory()->create()->assignRole($viewer));
+        $this->get('/api/admin/erp-items/export')->assertOk();
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $this->getJson('/api/admin/erp-items/export')->assertForbidden();
     }
 
     /** @return list<string> */

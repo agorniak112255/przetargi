@@ -698,6 +698,12 @@ final class ErpItemMatcher
             return;
         }
         $attributes = $link + ['last_seen_at' => $now];
+        // data połączenia przez automat: od chwili, gdy powiązanie stało się auto; propozycja jej nie ma
+        if ($link['status'] !== ErpItemLink::STATUS_AUTO) {
+            $attributes['auto_linked_at'] = null;
+        } elseif ($existing === null || $existing->status !== ErpItemLink::STATUS_AUTO || $existing->auto_linked_at === null) {
+            $attributes['auto_linked_at'] = $now;
+        }
         if ($existing !== null) {
             $existing->fill($attributes)->save();
 

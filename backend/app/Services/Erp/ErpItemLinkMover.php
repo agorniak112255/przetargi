@@ -41,7 +41,7 @@ final class ErpItemLinkMover
                 $link->update(['product_id' => $toId]);
             } else {
                 if ((self::RANK[$link->status] ?? 0) > (self::RANK[$existing->status] ?? 0)) {
-                    $existing->fill($link->only(['status', 'method', 'matched_value', 'matched_code', 'evidence', 'decided_by', 'decided_at', 'last_seen_at']))->save();
+                    $existing->fill($link->only(['status', 'method', 'matched_value', 'matched_code', 'evidence', 'decided_by', 'decided_at', 'auto_linked_at', 'last_seen_at']))->save();
                 }
                 $link->delete();
             }
