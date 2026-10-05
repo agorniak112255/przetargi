@@ -320,6 +320,48 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertNull($link->source_description_hash);
     }
 
+    public function test_name_is_translated_alone_when_description_with_name_is_rejected(): void
+    {
+        // SIR 05.10.2026: 245 z 257 odrzuconych kart zostało z angielską nazwą, bo odrzucony opis zabierał nazwę
+        [$product, $link] = $this->importedCard();
+        $fake = $this->translator;
+        $fake->during = static function () use ($fake): void {
+            if (end($fake->calls)[0] !== '') {
+                throw new B2bTranslationRejected('zgubiony token: TLV');
+            }
+        };
+
+        $this->runJob($product, translateName: true);
+
+        $product->refresh();
+        $link->refresh();
+        $this->assertSame(self::POLISH_NAME, $product->name);
+        $this->assertSame(self::SOURCE_DESCRIPTION, $product->description);
+        $this->assertNull($link->source_description_hash);
+        $this->assertSame('zgubiony token: TLV (nazwa przetłumaczona osobno)', $link->translation_rejected_reason);
+        $this->assertSame([[self::SOURCE_DESCRIPTION, self::SOURCE_NAME, null], ['', self::SOURCE_NAME, null]], $fake->calls);
+        // odrzucony opis nie wraca do modelu przy kolejnym przebiegu
+        $this->assertSame(['description' => false, 'name' => false], TranslateB2bProductTextJob::pending($product, $link, true));
+    }
+
+    public function test_rejection_covers_both_texts_when_name_alone_also_fails(): void
+    {
+        [$product, $link] = $this->importedCard();
+        $this->translator->nameUnchanged = true;
+        $this->translator->during = static function (): void {
+            throw new B2bTranslationRejected('segment 1: inna liczba linii');
+        };
+
+        $this->runJob($product, translateName: true);
+
+        $product->refresh();
+        $link->refresh();
+        $this->assertSame(self::SOURCE_NAME, $product->name);
+        $this->assertSame('segment 1: inna liczba linii', $link->translation_rejected_reason);
+        $this->assertCount(2, $this->translator->calls);
+        $this->assertSame(['description' => false, 'name' => false], TranslateB2bProductTextJob::pending($product, $link, true));
+    }
+
     public function test_rejection_is_remembered_and_the_same_text_is_not_sent_again(): void
     {
         // 23.09.2026: 7 kart Bolle odrzucanych przy każdym przebiegu (model z temperaturą 0 odpowiada tak samo)

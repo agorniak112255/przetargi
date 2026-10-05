@@ -40,6 +40,8 @@ use Throwable;
  * - Odrzucenie (23.09.2026): odcisk wysłanego tekstu na powiązaniu (translation_rejected_hash) — pending() nie zgłasza
  *   go ponownie, bo model z temperaturą 0 odpowiedziałby tak samo; nowy tekst u dostawcy ma inny odcisk. Karty
  *   z odrzuceniem wypisuje b2b:translate --rejected (do ręcznego tłumaczenia). Udane tłumaczenie czyści odcisk.
+ *   Odrzucone wspólne tłumaczenie opisu i nazwy — sama nazwa idzie do modelu jeszcze raz (05.10.2026); gdy przejdzie,
+ *   odrzucony zostaje sam opis.
  * - Kontekst nazwy karty (23.09.2026): nazwa karty idzie do modelu jako słownictwo katalogu tylko wtedy, gdy nazywa
  *   ten sam wyrób co nazwa u dostawcy (B2bProductNameMatch) — karty z nazwą innego wyrobu psuły tłumaczenie.
  *
@@ -117,6 +119,20 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
             // nazwa karty w katalogu jako kontekst terminologiczny — tylko gdy nazywa ten sam wyrób (contextName)
             $translated = $translator->translate($start['description'] ?? '', $start['name'], self::contextName($product, $link));
         } catch (B2bTranslationRejected $e) {
+            // Opis i nazwa szły razem — odrzucenie opisu zabierało poprawną nazwę (05.10.2026: 245 z 257 odrzuconych kart
+            // SIR zostało z angielską nazwą). Sama nazwa idzie do modelu jeszcze raz, w tym samym slocie.
+            $name = $start['description'] !== null && $start['name'] !== null
+                ? $this->translateNameAlone($translator, $product, $link, $start)
+                : null;
+            if ($name !== null && $this->store((int) $link->id, [...$start, 'description' => null], null, $name) === null) {
+                // nazwa zapisana — odrzucony zostaje sam opis, z odciskiem samego opisu (taki policzy pending())
+                $this->reject($product, (int) $link->id, [
+                    ...$start,
+                    'rejection_key' => self::rejectionKey($product, ['description' => true, 'name' => false]),
+                ], $e->getMessage().' (nazwa przetłumaczona osobno)', $e->modelResponse);
+
+                return;
+            }
             $this->reject($product, (int) $link->id, $start, $e->getMessage(), $e->modelResponse);
 
             return;
@@ -181,6 +197,31 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
             'b2b_account_id' => $this->b2bAccountId,
             'error' => $e?->getMessage(),
         ]);
+    }
+
+    /**
+     * Sama nazwa po odrzuceniu wspólnego tłumaczenia opisu i nazwy. Null, gdy i ona nie przejdzie: odrzucona, pusta,
+     * bez zmian, za długa albo model nie odpowiedział — wtedy odrzucenie obejmuje oba teksty jak dotąd.
+     *
+     * @param  array{name: string|null}  $start
+     */
+    private function translateNameAlone(B2bTextTranslator $translator, Product $product, B2bProductLink $link, array $start): ?string
+    {
+        try {
+            $name = trim((string) ($translator->translate('', $start['name'], self::contextName($product, $link))['name'] ?? ''));
+        } catch (Throwable $e) {
+            Log::info('Tłumaczenie samej nazwy B2B nieudane', [
+                'product_id' => $this->productId,
+                'sku' => $product->sku,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        return $name !== '' && $name !== trim((string) $start['name']) && mb_strlen($name) <= self::MAX_NAME_LENGTH
+            ? $name
+            : null;
     }
 
     private function findLink(bool $lock = false): ?B2bProductLink
