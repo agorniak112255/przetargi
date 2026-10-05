@@ -52,6 +52,11 @@ class B2bTextTranslator
      */
     private const TOKEN_EQUIVALENTS = [
         'PVC' => ['PVC', 'PCW', 'PCV'],
+        // oznaczenia przy normach („EN 13982 TYPE 5”, „EN ISO 11393-2 CLASS 1”, „EN 14116 INDEX 1”) — po polsku
+        // typ, klasa, indeks; liczby pilnuje kontrola liczb (SIR 01.10.2026: „zgubiony token: TYPE, CLASS, INDEX”)
+        'TYPE' => ['TYPE', 'TYP', 'Typ', 'typ', 'TYPU', 'typu'],
+        'CLASS' => ['CLASS', 'KLASA', 'Klasa', 'klasa', 'KLASY', 'klasy', 'KLASIE', 'klasie', 'KLASĘ', 'klasę'],
+        'INDEX' => ['INDEX', 'INDEKS', 'Indeks', 'indeks', 'INDEKSU', 'indeksu'],
     ];
 
     /**
@@ -87,6 +92,35 @@ class B2bTextTranslator
     /** Liczba złączona łącznikiem ze zwykłym słowem („3-point”, „5-points”) — po polsku „3-punktowe”; liczby pilnuje kontrola liczb. */
     private const NUMBER_WORD_PATTERN = '/^\d+(?:[.,]\d+)?-\p{Ll}+$/u';
 
+    /**
+     * Etykieta pola na początku linii wersalikami przed dwukropkiem z wartością („UPPER: Printed grain leather”,
+     * „DEXTERITY: 5”, „PUNCTURE-PROOF: PS-type composite”) — zwykłe słowa do przetłumaczenia, nie nazwa modelu.
+     * Bez cyfr, ® i ™: „FFP2: …” i „PLATINUM®: …” zostają chronione. SIR Safety System 01.10.2026: ~1500 etykiet
+     * w opisach, każda dawała „zgubiony token: UPPER, LINING, TOECAP…”.
+     */
+    private const FIELD_LABEL_PATTERN = '/^([ \t]*)[\p{Lu}][\p{Lu}\-\/ ]*[\p{Lu}][ \t]*:(?=[ \t]*\S)/mu';
+
+    /**
+     * „METAL FREE”, „LATEX FREE” — deklaracja „bez X”, nie nazwa; po polsku „BEZ METALU” (SIR 01.10.2026: „zgubiony
+     * token: METAL, FREE”).
+     */
+    private const FREE_OF_PATTERN = '/(?<![\p{L}\p{N}])\p{Lu}{3,}[ \-]FREE(?![\p{L}\p{N}])/u';
+
+    /** Linia krótsza nie jest uznawana za złamaną w środku zdania (tytuły, krótkie cechy). */
+    private const WRAPPED_LINE_MIN_CHARS = 40;
+
+    /** Linia wersalikami (bez cyfr) co najmniej tej długości, po której następuje taka sama, to jedno złamane zdanie. */
+    private const WRAPPED_SHOUT_MIN_CHARS = 55;
+
+    /**
+     * Słowa, na których zdanie się nie kończy — linia zakończona takim słowem jest złamana w środku zdania, także gdy
+     * następna zaczyna się wielką literą („…with glass fibre toecap and\nPS type composite…”).
+     */
+    private const WRAP_CONTINUATION_WORDS = [
+        'a', 'an', 'and', 'as', 'at', 'both', 'by', 'for', 'from', 'in', 'into', 'is', 'are', 'its', 'of', 'on', 'or',
+        'than', 'that', 'the', 'their', 'to', 'which', 'while', 'with', 'without',
+    ];
+
     public function __construct(private readonly OpenAiCompatibleClient $llm) {}
 
     /**
@@ -107,7 +141,7 @@ class B2bTextTranslator
         $translatable = [];
         foreach ($segments as $index => $segment) {
             if (! str_starts_with($segment, self::PARAMETERS_PREFIX) && ! self::isUppercaseOnly($segment)) {
-                $translatable[$index] = $segment;
+                $translatable[$index] = self::unwrapLines($segment);
             }
         }
         if ($translatable === [] && $sourceName === null) {
@@ -129,7 +163,7 @@ class B2bTextTranslator
         ], 0.0, $maxTokens);
 
         try {
-            $translated = self::validated($response, $sources, $sourceName);
+            $translated = self::validated($response, $sources, $sourceName, trim(($sourceName ?? '').' '.($context ?? '')));
         } catch (B2bTranslationRejected $e) {
             throw $e->withResponse($response);
         }
@@ -160,8 +194,13 @@ ZASADY:
 - Terminologia ochrony przed laserem: laser safety window → szyba chroniąca przed laserem, laser protection filter → filtr chroniący przed laserem, laser radiation → promieniowanie laserowe, within the bulk material → w samym materiale, daylight transmission → przepuszczalność światła dziennego, visual brightness → jasność widzenia, colour recognition → rozpoznawanie barw, alignment protection → ochrona przy justowaniu, optical density (OD) → gęstość optyczna (OD), coating → powłoka, anti-scratch → odporna na zarysowania.
 - Terminologia okularów i ŚOI (spójnie w całym tekście): temples → zauszniki, nose bridge → mostek nosowy, nose pads → noski, sideshields / side shields → osłony boczne, frame → oprawka, lens → soczewka, lens tint → odcień soczewki, anti-fog → przeciwmgielna, anti-scratch → odporna na zarysowania, wrap-around → panoramiczna (owijająca).
 - Nazwy wyrobów (name i tytuły segmentów): safety glasses → okulary ochronne, safety goggle(s) → gogle ochronne, over-the-glasses → okulary ochronne nakładane na okulary korekcyjne, prescription safety glasses → okulary ochronne korekcyjne, welding safety glasses → okulary spawalnicze, welding helmet → przyłbica spawalnicza (nie „kask” ani „hełm” — kask to ochrona głowy), face shield / faceguard → osłona twarzy, tilting shield → osłona uchylna, spare lens → wizjer zapasowy (osłony i przyłbice) albo soczewka zapasowa (okulary i gogle), screen guard / protection plates → szybka ochronna, headband / headgear → nagłowie, sweatband / sweat band → napotnik, foam and strap kit → zestaw pianki i paska, optical insert → wkładka korekcyjna, cord / strap → sznurek, case → etui, eco pack of N pieces → opakowanie ekologiczne N szt., pack of N pieces → opakowanie N szt. Odcienie soczewek: clear → bezbarwne, smoke → przyciemniane, copper → miedziane, amber → bursztynowe, bronze → brązowe, polarized → polaryzacyjne.
+- Wersaliki, które nie są nazwą: etykiety pól przed dwukropkiem (UPPER:, DEXTERITY:, PUNCTURE-PROOF:), zwykłe słowa wyróżnione wersalikami (SHELL, VISOR, HARNESS, LEATHER), „METAL FREE”, „LATEX FREE” i całe zdania ostrzeżeń wersalikami — przetłumacz i zostaw wersalikami (CHOLEWKA:, ZRĘCZNOŚĆ:, BEZ METALU, BEZ LATEKSU). Nazwa modelu lub serii w takim zdaniu zostaje (NEW FOBIA SERIES → NOWA SERIA FOBIA).
+- Terminologia obuwia: upper → cholewka, lining → podszewka, toecap / toe cap → podnosek, puncture-proof / puncture-resistant midsole / anti-puncture insert → wkładka antyprzebiciowa, footbed / insole → wkładka, sole / outsole → podeszwa, midsole → międzypodeszwa, low shoe → półbut, ankle boot → trzewik, clog → chodak, slip resistant → antypoślizgowe, metal free → bez metalu.
+- Terminologia rękawic i skór: grain leather → skóra licowa, split leather → dwoina (skóra dwoinowa; to NIE jest skóra licowa), cowhide → skóra bydlęca, palm → wnętrze dłoni, back → grzbiet, cuff → mankiet, knitted cuff → ściągacz, driver cuff → mankiet typu kierowca, beaded cuff → mankiet z rolowanym brzegiem, gauge (13 G) → ścieg (13 G) — nie grubość ani kaliber, dexterity → zręczność, coating → powłoka.
+- Terminologia pozostałych ŚOI: coverall → kombinezon, trousers → spodnie, jacket → kurtka, retro-reflective → odblaskowy, harness (do pracy na wysokości) → szelki bezpieczeństwa, harness (w hełmie) → więźba, lanyard → linka bezpieczeństwa, retractable fall arrester → urządzenie samohamowne, tripod → trójnóg, disposable respirator / mask FFP → półmaska filtrująca, exhalation valve → zawór wydechowy, earplugs → wkładki przeciwhałasowe, ear defenders / earmuffs → nauszniki przeciwhałasowe, helmet → hełm ochronny, chin strap → pasek podbródkowy.
 - Tekst już po polsku zwróć bez zmian.
 - name: człon przed pierwszym „ – ” albo „ - ” (który pierwszy) zostaw dosłownie, przetłumacz resztę. name=null → zwróć null.
+- name bez „ – ” i „ - ”: nazwa modelu lub serii (wersaliki), kody i oznaczenia (FFP2 NR D, 9677, MB1320) zostają dosłownie; zwykłe słowa (rodzaj wyrobu i jego opis) przetłumacz, a rodzaj wyrobu postaw na początku. Nie zostawiaj angielskiego słowa obok polskiego. Przykłady: „CLIMA clog MB1320” → „Chodak CLIMA MB1320”, „VICTORIA glove MA1113” → „Rękawice VICTORIA MA1113”, „ANACONDA CPS low shoe MB1636” → „Półbut ANACONDA CPS MB1636”, „SOKOI 11 harness FD1136” → „Szelki bezpieczeństwa SOKOI 11 FD1136”, „Mesh respirator FFP2 NR D w/v FA1303” → „Półmaska filtrująca siatkowa FFP2 NR D z zaworem FA1303”. Nazwa bez zwykłych słów (same wersaliki i kody) zostaje bez zmian.
 - Bez HTML, markdown i komentarzy.
 
 Zwróć TYLKO JSON — bez pola thought/reasoning. Pierwszy znak to {.
@@ -190,6 +229,60 @@ SYS;
     }
 
     /**
+     * Linie złamane w środku zdania sklejone spacją. Tekst z SAP (SIR Safety System) jest łamany twardo co ~72 znaki
+     * („…with glass fibre toecap and\nPS type composite…”), a model słusznie skleja takie linie — kontrola liczby linii
+     * odrzucała wtedy tłumaczenie (01.10.2026: ~75% z 839 odrzuceń SIR). Sklejamy tylko linię co najmniej
+     * WRAPPED_LINE_MIN_CHARS znaków bez znaku końca zdania, po której następna zaczyna się małą literą albo nawiasem,
+     * albo która kończy się słowem, na którym zdanie się nie kończy (WRAP_CONTINUATION_WORDS). Do tego linię
+     * zaczynającą się przecinkiem i zdanie wersalikami złamane na dwie linie (WRAPPED_SHOUT_MIN_CHARS). Wyliczenia
+     * („Built-in side shields\nAdjustable reinforced temples”), pozycje listy i etykiety zostają w osobnych liniach.
+     * Tekst źródła na karcie się nie zmienia; tłumaczenie zapisuje się już ze sklejonymi liniami.
+     */
+    private static function unwrapLines(string $segment): string
+    {
+        $lines = preg_split('/\R/u', $segment) ?: [$segment];
+        $result = [array_shift($lines)];
+        foreach ($lines as $line) {
+            $previous = rtrim((string) end($result));
+            $next = trim($line);
+            if (self::continuesPreviousLine($previous, $next)) {
+                $result[array_key_last($result)] = $previous.' '.$next;
+            } else {
+                $result[] = $line;
+            }
+        }
+
+        return implode("\n", $result);
+    }
+
+    private static function continuesPreviousLine(string $previous, string $next): bool
+    {
+        // linia zaczynająca się przecinkiem to dalszy ciąg zdania („…high-density\npolypropylene\n, equipped with…”)
+        if ($next !== '' && trim($previous) !== '' && preg_match('/^[,;]/u', $next) === 1) {
+            return true;
+        }
+        // zdanie wykrzyczane złamane jak reszta tekstu („…WITH THE CUT PROTECTION\nJACKET”)
+        if (mb_strlen(trim($previous)) >= self::WRAPPED_SHOUT_MIN_CHARS
+            && preg_match('/\p{Ll}|\p{N}/u', $previous.$next) !== 1 && preg_match('/\p{Lu}/u', $next) === 1
+            && preg_match('/[.!?:;]$/u', $previous) !== 1) {
+            return true;
+        }
+        if ($next === '' || mb_strlen(trim($previous)) < self::WRAPPED_LINE_MIN_CHARS
+            || preg_match('/[.!?:;]$/u', $previous) === 1
+            // pozycja listy i etykieta pola zaczynają nową linię
+            || preg_match('/^[-–—•*]/u', $next) === 1
+            || preg_match(self::FIELD_LABEL_PATTERN, $next) === 1) {
+            return false;
+        }
+        if (preg_match('/^[\p{Ll}(]/u', $next) === 1) {
+            return true;
+        }
+        preg_match('/(\p{L}+)$/u', $previous, $match);
+
+        return isset($match[1]) && in_array(mb_strtolower($match[1]), self::WRAP_CONTINUATION_WORDS, true);
+    }
+
+    /**
      * Akapit bez małych liter (Bollé featureddescription: ucięte znaczniki kategorii „CASES ACCESSORIES CASES N”,
      * „RUSH+ - KIT SAFETY SPARE”) zostaje dosłownie i nie idzie do modelu — miesza nazwy modeli ze zwykłymi słowami,
      * więc tłumaczenie gubiłoby nazwę własną albo było odrzucane (15.09.2026: 5 kart).
@@ -202,9 +295,10 @@ SYS;
     /**
      * @param  array<string, mixed>  $response
      * @param  list<string>  $sources
+     * @param  string  $names  nazwa ze źródła i nazwa karty — słowa nazwy w wykrzyczanych liniach zostają chronione
      * @return array{segments: list<string>, name: string|null}
      */
-    private static function validated(array $response, array $sources, ?string $sourceName): array
+    private static function validated(array $response, array $sources, ?string $sourceName, string $names = ''): array
     {
         $segments = $response['segments'] ?? null;
         if (! is_array($segments) || ! array_is_list($segments) || count($segments) !== count($sources)) {
@@ -268,7 +362,7 @@ SYS;
 
         self::assertSameNorms($sourceText, $resultText);
         self::assertSameNumbers($sourceText, $resultText);
-        self::assertProtectedTokensKept($sourceText, $resultText);
+        self::assertProtectedTokensKept($sourceText, $resultText, $names);
         self::assertLength($sourceText, $resultText);
 
         return ['segments' => $results, 'name' => $resultName];
@@ -438,12 +532,12 @@ SYS;
         return '/(?<![\p{L}\p{N}])'.implode('[ \x{00A0}]?', $quoted).'(?![\p{L}\p{N}])/u';
     }
 
-    private static function assertProtectedTokensKept(string $source, string $result): void
+    private static function assertProtectedTokensKept(string $source, string $result, string $names = ''): void
     {
         // po obu stronach ten sam zapis separatora tysięcy — reszta zostaje bez zmian
         $haystack = self::withoutThousandsSeparators($result);
         $missing = [];
-        foreach (self::protectedTokens($source) as $token) {
+        foreach (self::protectedTokens($source, $names) as $token) {
             $kept = false;
             foreach (self::TOKEN_EQUIVALENTS[$token] ?? [$token] as $variant) {
                 if (preg_match(self::tokenPattern($variant), $haystack) === 1) {
@@ -465,22 +559,30 @@ SYS;
      * - z cyfrą i literą (B809, FLEX160°, PSSTRYOC13B), poza liczbą albo wymiarami sklejonymi z jednostką
      *   (17.5CM, 96x39mm, 120m/s) i liczbą złączoną ze słowem (3-point),
      * - ze znakiem ® lub ™,
-     * - pisane w całości wielkimi literami, co najmniej 3 litery (PLATINUM, TRYON, RUSH+), poza TRANSLATABLE_UPPERCASE,
+     * - pisane w całości wielkimi literami, co najmniej 3 litery (PLATINUM, TRYON, RUSH+), poza TRANSLATABLE_UPPERCASE
+     *   i etykietami pól na początku linii (FIELD_LABEL_PATTERN), „X FREE” (FREE_OF_PATTERN) oraz słowami linii wykrzyczanych
+     *   spoza nazwy wyrobu (withoutShoutedWords),
      * - liczba dziesiętna tuż po takim słowie, bez interpunkcji między nimi („2.0” w „RUSH+ 2.0”) — to część nazwy modelu,
      *   nie wartość, więc „2,0” jest tu błędem.
      *
      * @return list<string>
      */
-    private static function protectedTokens(string $text): array
+    private static function protectedTokens(string $text, string $names = ''): array
     {
         $tokens = [];
         $previousProtected = false;
+        $ordinary = self::lowercaseWords($text);
+        $nameWords = self::nameWords($names);
+        // etykiety pól („UPPER: …”) i „METAL FREE” to zwykłe słowa — tłumaczą się jak reszta tekstu
+        $text = (string) preg_replace(self::FIELD_LABEL_PATTERN, '$1', $text);
+        $text = (string) preg_replace(self::FREE_OF_PATTERN, '', $text);
+        $text = self::withoutShoutedWords($text, $names);
         // Słowa sklejone interpunkcją bez odstępu („(D3 D4 D5),Overflow chute” — 23.09.2026 „zgubiony token:
         // D5),Overflow”, bo model wstawił spację) to osobne słowa. Dzielimy tylko przed literą: „EN166:2001”,
-        // „17.5CM” i „1,030” zostają w całości.
+        // „17.5CM” i „1,030” zostają w całości. Ukośnik między literami też dzieli („EVA/RUBBER” to EVA i RUBBER).
         $words = [];
         foreach (preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $chunk) {
-            array_push($words, ...(preg_split('/[,;:()\[\]]+(?=\p{L})/u', $chunk, -1, PREG_SPLIT_NO_EMPTY) ?: [$chunk]));
+            array_push($words, ...(preg_split('/[,;:()\[\]]+(?=\p{L})|(?<=\p{L})\/(?=\p{L})/u', $chunk, -1, PREG_SPLIT_NO_EMPTY) ?: [$chunk]));
         }
         foreach ($words as $raw) {
             $word = (string) preg_replace('/^\p{P}+|\p{P}+$/u', '', $raw);
@@ -492,7 +594,10 @@ SYS;
                     && preg_match(self::MEASUREMENT_RANGE_PATTERN, $word) !== 1
                     && preg_match(self::NUMBER_WORD_PATTERN, $word) !== 1)
                 || preg_match('/[®™]/u', $word) === 1
-                || (preg_match('/\p{Ll}/u', $word) !== 1 && preg_match_all('/\p{Lu}/u', $word) >= 3)
+                || (preg_match('/\p{Ll}/u', $word) !== 1 && preg_match_all('/\p{Lu}/u', $word) >= 3
+                    // wyróżniony zwykły wyraz: tekst używa go też małymi literami, a nazwa wyrobu go nie ma
+                    && ! (preg_match('/^\p{Lu}+$/u', $word) === 1
+                        && isset($ordinary[mb_strtolower($word)]) && ! isset($nameWords[$word])))
                 || ($previousProtected && preg_match('/^\d+[.,]\d+$/', $word) === 1)
             );
             if ($protected) {
@@ -503,6 +608,58 @@ SYS;
         }
 
         return array_map('strval', array_keys($tokens));
+    }
+
+    /**
+     * Linia złożona z samych słów wersalikami — bez małych liter, cyfr, ®, ™ i „+” — to tekst wykrzyczany, nie nazwa:
+     * ostrzeżenie („THE TROUSERS SHALL BE WORN IN COMBINATION WITH THE CUT PROTECTION JACKET”), seria („ALL TERRAIN
+     * SERIES”). Chronione zostają w niej tylko słowa nazwy wyrobu ($names: nazwa ze źródła i nazwa karty) — „FOBIA”
+     * w „NEW FOBIA SERIES”. Linia z cyfrą (normy, „FFP2 NR D”, kody) zostaje chroniona w całości.
+     */
+    private static function withoutShoutedWords(string $text, string $names): string
+    {
+        $nameWords = self::nameWords($names);
+        $lines = preg_split('/\R/u', $text) ?: [$text];
+        foreach ($lines as $i => $line) {
+            if (preg_match('/\p{Ll}|\p{N}|[®™+]/u', $line) === 1 || preg_match_all('/\p{L}+/u', $line) < 2) {
+                continue;
+            }
+            $lines[$i] = (string) preg_replace_callback(
+                '/[\p{L}\-\/]+/u',
+                static fn (array $m): string => isset($nameWords[$m[0]]) ? $m[0] : '',
+                $line,
+            );
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Słowa nazwy wyrobu (nazwa ze źródła i nazwa karty) — dokładnie w tym zapisie.
+     *
+     * @return array<string, true>
+     */
+    private static function nameWords(string $names): array
+    {
+        $words = [];
+        foreach (preg_split('/[^\p{L}\p{N}+\-]+/u', $names, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $word) {
+            $words[$word] = true;
+        }
+
+        return $words;
+    }
+
+    /**
+     * Słowa pisane w tekście małymi literami („the visor”, „grain leather”) — to samo słowo wersalikami jest
+     * wyróżnieniem zwykłego wyrazu („VISOR made of…”, „Grain cowhide LEATHER”), nie nazwą modelu.
+     *
+     * @return array<string, true>
+     */
+    private static function lowercaseWords(string $text): array
+    {
+        preg_match_all('/(?<![\p{L}\p{N}])\p{Ll}+(?![\p{L}\p{N}])/u', $text, $matches);
+
+        return array_fill_keys($matches[0], true);
     }
 
     private static function assertLength(string $source, string $result): void

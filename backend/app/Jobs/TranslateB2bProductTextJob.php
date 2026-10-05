@@ -26,7 +26,7 @@ use Throwable;
  *
  * Decyzja użytkownika 15.09.2026: opisy i nazwy nowych kart z importu mają być po polsku, bez przechowywania
  * oryginalnego opisu. Tłumaczymy wyłącznie tekst, który zapisał import i którego nikt nie ruszył: opis tylko
- * gdy sha1(opisu karty) === link.description_hash, nazwę tylko gdy nazwa karty === link.remote_name.
+ * gdy sha1(opisu karty) === link.description_hash, nazwę tylko gdy nazwa karty to nazwa ze źródła (isSourceName).
  *
  * - Slot z EnrichmentSlots (wspólny limit zapytań AI z Ustawień AI): import tysiąca kart zlecał tyle samo
  *   równoległych wywołań modelu — 15.09.2026 kończyło się HTTP 429. Brak slotu = ponowne zlecenie z opóźnieniem,
@@ -202,11 +202,29 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
         $cardName = (string) $product->name;
         // Nazwa karty równa nazwie u dostawcy to wciąż tekst źródła, nie polskie słownictwo katalogu — model brał ją
         // za gotową polską nazwę i oddawał nazwę bez tłumaczenia (23.09.2026: 180 z 202 nazw Bolle po naprawie).
-        if (trim($cardName) === trim((string) $link->remote_name)) {
+        if (self::isSourceName($product, $link)) {
             return null;
         }
 
         return B2bProductNameMatch::sameProduct($cardName, $link->remote_name, (string) $product->sku) ? $cardName : null;
+    }
+
+    /**
+     * Nazwa karty to wciąż nazwa ze źródła: równa nazwie pozycji u dostawcy albo jej początkiem przed „, ” — karta
+     * z kolorami i rozmiarami ma nazwę wyrobu, a powiązanie każdej pozycji nazwę z dopiskiem („ANACONDA CPS low shoe
+     * MB1636” i „ANACONDA CPS low shoe MB1636, BLACK, 40”, SirB2bConnector::memberName). Do 05.10.2026 taka nazwa nigdy
+     * nie szła do tłumaczenia, także na nowej karcie. Nazwa przetłumaczona albo poprawiona ręcznie nie jest początkiem
+     * nazwy u dostawcy.
+     */
+    private static function isSourceName(Product $product, B2bProductLink $link): bool
+    {
+        $name = (string) $product->name;
+        $remote = (string) $link->remote_name;
+        if (trim($name) === '' || trim($remote) === '') {
+            return false;
+        }
+
+        return $name === $remote || str_starts_with($remote, $name.', ');
     }
 
     /**
@@ -227,10 +245,7 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
                 && trim($current) !== ''
                 && $link->description_hash !== null
                 && hash_equals($link->description_hash, sha1($current)),
-            'name' => $withName
-                && $link->remote_name !== null
-                && trim($link->remote_name) !== ''
-                && (string) $product->name === $link->remote_name,
+            'name' => $withName && self::isSourceName($product, $link),
         ];
         // Ten sam tekst już raz odrzucony — model (temperatura 0) odpowie tak samo; nowy tekst ma inny odcisk.
         if ($link->translation_rejected_hash !== null

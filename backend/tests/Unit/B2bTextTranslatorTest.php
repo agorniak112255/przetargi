@@ -317,6 +317,183 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function lines_wrapped_mid_sentence_are_joined_before_translation(): void
+    {
+        // SIR Safety System (SAP): tekst łamany co ~72 znaki; model sklejał linie i kontrola liczby linii odrzucała
+        // tłumaczenie (01.10.2026 MB1636: „w źródle 18, w tłumaczeniu 17”)
+        $source = "Low shoe with printed grain leather upper, with glass fibre toecap and\n"
+            ."PS type composite puncture-proof with constant thickness.\n"
+            ."Ankle pad in Oxford polyester.\n"
+            ."The mid-sole area, with a groove, is designed to enhance grip on ladders\n"
+            ."(LG requirement).\n"
+            ."The insoles, made of multi-punched EVA material, have anti-shock\n"
+            .'properties.';
+        $translator = $this->translatorReturning(['segments' => [
+            "Półbut z cholewką ze skóry licowej z nadrukiem, z podnoskiem z włókna szklanego i wkładką antyprzebiciową typu PS o stałej grubości.\n"
+            ."Wyściółka kostki z poliestru Oxford.\n"
+            ."Śródpodeszwa z rowkiem poprawia chwyt na drabinach (wymóg LG).\n"
+            .'Wkładki z wielokrotnie perforowanego materiału EVA mają właściwości amortyzujące.',
+        ]]);
+
+        $result = $translator->translate($source);
+
+        $payload = json_decode((string) $this->calls[0]['messages'][1]['content'], true);
+        $this->assertSame([
+            "Low shoe with printed grain leather upper, with glass fibre toecap and PS type composite puncture-proof with constant thickness.\n"
+            ."Ankle pad in Oxford polyester.\n"
+            ."The mid-sole area, with a groove, is designed to enhance grip on ladders (LG requirement).\n"
+            .'The insoles, made of multi-punched EVA material, have anti-shock properties.',
+        ], $payload['segments']);
+        $this->assertSame(4, substr_count($result['description'], "\n") + 1);
+    }
+
+    #[Test]
+    public function separate_lines_are_not_joined(): void
+    {
+        // wyliczenia bez znaczników, pozycje listy, etykiety pól i zdania zakończone kropką zostają osobnymi liniami
+        $source = "Built-in side shields with anti-scratch coating on both sides\n"
+            ."Adjustable reinforced temples\n"
+            ."The product has been designed to comply with the regulation in force.\n"
+            ."The lining is in synthetic material, polypropylene, non-woven fabric\n"
+            ."- smooth profile outsole\n"
+            ."Main features of the footwear and the materials used in production\n"
+            ."UPPER: microfibre\n"
+            .'Short line without full stop';
+        $translator = $this->translatorReturning(['segments' => ['x']]);
+
+        try {
+            $translator->translate($source);
+        } catch (B2bTranslationRejected) {
+            // odpowiedź atrapy nie ma znaczenia — sprawdzamy, co poszło do modelu
+        }
+
+        $payload = json_decode((string) $this->calls[0]['messages'][1]['content'], true);
+        $this->assertSame([$source], $payload['segments']);
+    }
+
+    #[Test]
+    public function uppercase_field_labels_may_be_translated(): void
+    {
+        // SIR 01.10.2026: „zgubiony token: UPPER, LINING, TOECAP, PUNCTURE-PROOF, FOOTBED, SOLE”
+        $source = "UPPER: Printed grain leather\nLINING : 3D-TEX in polyester\nPUNCTURE-PROOF: PS-type composite\nDEXTERITY: 5";
+        $translator = $this->translatorReturning(['segments' => [
+            "Cholewka: skóra licowa z nadrukiem\nPodszewka: 3D-TEX z poliestru\nWkładka antyprzebiciowa: kompozyt typu PS\nZręczność: 5",
+        ]]);
+
+        $this->assertSame(
+            "Cholewka: skóra licowa z nadrukiem\nPodszewka: 3D-TEX z poliestru\nWkładka antyprzebiciowa: kompozyt typu PS\nZręczność: 5",
+            $translator->translate($source)['description']
+        );
+    }
+
+    #[Test]
+    public function uppercase_name_outside_a_field_label_stays_protected(): void
+    {
+        // wartość etykiety i słowo wersalikami w środku linii to nadal nazwy (PLATINUM®: z ® też)
+        $translator = $this->translatorReturning(['segments' => ["Powłoka: przeciwmgielna\nKlasa 2: ochrona"]]);
+
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiony token: PLATINUM, FFP2');
+
+        $translator->translate("COATING: PLATINUM anti-fog\nFFP2: protection");
+    }
+
+    #[Test]
+    public function metal_free_and_shouted_warning_may_be_translated(): void
+    {
+        // SIR 01.10.2026: „zgubiony token: METAL, FREE” i „CLASS, TROUSERS, SHALL, WORN, COMBINATION, CUT, PROTECTION, JACKET”
+        $source = "Low shoe with composite toecap, METAL FREE.\nTHE TROUSERS SHALL BE WORN IN COMBINATION WITH THE CUT PROTECTION\nJACKET";
+        $translator = $this->translatorReturning(['segments' => [
+            "Półbut z podnoskiem kompozytowym, BEZ METALU.\nSPODNIE NALEŻY NOSIĆ W POŁĄCZENIU Z KURTKĄ CHRONIĄCĄ PRZED PRZECIĘCIEM",
+        ]]);
+
+        $result = $translator->translate($source);
+
+        $this->assertStringContainsString('BEZ METALU', $result['description']);
+        $payload = json_decode((string) $this->calls[0]['messages'][1]['content'], true);
+        $this->assertSame(
+            ["Low shoe with composite toecap, METAL FREE.\nTHE TROUSERS SHALL BE WORN IN COMBINATION WITH THE CUT PROTECTION JACKET"],
+            $payload['segments'],
+            'Zdanie wersalikami złamane na dwie linie idzie do modelu jako jedna linia'
+        );
+    }
+
+    #[Test]
+    public function model_name_in_shouted_line_stays_protected(): void
+    {
+        // „NEW FOBIA SERIES”: FOBIA to nazwa wyrobu (jest w nazwie), NEW i SERIES — zwykłe słowa
+        $translator = $this->translatorReturning(['name' => null, 'segments' => ["NOWA SERIA\nPółbut"]]);
+
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiony token: FOBIA');
+
+        // nazwa karty przetłumaczona wcześniej — słowa nazwy bierzemy też z niej
+        $translator->translate("NEW FOBIA SERIES\nLow shoe", null, 'FOBIA półbut MB1316');
+    }
+
+    #[Test]
+    public function shouted_line_with_digits_stays_protected(): void
+    {
+        // normy i oznaczenia z cyfrą w linii wersalikami („EN 61340 ESD”) to nie tekst wykrzyczany — ESD musi zostać
+        $translator = $this->translatorReturning(['segments' => ["EN ISO 20345 S3S SR, EN 61340\nPółbut"]]);
+
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiony token: ESD');
+
+        $translator->translate("EN ISO 20345 S3S SR, EN 61340 ESD\nLow shoe");
+    }
+
+    #[Test]
+    public function uppercase_word_used_also_in_lowercase_may_be_translated(): void
+    {
+        // SIR MD12Z7/MA1115: „VISOR made of…” przy „the visor”, „Grain cowhide LEATHER” przy „Grain leather offers…”
+        $source = "VISOR made of polycarbonate.\nThe visor protects the face.\nEVA/RUBBER sole, rubber outsole.";
+        $translator = $this->translatorReturning(['segments' => [
+            "WIZJER z poliwęglanu.\nWizjer chroni twarz.\nPodeszwa EVA/guma, podeszwa zewnętrzna z gumy.",
+        ]]);
+
+        $this->assertStringStartsWith('WIZJER', $translator->translate($source)['description']);
+    }
+
+    #[Test]
+    public function uppercase_word_from_the_product_name_stays_protected_even_when_used_in_lowercase(): void
+    {
+        // FLASH to nazwa wyrobu, choć tekst mówi też o „flash” — nazwa nie może zniknąć
+        $translator = $this->translatorReturning(['name' => null, 'segments' => ['Przyłbica chroni przed błyskiem.']]);
+
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiony token: FLASH');
+
+        $translator->translate('FLASH protects against welding flash.', null, 'FLASH – przyłbica spawalnicza');
+    }
+
+    #[Test]
+    public function type_class_and_index_next_to_a_norm_may_be_written_in_polish(): void
+    {
+        $translator = $this->translatorReturning(['segments' => ['EN 13982 TYP 5; EN ISO 11393-2 KLASA 1; EN 14116 INDEKS 1']]);
+
+        $this->assertSame(
+            'EN 13982 TYP 5; EN ISO 11393-2 KLASA 1; EN 14116 INDEKS 1',
+            $translator->translate('EN 13982 TYPE 5; EN ISO 11393-2 CLASS 1; EN 14116 INDEX 1 for coverall')['description']
+        );
+    }
+
+    #[Test]
+    public function line_starting_with_a_comma_continues_the_previous_one(): void
+    {
+        $translator = $this->translatorReturning(['segments' => ['x']]);
+
+        try {
+            $translator->translate("Helmet with retractable shield with SHELL made of high-density\npolypropylene\n, equipped with stiffening ribs.");
+        } catch (B2bTranslationRejected) {
+            // sprawdzamy tylko wejście modelu
+        }
+
+        $payload = json_decode((string) $this->calls[0]['messages'][1]['content'], true);
+        $this->assertSame(['Helmet with retractable shield with SHELL made of high-density polypropylene , equipped with stiffening ribs.'], $payload['segments']);
+    }
+
+    #[Test]
     public function pvc_may_be_written_as_polish_pcw_or_pcv(): void
     {
         // 23.09.2026: „oprawki BL150 z PCW” odrzucone jako „zgubiony token: PVC” — to ten sam materiał

@@ -97,6 +97,29 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame([[self::SOURCE_DESCRIPTION, self::SOURCE_NAME, null]], $this->translator->calls);
     }
 
+    public function test_translates_name_of_card_whose_positions_carry_colour_and_size(): void
+    {
+        // SIR 05.10.2026: karta „ANACONDA CPS low shoe MB1636”, pozycja „…, BLACK, 40” — nazwa nie szła do tłumaczenia
+        [$product, $link] = $this->importedCard(self::SOURCE_NAME, self::SOURCE_NAME.', BLACK, 40');
+
+        $this->runJob($product, translateName: true);
+
+        $this->assertSame(self::POLISH_NAME, $product->fresh()->name);
+        // nazwa ze źródła nie jest polskim kontekstem katalogu
+        $this->assertSame([[self::SOURCE_DESCRIPTION, self::SOURCE_NAME, null]], $this->translator->calls);
+    }
+
+    public function test_name_that_only_starts_like_the_remote_name_is_not_translated(): void
+    {
+        // początek nazwy pozycji bez „, ” (nazwa skrócona ręcznie) to nie nazwa ze źródła
+        [$product] = $this->importedCard('TRYON', self::SOURCE_NAME.', BLACK, 40');
+
+        $this->runJob($product, translateName: true);
+
+        $this->assertSame('TRYON', $product->fresh()->name);
+        $this->assertNull($this->translator->calls[0][1]);
+    }
+
     public function test_translates_only_name_when_description_was_edited(): void
     {
         [$product, $link] = $this->importedCard();

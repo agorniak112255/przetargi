@@ -32,7 +32,9 @@ use RuntimeException;
  * („Dostępne od dd.mm.rrrr”), inaczej „Brak na stanie”.
  *
  * Teksty po angielsku (B2bForeignLanguageSource): opis = długi opis, krótki opis (lista parametrów) i uwagi sklepu
- * (zastosowanie, przechowywanie) dosłownie; nazwa nowej karty i opis tłumaczone po zapisie. Normy z poziomami
+ * (zastosowanie, przechowywanie) dosłownie; nazwa i opis tłumaczone po zapisie. Nazwa także karty już w katalogu,
+ * dopóki jest nazwą ze źródła (B2bKeepsExistingNames, 05.10.2026) — tłumaczenie nazwy odrzucone przy pierwszym
+ * przebiegu (839 z 1079 kart 01.10.2026) inaczej zostawało po angielsku na zawsze. Normy z poziomami
  * z product/productNorms jako wiersze „Norma” tabelki (B2bShopFieldNormSource). Pliki: angielska karta techniczna
  * PDF (polska istnieje, ale część kart ma w niej treść po włosku) i polska deklaracja zgodności — oba generowane przez
  * sklep. Zdjęcie koloru (albo wyrobu bez kolorów) z GetImage.ashx; obrazek zastępczy sklepu pomijany.
@@ -41,7 +43,7 @@ use RuntimeException;
  * (deklaracje zgodności wystawia SIR Safety System S.p.A.; sklep nie podaje innej marki). Dawne kody SIR (BISMT,
  * „30844,30844A”) — identyfikatory „poprzedni numer”.
  */
-final class SirB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignLanguageSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
+final class SirB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignLanguageSource, B2bGroupsSizes, B2bImageGallery, B2bKeepsExistingNames, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
 {
     public const BRAND = 'SIR Safety System';
 

@@ -21,6 +21,7 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bForeignLanguageSource;
 use App\Services\B2b\B2bGroupsSizes;
 use App\Services\B2b\B2bImageGallery;
+use App\Services\B2b\B2bKeepsExistingNames;
 use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bRemoteDocument;
 use App\Services\B2b\B2bRemoteProduct;
@@ -462,6 +463,10 @@ final class SirConnectorTest extends TestCase
         $this->assertContains('Normy | Norma | EN 149 FFP2 NR D', $rows);
         // teksty po angielsku idą do tłumaczenia po zapisie
         Queue::assertPushed(TranslateB2bProductTextJob::class);
+        // nazwa karty już w katalogu też czeka na tłumaczenie, dopóki jest nazwą ze źródła — odrzucone przy pierwszym
+        // przebiegu zostawały po angielsku na zawsze (05.10.2026: ANACONDA CPS low shoe MB1636)
+        $glovesLink = B2bProductLink::query()->where('product_id', $gloves->id)->orderBy('id')->firstOrFail();
+        $this->assertTrue(TranslateB2bProductTextJob::pending($gloves->fresh(), $glovesLink, $this->connector() instanceof B2bKeepsExistingNames)['name']);
 
         $before = $this->snapshot();
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
@@ -490,7 +495,7 @@ final class SirConnectorTest extends TestCase
         $connector = $registry->make($account, 0);
 
         $this->assertInstanceOf(SirB2bConnector::class, $connector);
-        foreach ([B2bManufacturerSite::class, B2bForeignLanguageSource::class, B2bShopFieldSource::class, B2bShopFieldNormSource::class, B2bDocumentSource::class, B2bImageGallery::class, B2bGroupsSizes::class, B2bSizePriceSource::class] as $interface) {
+        foreach ([B2bManufacturerSite::class, B2bForeignLanguageSource::class, B2bKeepsExistingNames::class, B2bShopFieldSource::class, B2bShopFieldNormSource::class, B2bDocumentSource::class, B2bImageGallery::class, B2bGroupsSizes::class, B2bSizePriceSource::class] as $interface) {
             $this->assertInstanceOf($interface, $connector);
         }
     }
