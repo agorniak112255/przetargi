@@ -6,7 +6,7 @@ import { AppFrame, Mark, Slideshow } from './kit'
  * otwarta rozmowa oznacza wiadomości jako przeczytane). Układ jak w pages/Chat.tsx.
  */
 
-type Focus = 'list' | 'compose' | 'cards' | 'delete' | 'failed' | 'call' | 'callcard'
+type Focus = 'list' | 'compose' | 'cards' | 'delete' | 'failed' | 'call' | 'callcard' | 'history' | 'search'
 
 function M({ on, children }: { on: boolean; children: ReactNode }) {
   return on ? <Mark>{children}</Mark> : <>{children}</>
@@ -60,13 +60,59 @@ function Row({
 
 const hash = <span className="grid h-6 w-6 place-items-center rounded-md bg-slate-100 text-xs text-slate-500">#</span>
 
+/** Szukany tekst zaznaczony jak w wynikach (pages/Chat.tsx, Highlight). */
+function Hl({ children }: { children: ReactNode }) {
+  return <span className="rounded-sm bg-amber-100 px-0.5 text-slate-900">{children}</span>
+}
+
+/** Panel „Historia rozmowy” obok otwartej rozmowy (pages/Chat.tsx, HistoryPanel). */
+function HistoryMock() {
+  const entry = (who: string, time: string, kind: string | null, kindCls: string, text: ReactNode, url?: string) => (
+    <div className="px-2 py-1">
+      <div className="flex items-center gap-1 text-[10px]">
+        <span className="font-semibold text-slate-800">{who}</span>
+        {kind && <span className={`rounded px-1 text-[9px] font-medium ${kindCls}`}>{kind}</span>}
+        <span className="ml-auto text-slate-400">{time}</span>
+      </div>
+      <div className="text-[10.5px] leading-snug text-slate-700">{text}</div>
+      {url && <div className="truncate text-[10px] text-sky-700 underline">{url}</div>}
+    </div>
+  )
+  return (
+    <div className="grid content-start border-l border-slate-200 bg-white">
+      <div className="flex items-center justify-between border-b border-slate-100 px-2 py-1.5">
+        <span className="text-[11px] font-semibold text-slate-900">Historia rozmowy</span>
+        <span className="text-slate-400">×</span>
+      </div>
+      <div className="m-1.5 rounded bg-slate-100 px-2 py-1 text-[10.5px] text-slate-800">cennik</div>
+      <Mark>
+        <div className="flex flex-wrap gap-1 px-1.5 text-[9.5px] font-medium">
+          <span className="rounded-full bg-slate-100 px-1.5 text-slate-700">Wszystko</span>
+          <span className="rounded-full bg-sky-600 px-1.5 text-white">Linki</span>
+          <span className="rounded-full bg-slate-100 px-1.5 text-slate-700">Maile</span>
+          <span className="rounded-full bg-slate-100 px-1.5 text-slate-700">Połączenia</span>
+        </div>
+      </Mark>
+      <span className="px-2 pt-1.5 text-[9.5px] font-semibold uppercase tracking-wide text-slate-500">Dzisiaj</span>
+      {entry('Ty', '20:14', 'Link', 'bg-sky-50 text-sky-700', <>zaktualizowałem <Hl>cennik</Hl> Bolle</>, 'przetargi…/products/23003')}
+      {entry('Marek Kowalski', '10:46', 'Link', 'bg-sky-50 text-sky-700', <>Ansell ma lepszą cenę. <Hl>Cennik</Hl>: …</>, 'example.com/cennik')}
+    </div>
+  )
+}
+
 function ChatScreen({ focus }: { focus: Focus }) {
   return (
     <AppFrame nav="Czat">
       <p className="mb-2 text-base font-semibold">Czat</p>
       <div className="grid grid-cols-[200px_1fr] overflow-hidden rounded-md border border-slate-200 bg-white text-xs">
         <div className="border-r border-slate-200 pb-2">
-          <div className="m-2 rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-400">Szukaj osoby lub rozmowy</div>
+          <M on={focus === 'search'}>
+            <div
+              className={`m-2 rounded border border-slate-300 px-2 py-1 text-[11px] ${focus === 'search' ? 'text-slate-800' : 'text-slate-400'}`}
+            >
+              {focus === 'search' ? 'rabat' : 'Szukaj osoby, rozmowy lub wiadomości'}
+            </div>
+          </M>
           <div className="flex items-center justify-between px-2.5 pb-0.5 pt-1">
             <span className="text-[10px] uppercase tracking-wide text-slate-500">Kanały</span>
             <span className="text-[10.5px] font-medium text-sky-700">+ Nowy kanał</span>
@@ -87,6 +133,22 @@ function ChatScreen({ focus }: { focus: Focus }) {
               <Row avatar={<Av text="TZ" color="bg-rose-100 text-rose-800" online={false} />} name="Tomasz Zając" preview="" />
             </div>
           </M>
+          {focus === 'search' && (
+            <>
+              <div className="px-2.5 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-slate-500">Wiadomości</div>
+              <Mark>
+                <div className="grid w-full grid-cols-[24px_1fr] items-center gap-2 px-2.5 py-1">
+                  <Av text="AN" color="bg-green-100 text-green-800" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-[11.5px] font-semibold text-slate-900">Anna Nowak</span>
+                    <span className="block truncate text-[10.5px] text-slate-500">
+                      Anna: czy możemy dać <Hl>rabat</Hl> 5%?
+                    </span>
+                  </span>
+                </div>
+              </Mark>
+            </>
+          )}
         </div>
         <div className="grid min-w-0 grid-rows-[auto_1fr_auto]">
           <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-1.5">
@@ -95,6 +157,15 @@ function ChatScreen({ focus }: { focus: Focus }) {
               <p className="text-[12px] font-semibold text-slate-900">Marek Kowalski</p>
               <p className="text-[10.5px] text-green-700">w pracy</p>
             </div>
+            <M on={focus === 'history'}>
+              <span
+                className={`rounded border px-2 py-0.5 text-[10.5px] font-medium ${
+                  focus === 'history' ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-slate-300 bg-white text-slate-700'
+                }`}
+              >
+                Historia
+              </span>
+            </M>
             <M on={focus === 'call'}>
               <span className="flex gap-1.5">
                 <span className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[10.5px] font-medium text-slate-700">
@@ -106,6 +177,7 @@ function ChatScreen({ focus }: { focus: Focus }) {
               </span>
             </M>
           </div>
+          <div className={focus === 'history' ? 'grid grid-cols-[1fr_190px]' : 'grid'}>
           <div className="flex flex-col gap-2 px-3 py-2">
             <span className="self-center rounded-full bg-slate-100 px-2 text-[10px] text-slate-500">Dzisiaj</span>
             <div className="grid max-w-[80%] gap-0.5 self-end">
@@ -183,6 +255,8 @@ function ChatScreen({ focus }: { focus: Focus }) {
                 </div>
               </M>
             )}
+          </div>
+          {focus === 'history' && <HistoryMock />}
           </div>
           <div className="grid grid-cols-[1fr_auto] items-end gap-2 border-t border-slate-200 px-2.5 py-1.5">
             <M on={focus === 'compose'}>
@@ -374,7 +448,7 @@ export function ChatHelp() {
         {
           action: 'Gdzie jest czat',
           does: 'Pozycja „Czat” w menu. Po lewej są kanały (rozmowy kilku osób) i osoby, po prawej otwarta rozmowa. Zielona kropka przy osobie znaczy, że jest teraz w aplikacji albo w Thunderbirdzie. Niebieska liczba to wiadomości, których jeszcze nie przeczytałeś — ta sama liczba jest przy „Czat” w menu i w nazwie karty przeglądarki.',
-          click: 'Osobę albo kanał na liście. Do osoby, z którą jeszcze nie pisałeś, też wystarczy kliknąć jej nazwisko. Pole „Szukaj osoby lub rozmowy” zawęża listę.',
+          click: 'Osobę albo kanał na liście. Do osoby, z którą jeszcze nie pisałeś, też wystarczy kliknąć jej nazwisko. Pole „Szukaj osoby, rozmowy lub wiadomości” zawęża listę i szuka też w treści wiadomości.',
           tone: 'blue',
           screen: <ChatScreen focus="list" />,
         },
@@ -412,6 +486,20 @@ export function ChatHelp() {
           click: '„Otwórz pozycję 4” (albo „Otwórz zapytanie”) w niebieskiej ramce; „Pokaż treść maila” w fioletowej.',
           tone: 'slate',
           screen: <ChatScreen focus="cards" />,
+        },
+        {
+          action: 'Historia rozmowy',
+          does: 'Wszystko, co przewinęło się w rozmowie z osobą albo w kanale, od najnowszych: same linki (także adresy wpisane w tekst wiadomości), przekazane maile albo połączenia. Pole u góry szuka w tej jednej rozmowie — w treści, w nazwie zapytania lub przetargu i w temacie, nadawcy i treści maila. Adres strony z listy otwiera się od razu w nowej karcie.',
+          click: '„Historia” (ikona zegara) w górnym pasku rozmowy, potem „Linki”, „Maile” albo „Połączenia”. Kliknięcie wpisu przewija rozmowę do tej wiadomości i na chwilę ją obrysowuje. Zamknięcie — „×” albo Esc.',
+          tone: 'blue',
+          screen: <ChatScreen focus="history" />,
+        },
+        {
+          action: 'Szukanie we wszystkich rozmowach',
+          does: 'Od 2 liter pole „Szukaj” nad listą pokazuje też sekcję „Wiadomości” — pasujące wiadomości ze wszystkich Twoich rozmów i kanałów, od najnowszych, z nazwą rozmowy i zaznaczonym tekstem. Wielkość liter nie ma znaczenia. Usuniętych wiadomości nie widać.',
+          click: 'Wpisz tekst w „Szukaj”, potem kliknij wiadomość w sekcji „Wiadomości” — otworzy się rozmowa przewinięta do niej. „Pokaż więcej” wczytuje starsze wyniki.',
+          tone: 'blue',
+          screen: <ChatScreen focus="search" />,
         },
         {
           action: 'Usuwanie własnej wiadomości',

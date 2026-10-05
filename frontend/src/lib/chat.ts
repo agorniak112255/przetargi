@@ -129,6 +129,32 @@ export function deleteMessage(id: number): Promise<{ data: ChatMessage }> {
   return api(`/chat/messages/${id}`, { method: 'DELETE' })
 }
 
+/** Filtr historii rozmowy: wszystko, linki (karty i adresy w treści), przekazane maile, połączenia. */
+export type ChatHistoryType = 'all' | 'links' | 'mails' | 'calls'
+
+export type ChatSearchHit = {
+  message: ChatMessage
+  /** other_user_id — w rozmowie 1:1 druga osoba (null przy kanale i koncie usuniętym). */
+  conversation: { id: number; type: 'channel' | 'direct'; name: string; everyone: boolean; other_user_id: number | null }
+}
+
+/**
+ * Wiadomości od najnowszych — we wszystkich moich rozmowach (`q` co najmniej 2 znaki) albo w jednej
+ * (`conversation_id`; bez `q` to jej historia). Kolejna strona: `before_id` = id ostatniego wyniku.
+ */
+export function searchMessages(
+  params: { q?: string; conversation_id?: number; type?: ChatHistoryType; before_id?: number; limit?: number },
+  signal?: AbortSignal,
+): Promise<{ data: ChatSearchHit[]; has_more: boolean }> {
+  const q = new URLSearchParams()
+  if (params.q) q.set('q', params.q)
+  if (params.conversation_id !== undefined) q.set('conversation_id', String(params.conversation_id))
+  if (params.type && params.type !== 'all') q.set('type', params.type)
+  if (params.before_id !== undefined) q.set('before_id', String(params.before_id))
+  if (params.limit !== undefined) q.set('limit', String(params.limit))
+  return api(`/chat/search?${q.toString()}`, { signal })
+}
+
 export function markRead(id: number, messageId: number): Promise<{ unread_total: number }> {
   return api(`/chat/conversations/${id}/read`, { method: 'POST', body: JSON.stringify({ message_id: messageId }) })
 }

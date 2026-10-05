@@ -10,6 +10,7 @@ use App\Services\Chat\ChatService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Wiadomości czatu. Trasy są poza grupą `log.activity` — treść wiadomości nie może trafić do dziennika aktywności.
@@ -63,6 +64,42 @@ class ChatMessageController extends Controller
             'data' => $this->chat->presentMessage($message),
             'conversation_id' => (int) $conversation->id,
         ], $created ? 201 : 200);
+    }
+
+    /**
+     * Wyszukiwanie wiadomości (od najnowszych) we wszystkich moich rozmowach albo w jednej (`conversation_id`).
+     * `type`: all, links (karty linków i wiadomości z adresem http/https), mails, calls. Bez `q` tylko w jednej
+     * rozmowie — to jej historia.
+     */
+    public function search(Request $request): JsonResponse
+    {
+        $me = $this->me($request);
+        $data = $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'conversation_id' => ['nullable', 'integer', 'min:1'],
+            'type' => ['nullable', 'string', Rule::in(ChatService::SEARCH_TYPES)],
+            'before_id' => ['nullable', 'integer', 'min:1'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:50'],
+        ], [
+            'q.max' => 'Szukany tekst może mieć najwyżej 100 znaków.',
+            'type.in' => 'Nieznany rodzaj wpisów.',
+            'limit.max' => 'Na raz można pobrać najwyżej 50 wyników.',
+        ]);
+
+        $q = trim((string) ($data['q'] ?? ''));
+        $conversation = isset($data['conversation_id']) ? $this->chat->findForUser($me, (int) $data['conversation_id']) : null;
+        if ($conversation === null && mb_strlen($q) < 2) {
+            throw ValidationException::withMessages(['q' => 'Wpisz co najmniej 2 znaki.']);
+        }
+
+        return response()->json($this->chat->searchMessages(
+            $me,
+            $q,
+            $conversation,
+            (string) ($data['type'] ?? 'all'),
+            isset($data['before_id']) ? (int) $data['before_id'] : null,
+            isset($data['limit']) ? (int) $data['limit'] : 30,
+        ));
     }
 
     public function destroy(Request $request, int $message): JsonResponse

@@ -52,11 +52,14 @@ import {
   openDirect,
   safeAppPath,
   sameDay,
+  searchMessages,
   sendMessage,
   timeOf,
   unreadLabel,
   type ChatConversation,
+  type ChatHistoryType,
   type ChatMessage,
+  type ChatSearchHit,
   type ChatUser,
 } from '../lib/chat'
 import { useChatUnread } from '../lib/chatUnread'
@@ -129,6 +132,8 @@ type IconName =
   | 'document'
   | 'mail'
   | 'trash'
+  | 'history'
+  | 'close'
 
 const ICONS: Record<IconName, ReactNode> = {
   search: (
@@ -175,6 +180,13 @@ const ICONS: Record<IconName, ReactNode> = {
     </>
   ),
   trash: <path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v5M14 11v5" />,
+  history: (
+    <>
+      <path d="M3.5 12a8.5 8.5 0 1 0 2.5-6l-2.5 2.5" />
+      <path d="M3.5 4v4.5H8M12 7.5V12l3 2" />
+    </>
+  ),
+  close: <path d="M6 6l12 12M18 6L6 18" />,
 }
 
 function Icon({ name, className = 'h-4 w-4' }: { name: IconName; className?: string }) {
@@ -270,23 +282,27 @@ function firstName(name: string): string {
 const URL_RE = /https?:\/\/[^\s<>"']+/g
 const TRAILING = /[.,;:!?)\]}»”’]+$/
 
+/** Adresy http/https w tekście (bez kropki czy nawiasu zamykającego zdanie) z miejscem, w którym się zaczynają. */
+function* urlsIn(text: string): Generator<{ start: number; url: string }> {
+  for (const m of text.matchAll(URL_RE)) {
+    let url = m[0]
+    const tail = url.match(TRAILING)?.[0] ?? ''
+    if (tail) url = url.slice(0, -tail.length)
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
+    } catch {
+      continue
+    }
+    yield { start: m.index ?? 0, url }
+  }
+}
+
 /** Tekst wiadomości jako tekst; adresy http/https jako odnośniki w nowej karcie. */
 function MessageText({ text, own = false }: { text: string; own?: boolean }) {
   const parts: ReactNode[] = []
   let last = 0
-  for (const m of text.matchAll(URL_RE)) {
-    const start = m.index ?? 0
-    let url = m[0]
-    const tail = url.match(TRAILING)?.[0] ?? ''
-    if (tail) url = url.slice(0, -tail.length)
-    let ok = false
-    try {
-      const parsed = new URL(url)
-      ok = parsed.protocol === 'http:' || parsed.protocol === 'https:'
-    } catch {
-      ok = false
-    }
-    if (!ok) continue
+  for (const { start, url } of urlsIn(text)) {
     if (start > last) parts.push(text.slice(last, start))
     parts.push(
       <a
@@ -511,6 +527,7 @@ function MessageItem({
   m,
   own,
   showHeader,
+  highlighted = false,
   confirming,
   onAskDelete,
   onCancelDelete,
@@ -528,6 +545,8 @@ function MessageItem({
   m: ChatMessage
   own: boolean
   showHeader: boolean
+  /** Wiadomość wskazana w wynikach wyszukiwania — chwilowa obwódka. */
+  highlighted?: boolean
   confirming: boolean
   onAskDelete: () => void
   onCancelDelete: () => void
@@ -581,7 +600,11 @@ function MessageItem({
       ? 'min-w-0 rounded-2xl rounded-tr-md bg-sky-600 px-3 py-2 text-white'
       : 'min-w-0 rounded-2xl rounded-tl-md bg-slate-100 px-3 py-2 text-slate-900'
   const content = (
-    <div className={`flex min-w-0 flex-col gap-1 ${own ? 'items-end' : 'items-start'}`}>
+    <div
+      className={`flex min-w-0 flex-col gap-1 rounded-2xl ${own ? 'items-end' : 'items-start'} ${
+        highlighted ? 'outline-2 outline-offset-4 outline-amber-400' : ''
+      }`}
+    >
       {text && <div className={bubble}>{text}</div>}
       {card}
     </div>
@@ -769,6 +792,313 @@ function PeopleModal({
   )
 }
 
+// ——— wyszukiwanie i historia ———
+
+/** Czekanie po ostatnim znaku przed zapytaniem do serwera. */
+const SEARCH_DEBOUNCE_MS = 300
+
+/** Tekst po złożeniu znak po znaku — ta sama długość co oryginał, więc pozycje dopasowań się zgadzają. */
+function foldAligned(text: string): string | null {
+  const folded = [...text].map((ch) => foldText(ch)).join('')
+  return folded.length === text.length ? folded : null
+}
+
+/** Zaznacza szukany tekst (bez wielkości liter i polskich znaków); przy niezgodnych długościach — bez zaznaczenia. */
+function Highlight({ text, q }: { text: string; q: string }) {
+  const needle = foldText(q.trim())
+  const folded = needle ? foldAligned(text) : null
+  if (!needle || !folded) return <>{text}</>
+  const parts: ReactNode[] = []
+  let from = 0
+  for (let i = folded.indexOf(needle); i >= 0; i = folded.indexOf(needle, from)) {
+    if (i > from) parts.push(text.slice(from, i))
+    parts.push(
+      <mark key={i} className="rounded-sm bg-amber-100 px-0.5 text-slate-900">
+        {text.slice(i, i + needle.length)}
+      </mark>,
+    )
+    from = i + needle.length
+  }
+  if (from < text.length) parts.push(text.slice(from))
+  return <>{parts}</>
+}
+
+/** Fragment długiego tekstu wokół pierwszego dopasowania. */
+function snippetAround(text: string, q: string, max = 160): string {
+  if (text.length <= max) return text
+  const needle = foldText(q.trim())
+  const folded = needle ? foldAligned(text) : null
+  const at = folded ? folded.indexOf(needle) : -1
+  const start = at > 40 ? Math.min(at - 40, text.length - max) : 0
+  return `${start > 0 ? '…' : ''}${text.slice(start, start + max).trim()}${start + max < text.length ? '…' : ''}`
+}
+
+function callSummary(m: ChatMessage): string {
+  const call = m.meta?.call
+  if (!call) return 'Połączenie'
+  const kind = callKindLabel(call.kind === 'video' ? 'video' : 'audio')
+  if (call.status === 'missed') return `${kind} · nieodebrana`
+  if (call.status === 'ended') {
+    const duration = callDurationLabel(call.duration_seconds)
+    return duration ? `${kind} · ${duration}` : `${kind} · zakończona`
+  }
+  return `${kind} · trwa`
+}
+
+/** Tekst wyniku: pole, w którym jest szukany tekst, a bez szukania — to, co najlepiej opisuje wpis. */
+function hitText(m: ChatMessage, q: string): string {
+  if (m.kind === 'call') return callSummary(m)
+  const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim()
+  const mail = m.meta?.mail
+  const fields = [m.body, m.meta?.link?.title, mail?.subject, mail?.from, mail?.body].map(clean).filter(Boolean)
+  const needle = foldText(q.trim())
+  const found = needle ? fields.find((f) => foldText(f).includes(needle)) : undefined
+  if (found) return found
+  if (mail) return `${clean(mail.subject) || '(bez tematu)'} · od ${clean(mail.from)}`
+  if (m.kind === 'link') return clean(m.meta?.link?.title) || clean(m.body)
+  return fields[0] ?? ''
+}
+
+function HitKind({ m }: { m: ChatMessage }) {
+  let label = ''
+  let cls = ''
+  if (m.kind === 'mail') {
+    label = 'Mail'
+    cls = 'bg-violet-50 text-violet-700'
+  } else if (m.kind === 'call') {
+    label = 'Połączenie'
+    cls = m.meta?.call?.status === 'missed' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'
+  } else if (m.kind === 'link' || urlsIn(m.body ?? '').next().done === false) {
+    label = 'Link'
+    cls = 'bg-sky-50 text-sky-700'
+  }
+  if (!label) return null
+  return <span className={`shrink-0 rounded px-1.5 text-[10.5px] font-medium leading-4 ${cls}`}>{label}</span>
+}
+
+/** Adres do pokazania na liście: bez https:// i bez ukośnika na końcu. */
+function shortUrl(url: string): string {
+  return url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+}
+
+const HISTORY_FILTERS: { key: ChatHistoryType; label: string }[] = [
+  { key: 'all', label: 'Wszystko' },
+  { key: 'links', label: 'Linki' },
+  { key: 'mails', label: 'Maile' },
+  { key: 'calls', label: 'Połączenia' },
+]
+
+/**
+ * Historia otwartej rozmowy: szukanie w treści i filtry (linki, maile, połączenia), od najnowszych.
+ * Kliknięcie wpisu przewija rozmowę do tej wiadomości; adresy z wiadomości otwierają się od razu.
+ */
+function HistoryPanel({
+  conversationId,
+  me,
+  onJump,
+  onClose,
+}: {
+  conversationId: number
+  me: number
+  onJump: (messageId: number) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [q, setQ] = useState('')
+  const [type, setType] = useState<ChatHistoryType>('all')
+  const [hits, setHits] = useState<ChatSearchHit[] | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  // reloading — nowe szukanie albo filtr (stara lista przygaszona), busy — „Wczytaj starsze”
+  const [reloading, setReloading] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  // Numer zestawu wyników — „Wczytaj starsze” spóźnione po zmianie filtra nie dokleja się do nowej listy.
+  const generation = useRef(0)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQ(query.trim()), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  useEffect(() => {
+    const gen = ++generation.current
+    const ctrl = new AbortController()
+    setReloading(true)
+    setBusy(false)
+    setErr('')
+    searchMessages({ conversation_id: conversationId, q: q || undefined, type, limit: 30 }, ctrl.signal).then(
+      (r) => {
+        if (gen !== generation.current) return
+        setHits(r.data)
+        setHasMore(r.has_more)
+        setReloading(false)
+      },
+      (ex: unknown) => {
+        if (gen !== generation.current) return
+        // bez starej listy — należała do innego szukania albo filtra
+        setHits([])
+        setHasMore(false)
+        setErr(errorText(ex, 'Nie udało się wczytać historii.'))
+        setReloading(false)
+      },
+    )
+    return () => ctrl.abort()
+  }, [conversationId, q, type])
+
+  async function loadMore() {
+    const last = hits?.[hits.length - 1]
+    if (!last || busy || reloading) return
+    const gen = generation.current
+    setBusy(true)
+    setErr('')
+    try {
+      const r = await searchMessages({ conversation_id: conversationId, q: q || undefined, type, before_id: last.message.id, limit: 30 })
+      if (gen !== generation.current) return
+      setHits((prev) => [...(prev ?? []), ...r.data])
+      setHasMore(r.has_more)
+    } catch (ex) {
+      if (gen === generation.current) setErr(errorText(ex, 'Nie udało się wczytać starszych wpisów.'))
+    } finally {
+      if (gen === generation.current) setBusy(false)
+    }
+  }
+
+  const emptyText = q
+    ? 'Nic nie znaleziono.'
+    : type === 'links'
+      ? 'W tej rozmowie nie ma jeszcze linków.'
+      : type === 'mails'
+        ? 'W tej rozmowie nie ma przekazanych maili.'
+        : type === 'calls'
+          ? 'W tej rozmowie nie było połączeń.'
+          : 'Nie ma jeszcze wiadomości.'
+
+  return (
+    <aside
+      className="absolute inset-y-0 right-0 z-10 flex w-full max-w-[360px] flex-col border-l border-slate-200 bg-white shadow-xl xl:static xl:z-auto xl:col-start-2 xl:row-span-3 xl:row-start-1 xl:max-w-none xl:shadow-none"
+      aria-label="Historia rozmowy"
+    >
+      <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2.5">
+        <p className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-slate-900">Historia rozmowy</p>
+        <button
+          type="button"
+          onClick={onClose}
+          title="Zamknij historię (Esc)"
+          aria-label="Zamknij historię"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+        >
+          <Icon name="close" />
+        </button>
+      </div>
+      <div className="space-y-2 px-3 pb-2 pt-2.5">
+        <div className="relative">
+          <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            maxLength={100}
+            placeholder="Szukaj w tej rozmowie"
+            aria-label="Szukaj w tej rozmowie"
+            className="w-full rounded-xl border-0 bg-slate-100 py-2 pl-9 pr-3 text-[13px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+          />
+        </div>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Rodzaj wpisów">
+          {HISTORY_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setType(f.key)}
+              aria-pressed={type === f.key}
+              className={`rounded-full px-2.5 py-0.5 text-[12px] font-medium ${
+                type === f.key ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {err && <p className="mx-1 mb-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{err}</p>}
+        {hits === null && !err && <p className="px-2 text-xs text-slate-500">Ładowanie…</p>}
+        {hits !== null && hits.length === 0 && !reloading && !err && <p className="px-2 py-1 text-[12px] text-slate-500">{emptyText}</p>}
+        {hits !== null && (
+          <ul className={`space-y-0.5 ${reloading ? 'opacity-50' : ''}`} aria-busy={reloading || busy}>
+            {hits.map((h, i) => {
+              const m = h.message
+              const prev = i > 0 ? hits[i - 1].message : null
+              const urls = m.body ? [...urlsIn(m.body)].map((u) => u.url) : []
+              const author = m.user ? (m.user.id === me ? 'Ty' : m.user.name) : 'Konto usunięte'
+              return (
+                <li key={m.id}>
+                  {(!prev || !sameDay(prev.created_at, m.created_at)) && (
+                    <p className="px-2.5 pb-0.5 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      {dayLabel(m.created_at)}
+                    </p>
+                  )}
+                  <div className="rounded-xl hover:bg-slate-50">
+                    <button
+                      type="button"
+                      onClick={() => onJump(m.id)}
+                      title="Pokaż w rozmowie"
+                      className="block w-full rounded-xl px-2.5 pb-1 pt-1.5 text-left"
+                    >
+                      <span className="flex items-center gap-1.5 text-[11.5px]">
+                        <span className="min-w-0 truncate font-semibold text-slate-800">{author}</span>
+                        <HitKind m={m} />
+                        <span className="ml-auto shrink-0 tabular-nums text-slate-400">{timeOf(m.created_at)}</span>
+                      </span>
+                      <span className="mt-0.5 line-clamp-3 break-words text-[12.5px] leading-[1.4] text-slate-700">
+                        <Highlight text={snippetAround(hitText(m, q), q)} q={q} />
+                      </span>
+                    </button>
+                    {urls.length > 0 && (
+                      <span className="flex flex-col gap-0.5 px-2.5 pb-1.5">
+                        {urls.slice(0, 3).map((url) => (
+                          <a
+                            key={url}
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={url}
+                            className="truncate text-[11.5px] text-sky-700 underline underline-offset-2"
+                          >
+                            {shortUrl(url)}
+                          </a>
+                        ))}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+        {hasMore && (
+          <button
+            type="button"
+            disabled={busy || reloading}
+            onClick={() => void loadMore()}
+            className="mx-auto mt-2 block rounded-full px-3 py-1 text-[12px] font-medium text-sky-700 hover:bg-slate-100 disabled:opacity-50"
+          >
+            {busy ? 'Wczytuję…' : 'Wczytaj starsze'}
+          </button>
+        )}
+      </div>
+    </aside>
+  )
+}
+
 // ——— otwarta rozmowa ———
 
 function Thread({
@@ -782,12 +1112,17 @@ function Thread({
   onLeft,
   onBack,
   callsEnabled,
+  focusMessageId,
+  onFocusHandled,
 }: {
   conversation: ChatConversation
   me: number
   users: ChatUser[]
   live: boolean
   callsEnabled: boolean
+  /** Wiadomość z wyników wyszukiwania (?m=) — rozmowa przewija się do niej i ją podświetla. */
+  focusMessageId: number | null
+  onFocusHandled: () => void
   onRead: (conversationId: number, messageId: number, unreadTotal: number) => void
   onListChanged: () => void
   onConversationUpdated: (c: ChatConversation) => void
@@ -819,6 +1154,11 @@ function Thread({
   // Rozmowy grupowe odrzucone na tym ekranie — karta przestaje pokazywać „Odbierz/Odrzuć”.
   const [declinedCalls, setDeclinedCalls] = useState<Set<number>>(() => new Set())
   const [blockedCallUrl, setBlockedCallUrl] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
+  // Przeskok do wiadomości: `jumpTarget` czeka, aż wiadomość będzie w liście; potem chwilę jest podświetlona.
+  const [jumpTarget, setJumpTarget] = useState<number | null>(null)
+  const [highlightId, setHighlightId] = useState<number | null>(null)
+  const hasOlderRef = useRef(false)
   const readUpTo = useRef(conversation.last_read_message_id ?? 0)
 
   const scroller = useRef<HTMLDivElement>(null)
@@ -862,6 +1202,7 @@ function Thread({
       const r = await fetchMessages(id, { limit: PAGE })
       stick.current = true
       applyIncoming(r.data)
+      hasOlderRef.current = r.has_more
       setHasOlder(r.has_more)
       loadedRef.current = true
       setLoaded(true)
@@ -908,6 +1249,7 @@ function Thread({
       const el = scroller.current
       if (el) restore.current = { height: el.scrollHeight, top: el.scrollTop }
       applyIncoming(r.data)
+      hasOlderRef.current = r.has_more
       setHasOlder(r.has_more)
     } catch (ex) {
       setActionErr(errorText(ex, 'Nie udało się wczytać starszych wiadomości.'))
@@ -920,6 +1262,80 @@ function Thread({
   useEffect(() => {
     void loadInitial()
   }, [loadInitial])
+
+  /**
+   * Przewija do wiadomości `target`: dociąga starsze strony, aż będzie w liście (lista zostaje ciągła — bez dziury
+   * między starymi a najnowszymi), potem przewinięcie i podświetlenie w efekcie niżej.
+   */
+  const revealMessage = useCallback(
+    async (target: number) => {
+      if (!loadedRef.current) return
+      setActionErr('')
+      const has = () => messagesRef.current.some((m) => m.id === target)
+      if (!has()) {
+        olderBusy.current = true
+        setLoadingOlder(true)
+        try {
+          for (let guard = 0; guard < 50 && !has(); guard++) {
+            const first = messagesRef.current[0]
+            if (!first || first.id <= target || !hasOlderRef.current) break
+            const r = await fetchMessages(id, { before_id: first.id, limit: 100 })
+            applyIncoming(r.data)
+            hasOlderRef.current = r.has_more
+            setHasOlder(r.has_more)
+          }
+        } catch (ex) {
+          setActionErr(errorText(ex, 'Nie udało się wczytać starszych wiadomości.'))
+          return
+        } finally {
+          olderBusy.current = false
+          setLoadingOlder(false)
+        }
+      }
+      if (!messagesRef.current.some((m) => m.id === target && !m.deleted)) {
+        setActionErr('Tej wiadomości nie ma już w rozmowie — mogła zostać usunięta.')
+        return
+      }
+      // bez przyklejania do dołu — nowa wiadomość nie może przewinąć widoku od wskazanej
+      stick.current = false
+      setJumpTarget(target)
+    },
+    [id, applyIncoming],
+  )
+
+  useEffect(() => {
+    if (!loaded || !focusMessageId) return
+    void revealMessage(focusMessageId)
+    onFocusHandled()
+  }, [loaded, focusMessageId, revealMessage, onFocusHandled])
+
+  useLayoutEffect(() => {
+    if (jumpTarget === null) return
+    const box = scroller.current
+    const el = box?.querySelector(`[data-mid="${jumpTarget}"]`)?.lastElementChild
+    if (!box || !el) return
+    // tylko lista wiadomości — scrollIntoView przesuwałby też stronę i panel
+    const r = el.getBoundingClientRect()
+    const b = box.getBoundingClientRect()
+    box.scrollTop += r.top - b.top - (box.clientHeight - Math.min(r.height, box.clientHeight)) / 2
+    stick.current = false
+    setHighlightId(jumpTarget)
+    setJumpTarget(null)
+  }, [jumpTarget, messages])
+
+  useEffect(() => {
+    if (highlightId === null) return
+    const timer = window.setTimeout(() => setHighlightId(null), 3000)
+    return () => window.clearTimeout(timer)
+  }, [highlightId])
+
+  const closeHistory = useCallback(() => setHistoryOpen(false), [])
+
+  function jumpFromHistory(messageId: number) {
+    // Panel zasłania rozmowę, gdy nie ma miejsca obok (wąskie okno, okienko czatu Thunderbirda) — wtedy się zamyka.
+    if (!window.matchMedia('(min-width: 1280px)').matches) setHistoryOpen(false)
+    void revealMessage(messageId)
+  }
 
   /** Zmiana stanu rozmowy: świeży stan z GET /chat/calls/{id} i podmiana karty po message_id (W5), bez względu na stronę. */
   const patchCall = useCallback(
@@ -1200,10 +1616,12 @@ function Thread({
 
   return (
     <section
-      className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr_auto] overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/70"
+      className={`relative grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr_auto] overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/70 ${
+        historyOpen ? 'xl:grid-cols-[minmax(0,1fr)_340px]' : ''
+      }`}
       aria-label={`Rozmowa: ${other || isChannel ? conversation.name : 'Konto usunięte'}`}
     >
-      <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4">
+      <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4 xl:col-start-1">
         <div className="flex items-center gap-2 sm:gap-3">
           <button
             type="button"
@@ -1244,6 +1662,20 @@ function Thread({
           </div>
           {!confirmLeave && (
             <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((v) => !v)}
+                aria-pressed={historyOpen}
+                title="Historia rozmowy i wyszukiwanie: linki, maile, połączenia"
+                aria-label="Historia rozmowy i wyszukiwanie"
+                className={
+                  historyOpen
+                    ? 'grid h-8 w-8 shrink-0 place-items-center rounded-full bg-sky-100 text-sky-700 hover:bg-sky-200 sm:h-9 sm:w-9'
+                    : roundBtn
+                }
+              >
+                <Icon name="history" />
+              </button>
               {callsEnabled && (isChannel || other) && (
                 <>
                   <button
@@ -1325,7 +1757,7 @@ function Thread({
       <div
         ref={scroller}
         onScroll={onScroll}
-        className="flex min-h-0 flex-col overflow-y-auto px-3 pb-3 pt-2 sm:px-4"
+        className="flex min-h-0 flex-col overflow-y-auto px-3 pb-3 pt-2 sm:px-4 xl:col-start-1"
         role="log"
         aria-label="Wiadomości"
       >
@@ -1372,7 +1804,7 @@ function Thread({
             (prev.user?.id ?? null) !== (m.user?.id ?? null) ||
             new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() > GROUP_MS
           return (
-            <div key={m.id} className="contents">
+            <div key={m.id} className="contents" data-mid={m.id}>
               {newDay && (
                 <span className="mb-1 mt-4 self-center rounded-full bg-slate-100 px-3 py-0.5 text-[11px] font-medium text-slate-500">
                   {dayLabel(m.created_at)}
@@ -1382,6 +1814,7 @@ function Thread({
                 m={m}
                 own={m.user?.id === me}
                 showHeader={showHeader}
+                highlighted={highlightId === m.id}
                 confirming={confirmDelete === m.id}
                 onAskDelete={() => setConfirmDelete(m.id)}
                 onCancelDelete={() => setConfirmDelete(null)}
@@ -1433,7 +1866,7 @@ function Thread({
           e.preventDefault()
           send()
         }}
-        className="px-3 pb-3 pt-1 sm:px-4"
+        className="px-3 pb-3 pt-1 sm:px-4 xl:col-start-1"
       >
         <div className="flex items-end gap-2 rounded-2xl bg-slate-100 py-1.5 pl-3.5 pr-1.5 focus-within:ring-2 focus-within:ring-sky-300">
           <textarea
@@ -1467,6 +1900,8 @@ function Thread({
           )}
         </small>
       </form>
+
+      {historyOpen && <HistoryPanel conversationId={id} me={me} onJump={jumpFromHistory} onClose={closeHistory} />}
 
       {addOpen && (
         <PeopleModal
@@ -1660,6 +2095,7 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
 
   const activeId = Number(params.get('c')) || null
   const directUser = Number(params.get('u')) || null
+  const focusMessageId = Number(params.get('m')) || null
 
   const listBusy = useRef(false)
   const listAgain = useRef(false)
@@ -1828,6 +2264,81 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
     setParams({ c: String(id) })
   }
 
+  // ?m= obsłużone przez rozmowę — znika z adresu, żeby odświeżenie strony nie przewijało znowu do tej wiadomości.
+  const onFocusHandled = useCallback(() => {
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('m')
+        return next
+      },
+      { replace: true },
+    )
+  }, [setParams])
+
+  // ——— wiadomości pasujące do pola „Szukaj” (serwer, od 2 znaków) ———
+  const [msgQuery, setMsgQuery] = useState('')
+  const [msgHits, setMsgHits] = useState<ChatSearchHit[] | null>(null)
+  const [msgHasMore, setMsgHasMore] = useState(false)
+  const [msgBusy, setMsgBusy] = useState(false)
+  const [msgErr, setMsgErr] = useState('')
+  const msgGeneration = useRef(0)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setMsgQuery(search.trim()), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [search])
+
+  useEffect(() => {
+    const gen = ++msgGeneration.current
+    setMsgErr('')
+    if (msgQuery.length < 2) {
+      setMsgHits(null)
+      setMsgHasMore(false)
+      setMsgBusy(false)
+      return
+    }
+    const ctrl = new AbortController()
+    setMsgBusy(true)
+    searchMessages({ q: msgQuery, limit: 20 }, ctrl.signal).then(
+      (r) => {
+        if (gen !== msgGeneration.current) return
+        setMsgHits(r.data)
+        setMsgHasMore(r.has_more)
+        setMsgBusy(false)
+      },
+      (ex: unknown) => {
+        if (gen !== msgGeneration.current) return
+        setMsgHits([])
+        setMsgErr(errorText(ex, 'Nie udało się przeszukać wiadomości.'))
+        setMsgBusy(false)
+      },
+    )
+    return () => ctrl.abort()
+  }, [msgQuery])
+
+  async function loadMoreMessages() {
+    const last = msgHits?.[msgHits.length - 1]
+    if (!last || msgBusy) return
+    const gen = msgGeneration.current
+    setMsgBusy(true)
+    try {
+      const r = await searchMessages({ q: msgQuery, before_id: last.message.id, limit: 20 })
+      if (gen !== msgGeneration.current) return
+      setMsgHits((prev) => [...(prev ?? []), ...r.data])
+      setMsgHasMore(r.has_more)
+    } catch (ex) {
+      if (gen === msgGeneration.current) setMsgErr(errorText(ex, 'Nie udało się wczytać kolejnych wiadomości.'))
+    } finally {
+      if (gen === msgGeneration.current) setMsgBusy(false)
+    }
+  }
+
+  function openHit(h: ChatSearchHit) {
+    setPageErr('')
+    setParams({ c: String(h.conversation.id), m: String(h.message.id) })
+  }
+
   // ——— lista: kanały, potem osoby — najpierw dostępne, potem pozostałe (kolejność w comparePeople) ———
   const q = foldText(search.trim())
   const match = (name: string) => !q || foldText(name).includes(q)
@@ -1982,8 +2493,8 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Szukaj osoby lub rozmowy"
-                aria-label="Szukaj osoby lub rozmowy"
+                placeholder="Szukaj osoby, rozmowy lub wiadomości"
+                aria-label="Szukaj osoby, rozmowy lub wiadomości"
                 className="w-full rounded-xl border-0 bg-slate-100 py-2 pl-9 pr-3 text-[13px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
               />
             </div>
@@ -2048,6 +2559,54 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                 <p className="px-2.5 py-1 text-[12px] text-slate-500">{q ? 'Nikogo takiego nie ma.' : 'Brak innych osób.'}</p>
               </>
             )}
+            {msgQuery.length >= 2 && (
+              <>
+                <SectionTitle>Wiadomości</SectionTitle>
+                {msgErr && <p className="mx-1 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{msgErr}</p>}
+                {msgHits === null && msgBusy && <p className="px-2.5 py-1 text-[12px] text-slate-500">Szukam…</p>}
+                {msgHits !== null && msgHits.length === 0 && !msgErr && (
+                  <p className="px-2.5 py-1 text-[12px] text-slate-500">Brak wiadomości z tym tekstem.</p>
+                )}
+                <div className="space-y-0.5">
+                  {(msgHits ?? []).map((h) => {
+                    const m = h.message
+                    const author = m.user ? (m.user.id === me ? 'Ty' : firstName(m.user.name)) : 'Konto usunięte'
+                    return (
+                      <ConversationRow
+                        key={m.id}
+                        active={false}
+                        title={h.conversation.name}
+                        preview={
+                          <>
+                            {author}: <Highlight text={snippetAround(hitText(m, msgQuery), msgQuery, 90)} q={msgQuery} />
+                          </>
+                        }
+                        time={listTime(m.created_at)}
+                        unread={0}
+                        avatar={
+                          h.conversation.type === 'channel' ? (
+                            <Avatar name={h.conversation.name} channel />
+                          ) : (
+                            <Avatar name={h.conversation.name} userId={h.conversation.other_user_id} />
+                          )
+                        }
+                        onClick={() => openHit(h)}
+                      />
+                    )
+                  })}
+                </div>
+                {msgHasMore && (
+                  <button
+                    type="button"
+                    disabled={msgBusy}
+                    onClick={() => void loadMoreMessages()}
+                    className="mx-auto mt-1 block rounded-full px-3 py-1 text-[12px] font-medium text-sky-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    {msgBusy ? 'Wczytuję…' : 'Pokaż więcej'}
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </aside>
 
@@ -2064,6 +2623,8 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
             onLeft={onLeft}
             onBack={() => setParams({})}
             callsEnabled={callsEnabled}
+            focusMessageId={focusMessageId}
+            onFocusHandled={onFocusHandled}
           />
         ) : (
           <section className={`hidden min-h-0 items-center justify-center p-6 md:flex ${panel}`}>

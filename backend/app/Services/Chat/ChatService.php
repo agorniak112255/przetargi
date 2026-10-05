@@ -41,6 +41,11 @@ final class ChatService
 
     private const MAX_LIMIT = 100;
 
+    private const MAX_SEARCH_LIMIT = 50;
+
+    /** Rodzaje wpisów w historii rozmowy (GET /chat/search?type=). */
+    public const SEARCH_TYPES = ['all', 'links', 'mails', 'calls'];
+
     public function __construct(
         private readonly TenderAccessService $tenderAccess,
     ) {}
@@ -474,6 +479,110 @@ final class ChatService
         event(new ChatRead((int) $me->id, (int) $conversation->id, $lastRead === null ? null : (int) $lastRead, $total));
 
         return $total;
+    }
+
+    // ---------------------------------------------------------------- wyszukiwanie i historia
+
+    /**
+     * Wiadomości od najnowszych: w jednej rozmowie albo we wszystkich moich (`$conversation` = null), bez usuniętych
+     * i systemowych. `$q` (bez wielkości liter) szuka w treści, tytule linku i w temacie, nadawcy i treści maila.
+     * `$type`: links — karty linków i wiadomości z adresem http/https, mails — przekazane maile, calls — połączenia.
+     *
+     * @return array{data: list<array{message: array<string, mixed>, conversation: array{id: int, type: string, name: string, everyone: bool, other_user_id: int|null}}>, has_more: bool}
+     */
+    public function searchMessages(User $me, string $q, ?ChatConversation $conversation, string $type, ?int $beforeId, int $limit): array
+    {
+        $limit = max(1, min(self::MAX_SEARCH_LIMIT, $limit));
+        $this->ensureEveryoneMemberships($me);
+
+        $query = ChatMessage::query()
+            ->with('user:id,name')
+            ->whereNull('deleted_at')
+            ->whereIn('kind', [ChatMessage::KIND_TEXT, ChatMessage::KIND_LINK, ChatMessage::KIND_MAIL, ChatMessage::KIND_CALL]);
+        if ($conversation !== null) {
+            $query->where('conversation_id', $conversation->id);
+        } else {
+            $query->whereIn(
+                'conversation_id',
+                ChatParticipant::query()->select('conversation_id')->where('user_id', $me->id),
+            );
+        }
+
+        match ($type) {
+            'links' => $query->where(fn ($w) => $w->where('kind', ChatMessage::KIND_LINK)
+                ->orWhere('body', 'like', '%http://%')
+                ->orWhere('body', 'like', '%https://%')),
+            'mails' => $query->where('kind', ChatMessage::KIND_MAIL),
+            'calls' => $query->where('kind', ChatMessage::KIND_CALL),
+            default => null,
+        };
+
+        if ($q !== '') {
+            // ESCAPE '!' zamiast odwrotnego ukośnika — ten sam zapis działa w MariaDB i w SQLite (testy)
+            $like = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], mb_strtolower($q)).'%';
+            $grammar = $query->getQuery()->getGrammar();
+            // meta to JSON (w MariaDB utf8mb4_bin) — LOWER po obu stronach, inaczej wielkość liter by się liczyła
+            $columns = ['body', 'meta->link->title', 'meta->mail->subject', 'meta->mail->from', 'meta->mail->body'];
+            $query->where(function ($w) use ($columns, $grammar, $like): void {
+                foreach ($columns as $column) {
+                    $w->orWhereRaw('LOWER('.$grammar->wrap($column).") LIKE ? ESCAPE '!'", [$like]);
+                }
+            });
+        }
+
+        if ($beforeId !== null) {
+            $query->where('id', '<', $beforeId);
+        }
+        $rows = $query->orderByDesc('id')->limit($limit + 1)->get();
+        $hasMore = $rows->count() > $limit;
+        $rows = $rows->take($limit);
+
+        $names = $this->conversationLabels($me, $rows->pluck('conversation_id')->unique()->values()->all());
+
+        return [
+            'data' => $rows
+                ->map(fn (ChatMessage $message): array => [
+                    'message' => $this->presentMessage($message),
+                    'conversation' => $names[(int) $message->conversation_id],
+                ])
+                ->values()
+                ->all(),
+            'has_more' => $hasMore,
+        ];
+    }
+
+    /**
+     * Nazwy rozmów do wyników wyszukiwania: kanał — jego nazwa, rozmowa 1:1 — imię drugiej osoby.
+     *
+     * @param  list<int>  $ids
+     * @return array<int, array{id: int, type: string, name: string, everyone: bool, other_user_id: int|null}>
+     */
+    private function conversationLabels(User $me, array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+        $out = [];
+        $conversations = ChatConversation::query()->with('participants.user:id,name')->whereIn('id', $ids)->get();
+        foreach ($conversations as $conversation) {
+            $name = (string) $conversation->name;
+            $otherId = null;
+            if ($conversation->isDirect()) {
+                $other = $conversation->participants
+                    ->first(fn (ChatParticipant $row): bool => (int) $row->user_id !== (int) $me->id)?->user;
+                $name = $other instanceof User ? (string) $other->name : 'Konto usunięte';
+                $otherId = $other instanceof User ? (int) $other->id : null;
+            }
+            $out[(int) $conversation->id] = [
+                'id' => (int) $conversation->id,
+                'type' => (string) $conversation->type,
+                'name' => $name,
+                'everyone' => (bool) $conversation->everyone,
+                'other_user_id' => $otherId,
+            ];
+        }
+
+        return $out;
     }
 
     // ---------------------------------------------------------------- nieprzeczytane

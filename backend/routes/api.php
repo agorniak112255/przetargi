@@ -152,6 +152,8 @@ Route::middleware('auth:sanctum')->group(function (): void {
             ->whereNumber('user')
             ->middleware('throttle:60,1,chat-messages');
         Route::delete('/messages/{message}', [ChatMessageController::class, 'destroy'])->whereNumber('message');
+        // wyszukiwanie w treści i historia rozmowy (linki, maile, połączenia)
+        Route::get('/search', [ChatMessageController::class, 'search']);
 
         // rozmowy głosowe i wideo (LiveKit)
         Route::get('/calls/config', [ChatCallController::class, 'config']);
