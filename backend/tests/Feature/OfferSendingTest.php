@@ -75,6 +75,11 @@ final class OfferSendingTest extends TestCase
             $this->assertStringNotContainsString('/api/wypis/', (string) $mail->getHtmlBody());
             $this->assertStringContainsString('Rękawice nitrylowe', (string) $mail->getHtmlBody());
             $this->assertStringContainsString('12,50', (string) $mail->getHtmlBody());
+            // wysyłka z aplikacji — z podpisem ze skrzynki, bez notki o administratorze danych mailingu
+            foreach ([(string) $mail->getHtmlBody(), (string) $mail->getTextBody()] as $body) {
+                $this->assertStringContainsString('tel. 600 000 000', $body);
+                $this->assertStringNotContainsString('Administratorem danych', $body);
+            }
         }
         $this->assertSame('[Kopia] Oferta na rękawice', $emails[2]->getSubject());
         $this->assertStringContainsString('Kopia dla Ciebie — wysłano do: a@klient.pl, B@Klient.pl', (string) $emails[2]->getHtmlBody());

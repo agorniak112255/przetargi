@@ -177,7 +177,8 @@
 @break
 @endswitch
 @endforeach
-          {{-- podpis nadawcy --}}
+          {{-- podpis nadawcy (oferta kopiowana do Thunderbirda: bez podpisu — doda go program pocztowy) --}}
+@if ($withSignature)
           <tr>
             <td style="padding:6px 24px 18px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:{{ $text }};">
 @if ($signature !== null)
@@ -190,6 +191,7 @@
 @endif
             </td>
           </tr>
+@endif
           {{-- stopka z wypisem (oferta do jednego klienta: unsubscribeUrl null — bez linii wypisu) --}}
 @if ($unsubscribeUrl !== null || $footerNote !== '')
           <tr>

@@ -299,7 +299,7 @@ export function OffersHelp() {
         },
         {
           action: 'Kopia do wklejenia w Thunderbirdzie',
-          does: 'Gdy wolisz wysłać ofertę sam, na przykład jako odpowiedź w wątku z klientem, kopiujesz gotowy mail i wklejasz go w nowej wiadomości Thunderbirda — wygląda tak samo jak wysłany z aplikacji. Temat wpisujesz w Thunderbirdzie sam (ten z pola „Temat wiadomości” albo własny). Przy kopiowaniu adresów nie sprawdzamy, bo odbiorcę wybierasz w Thunderbirdzie, a historia wysyłek takiego maila nie obejmuje — zapisuje się tylko data ostatniego kopiowania (kolumna „Skopiowana” na liście ofert). Osoby z dodatkiem Thunderbirda mogą też kliknąć „Otwórz w Thunderbirdzie” — nowa wiadomość z ofertą otworzy się sama, adresata wpisujesz w Thunderbirdzie.',
+          does: 'Gdy wolisz wysłać ofertę sam, na przykład jako odpowiedź w wątku z klientem, kopiujesz gotowy mail i wklejasz go w nowej wiadomości Thunderbirda — wygląda tak samo jak wysłany z aplikacji, tylko bez podpisu — pod spodem Thunderbird doda Twój własny podpis (przy wysyłce z aplikacji podpis bierze się z Moje konto → Moja poczta). Temat wpisujesz w Thunderbirdzie sam (ten z pola „Temat wiadomości” albo własny). Przy kopiowaniu adresów nie sprawdzamy, bo odbiorcę wybierasz w Thunderbirdzie, a historia wysyłek takiego maila nie obejmuje — zapisuje się tylko data ostatniego kopiowania (kolumna „Skopiowana” na liście ofert). Osoby z dodatkiem Thunderbirda mogą też kliknąć „Otwórz w Thunderbirdzie” — nowa wiadomość z ofertą otworzy się sama, adresata wpisujesz w Thunderbirdzie.',
           click: '„Kopiuj do wklejenia w Thunderbirdzie”, potem w Thunderbirdzie nowa wiadomość albo odpowiedź i Ctrl+V w treści.',
           tone: 'blue',
           screen: (

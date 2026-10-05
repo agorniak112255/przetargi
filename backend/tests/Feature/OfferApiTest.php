@@ -273,6 +273,10 @@ final class OfferApiTest extends TestCase
             $this->assertStringNotContainsString('Wypisz', $body);
             $this->assertStringNotContainsString('/api/wypis/', $body);
             $this->assertStringNotContainsString('/api/k/', $body);
+            // bez notki o administratorze danych mailingu
+            $this->assertStringNotContainsString('Administratorem danych', $body);
+            // podgląd = kopia do Thunderbirda — bez podpisu, doda go program pocztowy
+            $this->assertStringNotContainsString('tel. 600 000 000', $body);
         }
 
         // bez skrzynki: nadawca pusty, pytania na adres konta

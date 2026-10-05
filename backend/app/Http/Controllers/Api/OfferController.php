@@ -210,7 +210,8 @@ class OfferController extends Controller
     public function preview(Request $request, Offer $offer): JsonResponse
     {
         $this->authorizeOwner($request, $offer);
-        $rendered = $this->renderer->render($offer, $request->user());
+        // podgląd = to, co handlowiec kopiuje do Thunderbirda — bez podpisu, bo doda go program pocztowy
+        $rendered = $this->renderer->render($offer, $request->user(), null, false);
 
         return response()->json([
             'subject' => $rendered['subject'],

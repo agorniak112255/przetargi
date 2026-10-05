@@ -1038,6 +1038,10 @@ function PreviewSection({
       </div>
       {error && <ErrorBar message={error} />}
       {missingPrices}
+      <p className="mb-2 text-slate-500">
+        Podgląd jest bez podpisu — tak skopiujesz ofertę do Thunderbirda, który doda Twój podpis. Przy wysyłce z aplikacji
+        pod treścią dojdzie podpis z Moje konto → Moja poczta.
+      </p>
       {preview && (
         <div className="mb-2 space-y-1.5">
           {preview.from === '' && (

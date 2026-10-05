@@ -68,6 +68,7 @@
 @break
 @endswitch
 @endforeach
+@if ($withSignature)
 --
 @if ($signature !== null)
 {!! $signature !!}
@@ -75,6 +76,7 @@
 {!! $fromName !!}
 @if ($fromAddress !== '')
 {!! $fromAddress !!}
+@endif
 @endif
 @endif
 

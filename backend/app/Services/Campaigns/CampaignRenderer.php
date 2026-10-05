@@ -109,7 +109,7 @@ class CampaignRenderer
      * @param  Collection<int, CampaignItem>  $items
      * @param  bool  $useSnapshot  dane pozycji z migawek (kampania po starcie wysyłki), nie bieżący stan
      * @param  list<array<string, mixed>>  $blocks
-     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null}  $mail
+     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null, footerNote?: string, withSignature?: bool}  $mail
      * @param  User|null  $sender  skrzynka nadawcy (podpis, adres); null = autor
      * @param  string|null  $track  baza linków mierzonych odbiorcy; null = bez linku do strony produktu, drugi przycisk wprost
      * @param  string|null  $askAddress  adres do mailto „Zapytaj o ofertę”; null = adres skrzynki nadawcy, pusty = „#”
@@ -168,6 +168,9 @@ class CampaignRenderer
             'validUntil' => (string) $mail['validUntil'],
             'unsubscribeUrl' => $mail['unsubscribeUrl'] ?? null,
             'notice' => $mail['notice'] ?? null,
+            // opcje oferty — kampania ich nie podaje (notka z konfiguracji, podpis zawsze)
+            ...(array_key_exists('footerNote', $mail) ? ['footerNote' => (string) $mail['footerNote']] : []),
+            ...(array_key_exists('withSignature', $mail) ? ['withSignature' => (bool) $mail['withSignature']] : []),
         ], $sender, $account);
     }
 
@@ -218,7 +221,7 @@ class CampaignRenderer
     /**
      * @param  list<array<string, mixed>>  $blocks
      * @param  list<array<string, mixed>>  $products
-     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null}  $mail
+     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null, footerNote?: string, withSignature?: bool}  $mail
      * @return array{subject: string, html: string, text: string}
      */
     private function compose(array $blocks, ?string $brandColor, array $products, array $mail, ?User $sender, ?UserMailAccount $account): array
@@ -230,7 +233,10 @@ class CampaignRenderer
             'brand' => in_array($brandColor, CampaignBlocks::BRAND_COLORS, true) ? $brandColor : CampaignBlocks::DEFAULT_COLOR,
             'company' => (string) config('campaigns.company_name'),
             'tagline' => (string) config('campaigns.company_tagline'),
-            'footerNote' => (string) config('campaigns.footer_note'),
+            // oferta do jednego klienta podaje footerNote '' (bez notki o administratorze danych mailingu)
+            'footerNote' => array_key_exists('footerNote', $mail) ? (string) $mail['footerNote'] : (string) config('campaigns.footer_note'),
+            // false: bez podpisu — oferta kopiowana do Thunderbirda dostaje podpis z programu pocztowego
+            'withSignature' => (bool) ($mail['withSignature'] ?? true),
             'fromName' => $account !== null ? (string) $account->from_name : ($sender !== null ? (string) $sender->name : ''),
             'fromAddress' => $account !== null ? (string) $account->from_address : '',
             'signature' => $account?->signature !== null && trim((string) $account->signature) !== '' ? (string) $account->signature : null,

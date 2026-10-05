@@ -12,8 +12,9 @@ use App\Services\Campaigns\CampaignRenderer;
 
 /**
  * Mail oferty — wygląd kampanii (CampaignRenderer::renderItems: baner, kafelki, układ produktów), ale do jednego
- * klienta: bez linii wypisu, bez linków mierzonych, „Zapytaj o ofertę” na adres autora. Ten sam HTML w podglądzie,
- * kopii do Thunderbirda i wysyłce. Nie final — testy podmieniają zależności.
+ * klienta: bez linii wypisu i notki o administratorze danych mailingu, bez linków mierzonych, „Zapytaj o ofertę” na adres
+ * autora. Podgląd i kopia do Thunderbirda są bez podpisu (program pocztowy doda podpis handlowca), wysyłka z aplikacji —
+ * z podpisem ze skrzynki „Moja poczta”. Nie final — testy podmieniają zależności.
  */
 class OfferRenderer
 {
@@ -21,9 +22,10 @@ class OfferRenderer
 
     /**
      * @param  string|null  $notice  informacja na górze maila (kopia dla nadawcy) — klient jej nie dostaje
+     * @param  bool  $withSignature  false = bez podpisu (podgląd i kopia do Thunderbirda)
      * @return array{subject: string, from: string, html: string, text: string}
      */
-    public function render(Offer $offer, User $viewer, ?string $notice = null): array
+    public function render(Offer $offer, User $viewer, ?string $notice = null, bool $withSignature = true): array
     {
         $offer->loadMissing('user.mailAccount');
         // nadawcą i podpisem jest zawsze autor (oglądać ofertę może tylko on — $viewer liczy ceny tak samo)
@@ -57,6 +59,8 @@ class OfferRenderer
                 // oferta do jednego klienta — nie mailing, nie ma z czego się wypisywać
                 'unsubscribeUrl' => null,
                 'notice' => $notice,
+                'footerNote' => '',
+                'withSignature' => $withSignature,
             ],
             $author,
             null,
