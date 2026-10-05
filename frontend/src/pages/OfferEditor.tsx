@@ -22,7 +22,6 @@ import {
   formatPln,
   type CampaignLayout,
 } from '../lib/campaigns'
-import { copyRichHtml } from '../lib/clipboard'
 import {
   OFFER_DELIVERIES,
   addOfferItems,
@@ -30,7 +29,6 @@ import {
   downloadOfferPdf,
   downloadSentPdf,
   getOffer,
-  markOfferCopied,
   offerPreview,
   offerSentMail,
   parseEmails,
@@ -54,7 +52,7 @@ import { useSerialAutosave } from '../lib/useSerialAutosave'
 
 /**
  * Oferta /oferty/:id — jedna strona: produkty z ceną netto, treść maila, podgląd, wysyłka (osobny mail do każdego
- * adresu ze skrzynki „Moja poczta”) albo kopia do wklejenia w Thunderbirdzie, historia wysyłek. Oferta jest zawsze
+ * adresu ze skrzynki „Moja poczta”) albo „Otwórz w Thunderbirdzie” (dodatek), historia wysyłek. Oferta jest zawsze
  * edytowalna; każda wysyłka zapisuje na serwerze dokładnie to, co dostał klient.
  */
 
@@ -198,7 +196,7 @@ function Editor({ initial }: { initial: Offer }) {
   const mutationSeq = useRef(0)
   const offerId = initial.id
 
-  // Licznik zmian oferty — podgląd wczytany przy innym liczniku jest nieaktualny (kopiowanie czeka na świeży).
+  // Licznik zmian oferty — podgląd wczytany przy innym liczniku jest nieaktualny (Thunderbird czeka na świeży).
   const tickRef = useRef(0)
   const [tick, setTick] = useState(0)
   const bump = useCallback(() => {
@@ -211,8 +209,8 @@ function Editor({ initial }: { initial: Offer }) {
     async (run, fallback) => {
       const my = ++mutationSeq.current
       setSaving((n) => n + 1)
-      // podgląd jest nieaktualny od chwili wysłania zmiany, nie od odpowiedzi — inaczej „Kopiuj” zaraz po zmianie
-      // ceny skopiowałby stary mail
+      // podgląd jest nieaktualny od chwili wysłania zmiany, nie od odpowiedzi — inaczej „Otwórz w Thunderbirdzie”
+      // zaraz po zmianie ceny wziąłby stary mail
       bump()
       try {
         const o = await run()
@@ -232,7 +230,7 @@ function Editor({ initial }: { initial: Offer }) {
 
   // Treść: szkic w polach, zapis po CONTENT_SAVE_MS bez pisania, przy wyjściu z pola i przed podglądem/wysyłką.
   const [content, setContent] = useState<Content>(() => contentOf(initial))
-  // Pola, których zapis się nie udał — dołączane do następnego zapisu; wysyłka i kopiowanie czekają na ich zapis
+  // Pola, których zapis się nie udał — dołączane do następnego zapisu; wysyłka i Thunderbird czekają na ich zapis
   // (autozapis zdejmuje zmiany z kolejki przed wysłaniem, więc bez tego nieudany temat przepadłby po cichu).
   const failedContent = useRef<Partial<Content>>({})
   const [contentFailed, setContentFailed] = useState(false)
@@ -338,7 +336,6 @@ function Editor({ initial }: { initial: Offer }) {
               {offer.items.length} {plural(offer.items.length, 'pozycja', 'pozycje', 'pozycji')}
             </span>
             {offer.last_sent_at && <span>· ostatnia wysyłka {fmtDateTime(offer.last_sent_at)}</span>}
-            {offer.last_copied_at && <span>· skopiowana {fmtDateTime(offer.last_copied_at)}</span>}
             <span className="text-slate-500">
               ·{' '}
               {saving > 0
@@ -382,7 +379,6 @@ function Editor({ initial }: { initial: Offer }) {
               // z wyniku wysyłki tylko jej pola — zmiana ceny zapisana w trakcie wysyłki zostaje na ekranie
               setOffer((cur) => ({ ...cur, sends: o.sends, last_sent_at: o.last_sent_at }))
             }}
-            onCopied={() => setOffer((o) => ({ ...o, last_copied_at: new Date().toISOString() }))}
           />
           <HistorySection offer={offer} />
         </div>
@@ -604,7 +600,7 @@ function ItemsSection({
       <p className="px-4 py-3 text-[11px] text-slate-500">
         Koszt zakupu i cena sugerowana są widoczne tylko tutaj — klient widzi wyłącznie cenę netto w ofercie. Sugerowana =
         koszt zakupu (towar z XL: średni koszt partii; karta: cena zakupu w zł) plus domyślna marża Twojego konta. Wysłać
-        i skopiować ofertę można dopiero, gdy każda pozycja ma cenę. Najwyżej {max} pozycji.
+        ofertę można dopiero, gdy każda pozycja ma cenę. Najwyżej {max} pozycji.
         {full && <b className="font-medium text-amber-800"> Oferta ma już najwięcej pozycji.</b>}
       </p>
       {pickerOpen && (
@@ -1042,7 +1038,7 @@ function ContentSection({
           </span>
           {content.valid_until !== '' && content.valid_until < localToday() && (
             <span className="mt-0.5 block font-normal text-red-700">
-              Ta data już minęła — z nią oferty nie da się wysłać ani skopiować.
+              Ta data już minęła — z nią oferty nie da się wysłać.
             </span>
           )}
         </label>
@@ -1083,7 +1079,7 @@ function PreviewSection({
       {error && <ErrorBar message={error} />}
       {missingPrices}
       <p className="mb-2 text-slate-500">
-        Podgląd jest bez podpisu — tak skopiujesz ofertę do Thunderbirda, który doda Twój podpis. Przy wysyłce z aplikacji
+        Podgląd jest bez podpisu — tak trafi do Thunderbirda, który doda Twój podpis. Przy wysyłce z aplikacji
         pod treścią dojdzie podpis z Moje konto → Moja poczta.
       </p>
       {preview && (
@@ -1094,7 +1090,7 @@ function PreviewSection({
               <Link to="/account" className="font-medium underline">
                 Moje konto → Moja poczta
               </Link>
-              . Kopiowanie do Thunderbirda działa bez niej.
+              . „Otwórz w Thunderbirdzie” działa bez niej.
             </p>
           )}
           {preview.public_url_missing && (
@@ -1165,7 +1161,7 @@ function MissingPrices({
         <>
           <p className="font-medium text-red-800">
             {missing.length} {plural(missing.length, 'pozycja nie ma', 'pozycje nie mają', 'pozycji nie ma')} ceny — wpisz
-            cenę netto, zanim wyślesz albo skopiujesz ofertę:
+            cenę netto, zanim wyślesz ofertę:
           </p>
           <ul className="mt-1.5 space-y-1.5">
             {missing.map((item) => (
@@ -1227,7 +1223,6 @@ function SendSection({
   contentFailed,
   ensureSaved,
   onSent,
-  onCopied,
 }: {
   offer: Offer
   subject: string
@@ -1236,13 +1231,12 @@ function SendSection({
   onDelivery: (delivery: OfferDelivery) => void
   preview: OfferPreview | null
   previewFresh: boolean
-  /** Trwa zapis zmiany (cena, opis, treść) — kopia albo wysyłka mogłyby wziąć stan sprzed niej. */
+  /** Trwa zapis zmiany (cena, opis, treść) — Thunderbird albo wysyłka mogłyby wziąć stan sprzed niej. */
   saving: boolean
   /** Ostatni zapis treści się nie udał — serwer ma starszy temat albo wstęp niż pola na ekranie. */
   contentFailed: boolean
   ensureSaved: () => Promise<boolean>
   onSent: (o: Offer) => void
-  onCopied: () => void
 }) {
   const { user } = useAuth()
   const [raw, setRaw] = useState('')
@@ -1250,7 +1244,6 @@ function SendSection({
   const [sending, setSending] = useState(false)
   const [sendErr, setSendErr] = useState('')
   const [results, setResults] = useState<OfferSendResult[] | null>(null)
-  const [copyMsg, setCopyMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const emails = parseEmails(raw)
   const invalid = emails.filter((e) => !EMAIL_RE.test(e))
@@ -1279,7 +1272,8 @@ function SendSection({
     return ''
   })()
 
-  const copyBlock = (() => {
+  // „Otwórz w Thunderbirdzie” bierze HTML z podglądu — musi być aktualny i kompletny
+  const composeBlock = (() => {
     if (offer.items.length === 0) return 'Dodaj produkty do oferty.'
     if (contentFailed) return SAVE_FAILED
     if (saving) return 'Poczekaj, aż zmiany się zapiszą.'
@@ -1351,31 +1345,6 @@ function SendSection({
     }
   }
 
-  /** Kopiuje HTML już wczytanego podglądu — bez czekania przed zapisem do schowka (schowek wymaga świeżego kliknięcia). */
-  function copy() {
-    if (copyBlock || !preview) return
-    setCopyMsg(null)
-    // kopia idzie z podglądu — forma też z podglądu (przy „Tylko PDF” to krótki mail)
-    const withPdf = preview.delivery !== 'body'
-    void copyRichHtml(preview.html, preview.text).then((ok) => {
-      if (ok) {
-        setCopyMsg({
-          ok: true,
-          text: withPdf
-            ? 'Skopiowano treść maila — wklej ją w nowej wiadomości w Thunderbirdzie (Ctrl+V). Dołącz PDF ręcznie: „Pobierz PDF” i przeciągnij plik do wiadomości.'
-            : 'Skopiowano ofertę — wklej ją w treść nowej wiadomości w Thunderbirdzie (Ctrl+V).',
-        })
-        void markOfferCopied(offer.id)
-          .then(onCopied)
-          .catch(() => {
-            // znacznik „skopiowana” to tylko informacja na liście — kopia w schowku i tak jest
-          })
-      } else {
-        setCopyMsg({ ok: false, text: 'Nie udało się skopiować do schowka.' })
-      }
-    })
-  }
-
   const sentCount = results?.filter((r) => r.status === 'sent').length ?? 0
 
   return (
@@ -1383,7 +1352,7 @@ function SendSection({
       <h2 className="app-card-title text-sm font-semibold text-slate-900">Wysyłka</h2>
       <fieldset className="space-y-1.5">
         <legend className="font-medium text-slate-700">
-          Forma oferty <span className="font-normal text-slate-500">— zapisuje się od razu, dotyczy wysyłki, kopiowania i Thunderbirda</span>
+          Forma oferty <span className="font-normal text-slate-500">— zapisuje się od razu, dotyczy wysyłki z aplikacji i Thunderbirda</span>
         </legend>
         <div className="flex flex-wrap gap-2">
           {OFFER_DELIVERIES.map((d) => (
@@ -1415,7 +1384,7 @@ function SendSection({
               type="button"
               className={BTN_SM}
               disabled={pdfBusy || pdfBlock !== ''}
-              title={pdfBlock || 'Pobiera PDF z bieżącą ofertą — do obejrzenia albo ręcznego dołączenia do wiadomości'}
+              title={pdfBlock || 'Pobiera PDF z bieżącą ofertą — do obejrzenia przed wysyłką'}
               onClick={() => void downloadPdf()}
             >
               {pdfBusy ? 'Przygotowuję PDF…' : 'Pobierz PDF'}
@@ -1462,36 +1431,24 @@ function SendSection({
             ? 'Wysyłam…'
             : `Wyślij do ${emails.length} ${plural(emails.length, 'adresu', 'adresów', 'adresów')}`}
         </button>
-        <button
-          type="button"
-          className={BTN}
-          disabled={copyBlock !== ''}
-          title="Kopiuje gotowy wygląd z podglądu — do wklejenia w treść nowej wiadomości"
-          onClick={copy}
-        >
-          Kopiuj do wklejenia w Thunderbirdzie
-        </button>
         {can(user, 'inquiries.use') && (
           <ThunderbirdButton
             offerId={offer.id}
             preview={preview}
             subject={(preview?.subject || subject).trim() || `Oferta ${offer.code ?? ''}`.trim()}
-            blocked={copyBlock !== ''}
+            blocked={composeBlock !== ''}
           />
         )}
       </div>
       {sendBlock && emails.length > 0 && <p className="text-amber-800">{sendBlock}</p>}
       {sendBlock && emails.length === 0 && sendBlock !== EMPTY_EMAILS && <p className="text-slate-500">Wysyłka: {sendBlock}</p>}
-      {copyBlock && copyBlock !== sendBlock && <p className="text-slate-500">Kopiowanie: {copyBlock}</p>}
+      {composeBlock && composeBlock !== sendBlock && can(user, 'inquiries.use') && (
+        <p className="text-slate-500">Thunderbird: {composeBlock}</p>
+      )}
       {contentFailed && (
         <button type="button" className={BTN} disabled={retrying} onClick={() => void retrySave()}>
           {retrying ? 'Zapisuję…' : 'Zapisz ponownie'}
         </button>
-      )}
-      {copyMsg && (
-        <p className={copyMsg.ok ? 'text-emerald-700' : 'text-red-700'} role="status">
-          {copyMsg.text}
-        </p>
       )}
       {sendErr && <ErrorBar message={sendErr} onClose={() => setSendErr('')} />}
       {results && (
@@ -1585,7 +1542,7 @@ function ThunderbirdButton({
         .then((res) => {
           if (!cancelled) setAddonReady(res.addon_ready)
         })
-        // bez odpowiedzi zostaje samo kopiowanie — przycisk Thunderbirda to dodatek, nie warunek
+        // bez odpowiedzi nie pokazujemy przycisku — zostaje wysyłka z aplikacji
         .catch(() => {
           if (!cancelled) setAddonReady(false)
         })
@@ -1650,7 +1607,7 @@ function ThunderbirdButton({
     setBusy(false)
     setMsg({
       ok: false,
-      text: 'Thunderbird jeszcze nie odebrał oferty — sprawdź, czy jest uruchomiony. Możesz też skopiować ofertę i wkleić ją ręcznie.',
+      text: 'Thunderbird jeszcze nie odebrał oferty — sprawdź, czy jest uruchomiony, i spróbuj ponownie.',
     })
   }
 

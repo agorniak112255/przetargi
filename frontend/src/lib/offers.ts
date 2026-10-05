@@ -3,7 +3,7 @@ import type { CampaignLayout } from './campaigns'
 
 /**
  * Oferty dla klientów — typy i wywołania API (05.10.2026). Lekka oferta: wybrane produkty z ceną, wysyłka ze
- * skrzynki „Moja poczta” (osobny mail na adres) albo kopia do wklejenia w Thunderbirdzie. Wygląd maila jak kampania.
+ * skrzynki „Moja poczta” (osobny mail na adres) albo nowa wiadomość w Thunderbirdzie (dodatek). Wygląd maila jak kampania.
  * Oferta jest zawsze edytowalna; każda wysyłka zapisuje dokładnie to, co dostał klient (sends).
  */
 
@@ -31,7 +31,7 @@ export type OfferItem = {
   unit_cost: number | null
   /** Koszt × (1 + domyślna marża konta); null = brak kosztu. */
   suggested_price: number | null
-  /** Cena netto w ofercie; null = do uzupełnienia (wysyłka i kopiowanie wymagają ceny). */
+  /** Cena netto w ofercie; null = do uzupełnienia (wysyłka i Thunderbird wymagają ceny). */
   price_net: number | null
   note: string | null
   /** Opis wpisany przy pozycji; null = w mailu idzie card_excerpt. */
@@ -109,7 +109,7 @@ export type OfferPreview = {
   from: string
   html: string
   text: string
-  /** Id pozycji bez ceny — wysłać i skopiować można dopiero po ich uzupełnieniu. */
+  /** Id pozycji bez ceny — wysłać można dopiero po ich uzupełnieniu. */
   missing_prices: number[]
   /** Brak publicznego adresu aplikacji — w mailu nie będzie zdjęć ani baneru. */
   public_url_missing: boolean
@@ -159,11 +159,6 @@ export function removeOfferItem(id: number, itemId: number) {
 
 export function offerPreview(id: number) {
   return api<OfferPreview>(`/offers/${id}/preview`)
-}
-
-/** Znacznik „skopiowana” — wysyłany bez czekania (schowek wymaga świeżego kliknięcia, kopiujemy z podglądu). */
-export function markOfferCopied(id: number) {
-  return api<void>(`/offers/${id}/copied`, { method: 'POST' })
 }
 
 export function sendOffer(id: number, emails: string[]) {

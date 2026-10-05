@@ -90,7 +90,7 @@ export function OffersHelp() {
                 <div>
                   <h1 className="text-xl font-semibold">Oferty</h1>
                   <p className="text-[11px] text-slate-600">
-                    Twoje oferty dla klientów — wysyłka z Twojej skrzynki albo kopia do wklejenia w Thunderbirdzie.
+                    Twoje oferty dla klientów — wysyłka z Twojej skrzynki albo nowa wiadomość w Thunderbirdzie.
                   </p>
                 </div>
                 <Btn label="+ Nowa oferta" />
@@ -103,7 +103,6 @@ export function OffersHelp() {
                       <Th>Pozycje</Th>
                       <Th>Wysłano do</Th>
                       <Th>Ostatnia wysyłka</Th>
-                      <Th>Skopiowana</Th>
                       <Th>Zmieniona</Th>
                       <Th />
                     </tr>
@@ -117,7 +116,6 @@ export function OffersHelp() {
                       <td className="p-2 text-right tabular-nums">4</td>
                       <td className="p-2 text-right tabular-nums">2 adresów</td>
                       <td className="whitespace-nowrap p-2 tabular-nums">03.10.2026 15:10</td>
-                      <td className="p-2 text-slate-400">—</td>
                       <td className="whitespace-nowrap p-2 tabular-nums">03.10.2026 15:10</td>
                       <td className="p-2 text-right">
                         <Mark>
@@ -133,7 +131,6 @@ export function OffersHelp() {
                       <td className="p-2 text-right tabular-nums">3</td>
                       <td className="p-2 text-right text-slate-400">—</td>
                       <td className="p-2 text-slate-400">—</td>
-                      <td className="whitespace-nowrap p-2 tabular-nums">05.10.2026 09:12</td>
                       <td className="whitespace-nowrap p-2 tabular-nums">05.10.2026 09:20</td>
                       <td className="p-2 text-right">
                         <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Otwórz</span>
@@ -175,7 +172,7 @@ export function OffersHelp() {
         },
         {
           action: 'Ceny w ofercie',
-          does: 'Przy każdej pozycji widzisz stan magazynu, koszt zakupu (średni koszt partii towaru z ERP XL, a dla karty bez towaru w XL — cenę zakupu karty) i cenę sugerowaną = koszt zakupu + Twoja domyślna marża z Moje konto → Oferty → „Domyślna marża”. Cena sugerowana wpisuje się sama jako „Cena netto w ofercie” przy dodaniu pozycji — możesz ją zmienić, a „wstaw sugerowaną” przywraca ją jednym kliknięciem. Gdy kosztu brak, pole jest puste i trzeba wpisać cenę ręcznie: bez ceny przy każdej pozycji oferty nie da się wysłać ani skopiować. Cena niższa od kosztu zakupu dostaje ostrzeżenie, ale nie blokuje wysyłki. Kolejne produkty dodasz też przyciskiem „+ Dodaj produkt” w samej ofercie: otwiera duże okno z wyszukiwarką (każde słowo zawęża listę), podglądem karty ze zdjęciem i opisem — wybierz kartę i „Dodaj … do oferty”; okno zostaje otwarte, więc dodasz kilka produktów pod rząd (wymaga uprawnienia „Produkty — podgląd”); kolejność pozycji w mailu zmieniasz strzałkami w górę i w dół.',
+          does: 'Przy każdej pozycji widzisz stan magazynu, koszt zakupu (średni koszt partii towaru z ERP XL, a dla karty bez towaru w XL — cenę zakupu karty) i cenę sugerowaną = koszt zakupu + Twoja domyślna marża z Moje konto → Oferty → „Domyślna marża”. Cena sugerowana wpisuje się sama jako „Cena netto w ofercie” przy dodaniu pozycji — możesz ją zmienić, a „wstaw sugerowaną” przywraca ją jednym kliknięciem. Gdy kosztu brak, pole jest puste i trzeba wpisać cenę ręcznie: bez ceny przy każdej pozycji oferty nie da się wysłać. Cena niższa od kosztu zakupu dostaje ostrzeżenie, ale nie blokuje wysyłki. Kolejne produkty dodasz też przyciskiem „+ Dodaj produkt” w samej ofercie: otwiera duże okno z wyszukiwarką (każde słowo zawęża listę), podglądem karty ze zdjęciem i opisem — wybierz kartę i „Dodaj … do oferty”; okno zostaje otwarte, więc dodasz kilka produktów pod rząd (wymaga uprawnienia „Produkty — podgląd”); kolejność pozycji w mailu zmieniasz strzałkami w górę i w dół.',
           click: 'Kliknij w pole „Cena netto w ofercie” i wpisz kwotę. Pozycje bez ceny mają też pole kwoty nad podglądem maila — tam uzupełnisz brakującą cenę bez przewijania do tabeli. Nowy produkt: „+ Dodaj produkt” nad tabelą — wpisz nazwę lub kod, kliknij kartę i „Dodaj … do oferty”.',
           tone: 'amber',
           screen: (
@@ -232,7 +229,7 @@ export function OffersHelp() {
         },
         {
           action: 'Treść maila i podgląd',
-          does: 'W sekcji „Treść maila” wpisujesz „Temat wiadomości” (bez niego oferty nie wyślesz) i krótki „Wstęp” (na przykład „Dzień dobry, zgodnie z rozmową przesyłam…”), wybierasz „Układ produktów” i opcjonalnie datę „Oferta ważna do” — gdy ta data minie, oferty nie da się wysłać ani skopiować, dopóki jej nie zmienisz albo nie wyczyścisz. „Podgląd maila” pokazuje mail dokładnie tak, jak go zobaczy klient: baner, wstęp, kafelki produktów z ceną netto i przycisk „Zapytaj o ofertę”, który otwiera mail do Ciebie. W ofercie nie ma linku „Wypisz mnie” — to nie jest mailing. Wszystko zapisuje się samo.',
+          does: 'W sekcji „Treść maila” wpisujesz „Temat wiadomości” (bez niego oferty nie wyślesz) i krótki „Wstęp” (na przykład „Dzień dobry, zgodnie z rozmową przesyłam…”), wybierasz „Układ produktów” i opcjonalnie datę „Oferta ważna do” — gdy ta data minie, oferty nie da się wysłać, dopóki jej nie zmienisz albo nie wyczyścisz. „Podgląd maila” pokazuje mail dokładnie tak, jak go zobaczy klient: baner, wstęp, kafelki produktów z ceną netto i przycisk „Zapytaj o ofertę”, który otwiera mail do Ciebie. W ofercie nie ma linku „Wypisz mnie” — to nie jest mailing. Wszystko zapisuje się samo.',
           click: 'Sekcja „Treść maila”: pola „Temat wiadomości”, „Wstęp”, „Układ produktów” i „Oferta ważna do”. Podgląd odświeża się po zmianie.',
           tone: 'blue',
           screen: (
@@ -273,7 +270,7 @@ export function OffersHelp() {
         },
         {
           action: 'Wysyłka z Twojej skrzynki',
-          does: 'Wpisujesz jeden albo kilka adresów (oddzielone przecinkiem, średnikiem albo nową linią). Każdy adres dostaje osobny mail — klienci nie widzą siebie nawzajem. Mail wychodzi z Twojej skrzynki ustawionej w Moje konto → „Moja poczta”; bez niej wysyłka nie ruszy. Na Twoją skrzynkę przychodzi kopia z dopiskiem „[Kopia]” i listą adresów. Adresy z listy „Wypisani” w Kampaniach (wypisani z mailingu, adresy, na które maile nie dochodzą, i dopisani ręcznie) blokują wysyłkę — komunikat pokaże, który adres i dlaczego; usuń go z pola. Wysłać i skopiować można dopiero, gdy każda pozycja ma cenę.',
+          does: 'Wpisujesz jeden albo kilka adresów (oddzielone przecinkiem, średnikiem albo nową linią). Każdy adres dostaje osobny mail — klienci nie widzą siebie nawzajem. Mail wychodzi z Twojej skrzynki ustawionej w Moje konto → „Moja poczta”; bez niej wysyłka nie ruszy. Na Twoją skrzynkę przychodzi kopia z dopiskiem „[Kopia]” i listą adresów. Adresy z listy „Wypisani” w Kampaniach (wypisani z mailingu, adresy, na które maile nie dochodzą, i dopisani ręcznie) blokują wysyłkę — komunikat pokaże, który adres i dlaczego; usuń go z pola. Wysłać można dopiero, gdy każda pozycja ma cenę.',
           click: 'Sekcja „Wysyłka”: wpisz adresy w polu „Adresy e-mail klientów”, kliknij „Wyślij do 2 adresów” i potwierdź w oknie.',
           tone: 'green',
           screen: (
@@ -288,7 +285,6 @@ export function OffersHelp() {
                   <Mark>
                     <Btn label="Wyślij do 2 adresów" />
                   </Mark>
-                  <Btn label="Kopiuj do wklejenia w Thunderbirdzie" color="border" />
                 </div>
                 <p className="mt-3 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-700">
                   Przykład blokady: adres biuro@kowalski.pl wypisał się z mailingu — usuń go z listy adresów.
@@ -299,7 +295,7 @@ export function OffersHelp() {
         },
         {
           action: 'Forma oferty: w treści maila albo w PDF',
-          does: 'W sekcji „Wysyłka” wybierasz „Forma oferty”: „W treści maila” (produkty z cenami w treści wiadomości, jak dotąd), „Tylko PDF w załączniku” (krótki mail — Twój wstęp albo „Dzień dobry, w załączeniu przesyłam ofertę…” — a produkty z cenami w pliku PDF) albo „Treść maila i PDF” (oba naraz). Wybór zapisuje się od razu przy ofercie i obowiązuje przy wysyłce z aplikacji, kopiowaniu i „Otwórz w Thunderbirdzie”. PDF wygląda jak mail oferty: baner, kafelki produktów ze zdjęciem i ceną netto. „Pobierz PDF” pobiera plik z bieżącą ofertą — do obejrzenia przed wysyłką albo do ręcznego dołączenia. Przy kopiowaniu do schowka trafia tylko treść maila, więc PDF dołączasz sam: „Pobierz PDF” i przeciągnij plik do wiadomości w Thunderbirdzie. „Otwórz w Thunderbirdzie” dołącza PDF samo, gdy dodatek Thunderbirda ma wersję 1.35 lub nowszą. W „Historii wysyłek” przy wysyłce z PDF jest „Pobierz wysłany PDF” — dokładnie ten plik, który dostali klienci.',
+          does: 'W sekcji „Wysyłka” wybierasz „Forma oferty”: „W treści maila” (produkty z cenami w treści wiadomości, jak dotąd), „Tylko PDF w załączniku” (krótki mail — Twój wstęp albo „Dzień dobry, w załączeniu przesyłam ofertę…” — a produkty z cenami w pliku PDF) albo „Treść maila i PDF” (oba naraz). Wybór zapisuje się od razu przy ofercie i obowiązuje przy wysyłce z aplikacji i „Otwórz w Thunderbirdzie”. PDF wygląda jak mail oferty: baner, kafelki produktów ze zdjęciem i ceną netto. „Pobierz PDF” pobiera plik z bieżącą ofertą — do obejrzenia przed wysyłką. „Otwórz w Thunderbirdzie” dołącza PDF samo, gdy dodatek Thunderbirda ma wersję 1.35 lub nowszą. W „Historii wysyłek” przy wysyłce z PDF jest „Pobierz wysłany PDF” — dokładnie ten plik, który dostali klienci.',
           click: 'Sekcja „Wysyłka” → „Forma oferty”: zaznacz jedną z trzech form; przy PDF obok pojawi się „Pobierz PDF”.',
           tone: 'blue',
           screen: (
@@ -331,18 +327,14 @@ export function OffersHelp() {
                   <span className="rounded border border-slate-300 px-2 py-0.5">Pobierz PDF</span>
                   <span className="text-slate-500">PDF wygląda jak oferta w treści maila — plik Oferta-OF-0008.pdf.</span>
                 </div>
-                <p className="mt-3 text-[11px] text-emerald-700">
-                  Skopiowano treść maila — wklej ją w nowej wiadomości w Thunderbirdzie (Ctrl+V). Dołącz PDF ręcznie: „Pobierz
-                  PDF” i przeciągnij plik do wiadomości.
-                </p>
               </Section>
             </AppFrame>
           ),
         },
         {
-          action: 'Kopia do wklejenia w Thunderbirdzie',
-          does: 'Gdy wolisz wysłać ofertę sam, na przykład jako odpowiedź w wątku z klientem, kopiujesz gotowy mail i wklejasz go w nowej wiadomości Thunderbirda — wygląda tak samo jak wysłany z aplikacji, tylko bez podpisu — pod spodem Thunderbird doda Twój własny podpis (przy wysyłce z aplikacji podpis bierze się z Moje konto → Moja poczta). Temat wpisujesz w Thunderbirdzie sam (ten z pola „Temat wiadomości” albo własny). Przy kopiowaniu adresów nie sprawdzamy, bo odbiorcę wybierasz w Thunderbirdzie, a historia wysyłek takiego maila nie obejmuje — zapisuje się tylko data ostatniego kopiowania (kolumna „Skopiowana” na liście ofert). Osoby z dodatkiem Thunderbirda mogą też kliknąć „Otwórz w Thunderbirdzie” — nowa wiadomość z ofertą otworzy się sama, adresata wpisujesz w Thunderbirdzie.',
-          click: '„Kopiuj do wklejenia w Thunderbirdzie”, potem w Thunderbirdzie nowa wiadomość albo odpowiedź i Ctrl+V w treści.',
+          action: 'Otwórz w Thunderbirdzie',
+          does: 'Gdy wolisz wysłać ofertę sam ze swojego Thunderbirda, kliknij „Otwórz w Thunderbirdzie” — dodatek Thunderbirda otworzy nową wiadomość z gotową ofertą (przy formie z PDF także z plikiem w załączniku, od wersji dodatku 1.35). Oferta jest bez podpisu — pod spodem Thunderbird doda Twój własny podpis. Adresata wpisujesz w Thunderbirdzie. Przycisk widać, gdy dodatek jest uruchomiony i połączony z aplikacją. Takiej wiadomości historia wysyłek nie obejmuje — wysyłasz ją sam z Thunderbirda.',
+          click: '„Otwórz w Thunderbirdzie” w sekcji „Wysyłka”, potem w oknie Thunderbirda wpisz adresata i wyślij.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Oferty">
@@ -350,9 +342,9 @@ export function OffersHelp() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Btn label="Wyślij do 0 adresów" color="border" />
                   <Mark>
-                    <Btn label="Kopiuj do wklejenia w Thunderbirdzie" color="border" />
+                    <Btn label="Otwórz w Thunderbirdzie" color="border" />
                   </Mark>
-                  <span className="text-[11px] text-emerald-700">Skopiowano — wklej w nowej wiadomości (Ctrl+V)</span>
+                  <span className="text-[11px] text-slate-500">PDF dołączy dodatek (wersja 1.35 lub nowsza)</span>
                 </div>
               </Section>
             </AppFrame>

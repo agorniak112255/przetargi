@@ -7,7 +7,7 @@ import { plural } from '../lib/plural'
 
 /**
  * Oferty: lista własnych ofert dla klientów (wybrane produkty z ceną) — wysyłka ze skrzynki „Moja poczta” albo
- * kopia do wklejenia w Thunderbirdzie. Oferta jest zawsze edytowalna; historia wysyłek jest w ofercie.
+ * nowa wiadomość w Thunderbirdzie (dodatek). Oferta jest zawsze edytowalna; historia wysyłek jest w ofercie.
  */
 export function Offers() {
   const navigate = useNavigate()
@@ -74,7 +74,7 @@ export function Offers() {
           <h1 className="app-page-title text-xl font-semibold">Oferty</h1>
           <p className="mt-1 max-w-3xl text-xs text-slate-600">
             Twoje oferty dla klientów: wybrane produkty z ceną netto, wysłane ze skrzynki „Moja poczta” (osobny mail do
-            każdego adresu) albo skopiowane do wklejenia w nowej wiadomości w Thunderbirdzie.
+            każdego adresu) albo otwarte jako nowa wiadomość w Thunderbirdzie.
           </p>
         </div>
         <button type="button" className={BTN_PRIMARY} disabled={busy} onClick={() => void newOffer()}>
@@ -97,7 +97,6 @@ export function Offers() {
                 Wysłano do
               </th>
               <th className="p-2">Ostatnia wysyłka</th>
-              <th className="p-2">Skopiowana</th>
               <th className="p-2">Zmieniona</th>
               <th className="p-2" />
             </tr>
@@ -118,7 +117,6 @@ export function Offers() {
                     : '—'}
                 </td>
                 <td className="whitespace-nowrap p-2 tabular-nums text-slate-700">{fmtDateTime(r.last_sent_at)}</td>
-                <td className="whitespace-nowrap p-2 tabular-nums text-slate-700">{fmtDateTime(r.last_copied_at)}</td>
                 <td className="whitespace-nowrap p-2 tabular-nums text-slate-700">{fmtDateTime(r.updated_at)}</td>
                 <td className="whitespace-nowrap p-2 text-right">
                   <span className="inline-flex gap-1">
@@ -141,7 +139,7 @@ export function Offers() {
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-slate-500">
+                <td colSpan={6} className="p-8 text-center text-slate-500">
                   {loading ? (
                     'Ładowanie…'
                   ) : (
