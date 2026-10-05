@@ -1,5 +1,4 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { AdminLocalNetworks } from '../components/AdminLocalNetworks'
 import { api, fetchErpEmployees, type ErpEmployee, type User } from '../lib/api'
 import { TEMPLATES } from '../lib/appearance'
 import { listErpOperators, type ErpOperator } from '../lib/campaigns'
@@ -729,7 +728,7 @@ export function AdminUsers() {
                       <option value="local">{NETWORK_LABELS.local}</option>
                     </select>
                     <p className="mt-1 text-[11px] leading-snug text-slate-500">
-                      Ustawienie konta ma pierwszeństwo przed grupą. Adresy sieci lokalnej — pod listą.
+                      Ustawienie konta ma pierwszeństwo przed grupą. Adresy sieci lokalnej: Administracja → Role.
                     </p>
                   </div>
                 ) : (
@@ -822,8 +821,6 @@ export function AdminUsers() {
           ))}
         </tbody>
       </table>
-
-      <AdminLocalNetworks />
     </div>
   )
 }

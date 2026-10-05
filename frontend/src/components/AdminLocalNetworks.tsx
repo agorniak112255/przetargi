@@ -19,7 +19,7 @@ function toRows(networks: LocalNetwork[]): Row[] {
 }
 
 /**
- * Adresy sieci lokalnej w Administracji → Użytkownicy. Konto albo grupa „tylko z sieci lokalnej” pracuje tylko
+ * Adresy sieci lokalnej w Administracji → Role (sekcja pod uprawnieniami, przed Zespołami). Konto albo grupa „tylko z sieci lokalnej” pracuje tylko
  * z tych adresów. Aplikacja stoi na serwerze w Internecie, więc liczy się publiczny adres biura (ten, który serwer
  * widzi jako „Twój adres”), a nie adresy 192.168.… z sieci wewnętrznej.
  */
@@ -80,7 +80,7 @@ export function AdminLocalNetworks() {
   }
 
   return (
-    <section className="mt-8 max-w-4xl rounded-xl bg-white p-4 shadow-sm">
+    <section id="siec-lokalna" className="mt-8 max-w-4xl rounded-xl bg-white p-4 shadow-sm">
       <h2 className="mb-1 text-sm font-semibold text-slate-800">Sieć lokalna — adresy IP</h2>
       <p className="mb-3 text-xs text-slate-500">
         Konto albo grupa z ustawieniem „tylko z sieci lokalnej” zaloguje się i będzie pracować tylko z tych adresów

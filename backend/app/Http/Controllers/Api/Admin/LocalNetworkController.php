@@ -13,7 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Adresy sieci lokalnej (Administracja → Użytkownicy). Zapis podmienia całą listę.
+ * Adresy sieci lokalnej (Administracja → Role, sekcja „Sieć lokalna — adresy IP”). Zapis podmienia całą listę.
  */
 class LocalNetworkController extends Controller
 {

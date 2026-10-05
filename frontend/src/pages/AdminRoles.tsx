@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { api } from '../lib/api'
+import { AdminLocalNetworks } from '../components/AdminLocalNetworks'
 import { AdminTeams } from '../components/AdminTeams'
 
 type RoleRow = {
@@ -363,22 +364,31 @@ export function AdminRoles() {
             )}
           </div>
 
-          <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-slate-600">
-            Dostęp z sieci
-            <select
-              className="rounded border px-2 py-1 text-sm text-slate-900"
-              value={selectedRole.network_access ?? 'any'}
-              disabled={busy}
-              onChange={(e) => void saveNetworkAccess(e.target.value as 'any' | 'local')}
-            >
-              <option value="any">z każdej sieci</option>
-              <option value="local">tylko z sieci lokalnej</option>
-            </select>
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+            <label className="flex items-center gap-2">
+              Dostęp z sieci
+              <select
+                className="rounded border px-2 py-1 text-sm text-slate-900"
+                value={selectedRole.network_access ?? 'any'}
+                disabled={busy}
+                onChange={(e) => void saveNetworkAccess(e.target.value as 'any' | 'local')}
+              >
+                <option value="any">z każdej sieci</option>
+                <option value="local">tylko z sieci lokalnej</option>
+              </select>
+            </label>
             <span className="text-xs text-slate-500">
-              zapis od razu; konto z własnym ustawieniem (Użytkownicy) ma pierwszeństwo. Adresy sieci lokalnej:
-              Administracja → Użytkownicy.
+              zapis od razu; konto z własnym ustawieniem (Użytkownicy) ma pierwszeństwo. Sieć lokalna to{' '}
+              <button
+                type="button"
+                onClick={() => document.getElementById('siec-lokalna')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                className="text-blue-700 underline"
+              >
+                lista adresów
+              </button>{' '}
+              niżej na tej stronie.
             </span>
-          </label>
+          </div>
 
           <div className="mb-4 max-h-[55vh] space-y-4 overflow-auto">
             {grouped.map(([group, items]) => (
@@ -416,6 +426,8 @@ export function AdminRoles() {
           </button>
         </>
       )}
+
+      <AdminLocalNetworks />
 
       <AdminTeams />
     </div>

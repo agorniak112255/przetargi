@@ -224,6 +224,22 @@ final class NetworkAccessTest extends TestCase
         $this->meWithToken('87.204.165.178', $token)->assertStatus(401);
     }
 
+    public function test_address_list_belongs_to_roles_management(): void
+    {
+        $usersOnly = Role::query()->create(['name' => 'kadry', 'display_name' => 'Kadry', 'guard_name' => 'web']);
+        $usersOnly->syncPermissions(['admin.access', 'admin.users.manage']);
+        $rolesOnly = Role::query()->create(['name' => 'role-it', 'display_name' => 'Role IT', 'guard_name' => 'web']);
+        $rolesOnly->syncPermissions(['admin.access', 'admin.roles.manage']);
+
+        Sanctum::actingAs(User::factory()->withRole('kadry')->create());
+        $this->getJson('/api/admin/local-networks')->assertForbidden();
+        $this->putJson('/api/admin/local-networks', ['networks' => [['address' => self::OFFICE]]])->assertForbidden();
+
+        Sanctum::actingAs(User::factory()->withRole('role-it')->create());
+        $this->getJson('/api/admin/local-networks')->assertOk();
+        $this->putJson('/api/admin/local-networks', ['networks' => [['address' => self::OFFICE]]])->assertOk();
+    }
+
     public function test_address_list_validation(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

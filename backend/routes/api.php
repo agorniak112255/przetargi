@@ -602,8 +602,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::delete('/users/{user}', [AdminUserController::class, 'destroy'])->middleware('permission:admin.users.manage');
         Route::post('/users/{user}/send-credentials', [AdminUserController::class, 'sendCredentials'])->middleware('permission:admin.users.manage');
         // adresy sieci lokalnej — dla kont i grup „tylko z sieci lokalnej”
-        Route::get('/local-networks', [AdminLocalNetworkController::class, 'index'])->middleware('permission:admin.users.manage');
-        Route::put('/local-networks', [AdminLocalNetworkController::class, 'update'])->middleware('permission:admin.users.manage');
+        Route::get('/local-networks', [AdminLocalNetworkController::class, 'index'])->middleware('permission:admin.roles.manage');
+        Route::put('/local-networks', [AdminLocalNetworkController::class, 'update'])->middleware('permission:admin.roles.manage');
 
         Route::get('/roles', [AdminRoleController::class, 'index'])->middleware('permission:admin.roles.manage');
         Route::post('/roles', [AdminRoleController::class, 'store'])->middleware('permission:admin.roles.manage');
