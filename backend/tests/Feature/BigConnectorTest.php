@@ -22,6 +22,7 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bForeignLanguageSource;
 use App\Services\B2b\B2bGroupsSizes;
 use App\Services\B2b\B2bImageGallery;
+use App\Services\B2b\B2bKeepsExistingNames;
 use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bRemoteDocument;
 use App\Services\B2b\B2bRemotePrice;
@@ -486,7 +487,7 @@ final class BigConnectorTest extends TestCase
         $connector = $registry->make($account, 150);
 
         $this->assertInstanceOf(BigB2bConnector::class, $connector);
-        foreach ([B2bManufacturerSite::class, B2bShopFieldSource::class, B2bShopFieldNormSource::class, B2bDocumentSource::class, B2bImageGallery::class, B2bGroupsSizes::class, B2bSizePriceSource::class, B2bForeignLanguageSource::class] as $interface) {
+        foreach ([B2bManufacturerSite::class, B2bShopFieldSource::class, B2bShopFieldNormSource::class, B2bDocumentSource::class, B2bImageGallery::class, B2bGroupsSizes::class, B2bSizePriceSource::class, B2bForeignLanguageSource::class, B2bKeepsExistingNames::class] as $interface) {
             $this->assertInstanceOf($interface, $connector);
         }
         $client = (new \ReflectionProperty($connector, 'client'))->getValue($connector);

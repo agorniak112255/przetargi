@@ -42,10 +42,11 @@ use RuntimeException;
  * Błąd chwilowy (strona sklepu, ceny, sesja) — rodzina idzie jako pozycja pominięta z listą swoich pozycji, więc
  * synchronizacja niczego nie oznacza jako wycofanego; seria takich rodzin przerywa przebieg.
  *
- * Teksty po angielsku (B2bForeignLanguageSource): opis i nazwa nowej karty są tłumaczone po zapisie; łącznik podaje je
- * dosłownie. Norm i certyfikatów łącznik nie dopisuje — są tylko w opisie i plikach producenta.
+ * Teksty po angielsku (B2bForeignLanguageSource): opis i nazwa są tłumaczone po zapisie; łącznik podaje je dosłownie.
+ * Nazwa także karty już w katalogu, dopóki jest nazwą ze źródła (B2bKeepsExistingNames, 05.10.2026) — inaczej nazwa
+ * nieprzetłumaczona przy pierwszym przebiegu zostawała po angielsku (albo francusku) na zawsze. Norm i certyfikatów łącznik nie dopisuje — są tylko w opisie i plikach producenta.
  */
-final class HoneywellB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignLanguageSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
+final class HoneywellB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignLanguageSource, B2bGroupsSizes, B2bImageGallery, B2bKeepsExistingNames, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     public const BRAND = 'Honeywell';
 

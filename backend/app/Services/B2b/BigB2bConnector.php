@@ -41,15 +41,17 @@ use RuntimeException;
  * zostawiamy uciętego słowa), normy bez poziomów. Strona, której nie udało się odczytać (błąd sieci), wstrzymuje
  * artykuł do następnego przebiegu — inaczej opis i tabelka spadłyby do uciętych danych z cennika.
  *
- * Język: sklep jest tylko po niemiecku (B2bForeignLanguageSource) — opis i nazwa nowej karty idą po zapisie do
- * tłumaczenia; łącznik oddaje tekst dosłownie. Producent = marka z cennika bez ®/™; SPG to marka handlowa BIG, nie
+ * Język: sklep jest tylko po niemiecku (B2bForeignLanguageSource) — opis i nazwa idą po zapisie do tłumaczenia;
+ * łącznik oddaje tekst dosłownie. Nazwa także karty już w katalogu, dopóki jest nazwą ze źródła (B2bKeepsExistingNames,
+ * 05.10.2026) — inaczej nazwa nieprzetłumaczona przy pierwszym przebiegu zostawała po niemiecku na zawsze (05.10.2026:
+ * 652 z 701 kart, np. „teXXor® Rindkernspaltleder-Handschuhe TAUNUS”). Producent = marka z cennika bez ®/™; SPG to marka handlowa BIG, nie
  * producent — dla niej producentem jest marka z nazwy (Klever, Pacific Handy Cutter). Witryna producenta marek teXXor,
  * 4PROTECT i RUNNEX (B2bManufacturerSite + B2bManufacturerBrands); TOWA i noże — BIG jest dla nich dystrybutorem.
  *
  * Pliki: wersja PL (karta danych technicznych, informacje producenta, deklaracja), a typ pliku bez wersji PL — wersja
  * DE; pozostałe języki i wzory etykiet pomijane. Zdjęcia: Bild_1…Bild_6 z cennika (duże, publiczne).
  */
-final class BigB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignLanguageSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerBrands, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
+final class BigB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignLanguageSource, B2bGroupsSizes, B2bImageGallery, B2bKeepsExistingNames, B2bListProgressAware, B2bManufacturerBrands, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
 {
     public const BRAND = 'teXXor';
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\TranslateB2bProductTextJob;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\Product;
@@ -20,6 +21,7 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bForeignLanguageSource;
 use App\Services\B2b\B2bGroupsSizes;
 use App\Services\B2b\B2bImageGallery;
+use App\Services\B2b\B2bKeepsExistingNames;
 use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bRemoteProduct;
@@ -459,6 +461,10 @@ final class HoneywellConnectorTest extends TestCase
         // nazwa karty = nazwa ze źródła na powiązaniu pozycji wiodącej — tłumaczenie nazwy nowej karty ją rozpozna
         $this->assertSame($gloves->name, B2bProductLink::query()->where('remote_id', 'T9999/7S')->value('remote_name'));
         $this->assertSame(['T9999/7S', 'T9999/8M'], B2bProductLink::query()->where('product_id', $gloves->id)->orderBy('remote_id')->pluck('remote_id')->all());
+        // nazwa karty już w katalogu też czeka na tłumaczenie, dopóki jest nazwą ze źródła — nieprzetłumaczona przy
+        // pierwszym przebiegu zostawała po angielsku na zawsze (05.10.2026: 964 z 1654 kart)
+        $glovesLink = B2bProductLink::query()->where('product_id', $gloves->id)->orderBy('id')->firstOrFail();
+        $this->assertTrue(TranslateB2bProductTextJob::pending($gloves, $glovesLink, $this->connector() instanceof B2bKeepsExistingNames)['name']);
         $slot = ProductSourcePrice::query()->where('product_id', $gloves->id)->sole();
         $this->assertSame('EUR', $slot->currency);
         $this->assertSame('2.14', (string) $slot->purchase_price);
@@ -795,7 +801,7 @@ final class HoneywellConnectorTest extends TestCase
         $connector = $registry->make($account, 0);
 
         $this->assertInstanceOf(HoneywellB2bConnector::class, $connector);
-        foreach ([B2bManufacturerSite::class, B2bForeignLanguageSource::class, B2bGroupsSizes::class, B2bSizePriceSource::class, B2bImageGallery::class, B2bDocumentSource::class, B2bShopFieldSource::class, B2bRunSummaryAware::class, B2bListProgressAware::class] as $interface) {
+        foreach ([B2bManufacturerSite::class, B2bForeignLanguageSource::class, B2bKeepsExistingNames::class, B2bGroupsSizes::class, B2bSizePriceSource::class, B2bImageGallery::class, B2bDocumentSource::class, B2bShopFieldSource::class, B2bRunSummaryAware::class, B2bListProgressAware::class] as $interface) {
             $this->assertInstanceOf($interface, $connector);
         }
     }
