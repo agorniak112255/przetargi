@@ -264,6 +264,23 @@ final class ProductImageRetryTest extends TestCase
         $this->assertSame(0, $asked->count);
     }
 
+    /** --shops: po zmianie wyszukiwania sklepy sprawdzamy jeszcze raz, mimo zapisanego „sklepy sprawdzone”. */
+    public function test_shops_option_asks_shop_cards_again(): void
+    {
+        $product = $this->product(retry: [self::PRIMARY], attempts: 2);
+        $payload = $product->enrichment_payload;
+        $payload[ProductImageRetry::PAYLOAD_KEY] = ProductImageRetry::fresh([self::PRIMARY], shopsTried: true);
+        $product->forceFill(['enrichment_payload' => $payload])->save();
+        $this->fakeFirewall();
+        $asked = $this->fakeShopSearch([]);
+
+        $this->artisan('products:retry-images')->assertSuccessful();
+        $this->assertSame(0, $asked->count);
+
+        $this->artisan('products:retry-images', ['--shops' => true])->assertSuccessful();
+        $this->assertSame(1, $asked->count);
+    }
+
     /** 404 u producenta kończy ponawianie — ale najpierw sklepy, bo karta i tak nie ma zdjęcia. */
     public function test_permanent_failure_still_tries_shop_cards_before_giving_up(): void
     {

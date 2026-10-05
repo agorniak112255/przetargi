@@ -297,6 +297,13 @@ final class ProductSearchIdentity
         if ($this->urlContainsLongerAlphanumericSkuVariant($hay, $skuCompact)) {
             return false;
         }
+        // Model rękawicy Ansella w nazwie pliku tak, jak piszą go sklepy: „48-501.jpg” na cas-technik.eu przy EDGE 48501
+        // (SKU 48501110). Nazwa bez myślnika („edge-48501_emea…”) przechodziła, z myślnikiem — nie, i packshot czekał
+        // w kolejce do modelu wizyjnego za grafikami menu strony (05.10.2026).
+        $glove = $this->ansellGloveModel($product);
+        if ($glove !== null && $this->hayHasAnsellGloveModel($this->imageFileNameStem($url), $glove)) {
+            return true;
+        }
         // pełny SKU w nazwie pliku (glove-ABC123.jpg) — bez wymogu „product” w hoście
         if ($sku !== '' && mb_strlen($sku) >= 4 && $this->skuTokenInImageHay($hay, $hayCompact, $sku, $skuCompact)) {
             return true;
@@ -1303,6 +1310,40 @@ final class ProductSearchIdentity
         [$head, $tail] = explode('-', $model);
 
         return preg_match('/(?<!\d)'.$head.'[\s\-]?'.$tail.'(?!\d)/u', mb_strtolower($hay)) === 1;
+    }
+
+    /**
+     * Rękawice Ringers (R840, 169SD, 065) mają trzycyfrowy model bez numeracji NN-NNN innych linii Ansella. Gdy z indeksu
+     * sklepów przestały wypychać kopie językowe ansell.com (05.10.2026), do kart Ringers zaczęły trafiać strony
+     * z tym samym numerem w innym modelu: Ringers R840 ↔ „hyflex-nr-11-840”, Ringers 665 ↔ „ansell-92-665-touch-n-tuff”,
+     * Ringers R570 ↔ „ansell-ringers-r169…”. Adres albo tytuł z innym modelem Ringers albo z modelem NN-NNN, bez naszego
+     * modelu Ringers, to karta innego wyrobu.
+     */
+    private function ringersPageClaimsForeignModel(string $url, string $title, Product $product): bool
+    {
+        $name = mb_strtolower((string) $product->name);
+        if (! str_contains($name, 'ringers')
+            || ! str_contains(mb_strtolower($this->shortBrand((string) $product->manufacturer)), 'ansell')
+            || preg_match('/ringers\s+r?-?(\d{3})(?!\d)/u', $name, $m) !== 1) {
+            return false;
+        }
+        $ours = $m[1];
+        $hay = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')).' '.$title);
+        if (preg_match('/(?<![a-z0-9])(?:r-?|ringers[\s\-_]+r?-?)'.$ours.'(?!\d)/u', $hay) === 1) {
+            return false;
+        }
+        if (preg_match('/(?<!\d)\d{2}-\d{3}(?!\d)/u', $hay) === 1) {
+            return true;
+        }
+        if (preg_match_all('/(?<![a-z0-9])(?:r-?|ringers[\s\-_]+r?-?)(\d{3})(?!\d)/u', $hay, $hits) > 0) {
+            foreach ($hits[1] as $code) {
+                if ($code !== $ours) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /** Karta HyFlex 11-842 przy naszym 11-919 — inny model tej samej linii. */
@@ -3492,7 +3533,8 @@ final class ProductSearchIdentity
             || $this->ansellPageClaimsForeignLine($url, $product)
             || $this->ansellPageClaimsForeignVariant($url, $product)
             || $this->kleenGuardPageClaimsForeignVariant($url, $title, $product)
-            || $this->urlOrTitleHasForeignAnsellGloveModel($url, $title, $product)) {
+            || $this->urlOrTitleHasForeignAnsellGloveModel($url, $title, $product)
+            || $this->ringersPageClaimsForeignModel($url, $title, $product)) {
             return true;
         }
         // Jawny cudzy kod rozstrzyga przed frazą z nazwy: jedno słowo z nazwy („Bandage”, „marble”,
@@ -5715,6 +5757,19 @@ final class ProductSearchIdentity
      * tego nie wiemy, a zgadnięty kolor byłby cechą wymyśloną. Dwa różne kolory
      * w tekście (czarno-żółty, „dostępne kolory: …”) znaczą „nie wiadomo”.
      */
+    /**
+     * Kolor podany wprost w nazwie wyrobu („… Black”, „czarne”) — bez zgadywania z opisu. Zdjęcie ze sklepu za zablokowany
+     * plik producenta (ProductImageCandidateVerifier, trustStructured: false) porównuje tylko ten kolor: zdanie opisu
+     * dotyczy często jednej części rękawicy („wkładka w kolorze niebieskim” przy zielono-czarnym ActivArmr 07-112,
+     * 05.10.2026) i odrzucało trafny packshot dystrybutora.
+     */
+    public function nameColorFamily(Product $product): ?string
+    {
+        $families = $this->colorFamiliesInText((string) $product->name);
+
+        return count($families) === 1 ? $families[0] : null;
+    }
+
     public function expectedColorFamily(Product $product): ?string
     {
         $families = $this->colorFamiliesInText((string) $product->name);
@@ -6037,6 +6092,19 @@ final class ProductSearchIdentity
         $hay = mb_strtolower($hay);
 
         return $this->hayHasAnyBrand($hay, preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay, $brands);
+    }
+
+    /**
+     * Ta sama karta wyrobu Ansella w każdym języku witryny („/au/en/products/hyflex-11-840”, „/cn/zh-hans/products/…”,
+     * „/int/en/products/…”, „/pl/pl/products/…”) — jeden klucz. Indeks sklepów ma kilkadziesiąt takich kopii i zajmowały one wszystkie
+     * 8 miejsc wyniku, więc karty dystrybutorów (icd.pl „rekawice-ansell-hyflex-nr-11-840”) nie wchodziły nigdy
+     * (05.10.2026). Inne adresy zostają bez zmian.
+     */
+    public function localeInsensitivePageKey(string $url): string
+    {
+        $key = mb_strtolower(trim($url));
+
+        return (string) (preg_replace('#^https?://(?:www\.)?ansell\.com/(?:[a-z]{2,4}(?:-[a-z]+)?/){1,2}(?=products/)#u', 'ansell.com/', $key) ?? $key);
     }
 
     public function preferredLocaleUrl(string $url, Product $product): string

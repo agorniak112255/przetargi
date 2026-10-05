@@ -69,6 +69,8 @@ final class CatalogIndexSearch
             $key = mb_strtolower(trim((string) $url));
             if ($key !== '') {
                 $this->except[$key] = true;
+                // ta sama karta producenta w innym języku też jest już sprawdzona
+                $this->except[$this->identity->localeInsensitivePageKey($key)] = true;
             }
         }
         $this->onlyHosts = null;
@@ -540,6 +542,8 @@ final class CatalogIndexSearch
         $withBrand = [];
         $rest = [];
         $accepted = 0;
+        // kopie językowe tej samej karty producenta liczą się raz (localeInsensitivePageKey)
+        $seenPages = [];
         foreach (array_chunk($ids, self::SQL_LIMIT) as $chunk) {
             $pages = CatalogPage::query()
                 ->whereIn('id', $chunk)
@@ -572,6 +576,20 @@ final class CatalogIndexSearch
                     'title' => (string) ($page->title ?? ''),
                     'snippet' => (string) ($page->haystack ?? ''),
                 ];
+                $pageKey = $this->identity->localeInsensitivePageKey($url);
+                if (isset($seenPages[$pageKey])) {
+                    // kopia w innym języku: zostaje adres w lepszym języku (pl/pl, potem gb/en, us/en), gdy przyszedł później
+                    if ($this->localeRank($url) < $this->localeRank($seenPages[$pageKey])) {
+                        foreach ($official as $k => $kept) {
+                            if ($kept['url'] === $seenPages[$pageKey]) {
+                                $official[$k]['url'] = $url;
+                            }
+                        }
+                        $seenPages[$pageKey] = $url;
+                    }
+
+                    continue;
+                }
                 // producent nie pisze „buty” w adresie własnej karty — typ sprawdza treść po pobraniu
                 if ($needType && ! $this->urlIsOfficialCatalogHost($url, $product)
                     && ! $this->identity->hayHasRequiredTypeFromName(
@@ -611,6 +629,7 @@ final class CatalogIndexSearch
 
                     continue;
                 }
+                $seenPages[$pageKey] = $url;
                 $accepted++;
             }
             if ($accepted >= self::MAX_HITS) {
@@ -619,6 +638,18 @@ final class CatalogIndexSearch
         }
 
         return array_slice(array_merge($official, $withManufacturer, $withBrand, $rest), 0, self::MAX_HITS);
+    }
+
+    /** Kolejność języków karty ansell.com przy kopiach w wyniku: polska, angielska (GB, US), reszta. */
+    private function localeRank(string $url): int
+    {
+        foreach (['/pl/pl/', '/gb/en/', '/us/en/'] as $rank => $locale) {
+            if (str_contains(mb_strtolower($url), $locale)) {
+                return $rank;
+            }
+        }
+
+        return 9;
     }
 
     private function reject(string $url, string $reason): void
@@ -634,7 +665,8 @@ final class CatalogIndexSearch
         }
 
         return isset($this->except[mb_strtolower($url)])
-            || isset($this->except[mb_strtolower($this->identity->preferredLocaleUrl($url, $product))]);
+            || isset($this->except[mb_strtolower($this->identity->preferredLocaleUrl($url, $product))])
+            || isset($this->except[$this->identity->localeInsensitivePageKey($url)]);
     }
 
     private function inferredBrandMatchesPage(?string $pageManufacturer, Product $product): bool

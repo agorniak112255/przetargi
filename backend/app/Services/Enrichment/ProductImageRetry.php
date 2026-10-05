@@ -128,9 +128,12 @@ final class ProductImageRetry
     /**
      * Jedna próba dla karty.
      *
+     * $shopsAgain — karty sklepów sprawdzane jeszcze raz mimo shops_tried: 05.10.2026 indeks sklepów oddawał dla kart
+     * Ansella same kopie językowe ansell.com, więc wcześniejsze „sklepy sprawdzone” niczego nie sprawdziło.
+     *
      * @return 'saved'|'waiting'|'gave_up'|'skipped'
      */
-    public function retry(Product $product): string
+    public function retry(Product $product, bool $shopsAgain = false): string
     {
         // Polecenie obsługuje karty po kolei przez kilkadziesiąt minut — karta mogła w tym czasie przejść nowy
         // przebieg opisu. Trwa (RUNNING): nie ruszamy, przebieg sam zapisze nowy payload.
@@ -167,7 +170,7 @@ final class ProductImageRetry
         // przed kartami sklepów — ich downloadMany czyści listy producenta
         $still = $this->images->lastRetryLaterUrls();
         $failures = $this->images->lastFailures();
-        $shopsTried = ($state[self::SHOPS_TRIED] ?? false) === true;
+        $shopsTried = ! $shopsAgain && ($state[self::SHOPS_TRIED] ?? false) === true;
         if ($saved === [] && ! $shopsTried) {
             // Zapora ansell.com puszcza dziś kilka plików na sto — zdjęcie wyrobu z karty sklepu (wybór użytkownika
             // 05.10.2026), tymi samymi bramkami co przy przebiegu opisu: potwierdzona karta, weryfikator zdjęć.

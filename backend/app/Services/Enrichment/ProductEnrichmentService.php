@@ -2028,7 +2028,12 @@ final class ProductEnrichmentService
             }
             $urls = $this->imageVerifier->select(
                 $product,
-                $fetched['image_urls'],
+                // og:image bez kodu nie przechodzi tu z automatu (trustStructured), więc musi być wśród kandydatów
+                // do modelu wizyjnego — i to na początku: cas-technik.eu ma packshot „48-501.jpg” tylko jako og:image,
+                // a lista obrazków strony to głównie grafiki menu (EDGE 48501, 05.10.2026)
+                $strict
+                    ? array_values(array_unique([...$fetched['trusted_image_urls'], ...$fetched['image_urls']]))
+                    : $fetched['image_urls'],
                 $pages,
                 3,
                 $fetched['trusted_image_urls'],

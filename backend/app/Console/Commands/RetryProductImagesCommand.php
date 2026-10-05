@@ -18,6 +18,7 @@ final class RetryProductImagesCommand extends Command
                             {--from-trace : Najpierw dopisz do kolejki karty sprzed zmiany (adresy ze śladu przebiegu)}
                             {--product=* : Tylko te karty (id)}
                             {--limit=40 : Ile kart w jednym przebiegu}
+                            {--shops : Sprawdź karty sklepów jeszcze raz, także tam, gdzie już je sprawdzano (po zmianie wyszukiwania)}
                             {--dry-run : Tylko pokaż, co byłoby ponawiane — bez zapisu i bez pobierania}';
 
     protected $description = 'Ponawia pobranie zdjęć, które źródło chwilowo zablokowało (np. zapora ansell.com)';
@@ -77,7 +78,7 @@ final class RetryProductImagesCommand extends Command
             if ($product === null) {
                 continue;
             }
-            $result = $retry->retry($product);
+            $result = $retry->retry($product, (bool) $this->option('shops'));
             $counts[$result]++;
             $this->line("  #{$product->id} {$product->sku}: ".match ($result) {
                 'saved' => 'zdjęcie pobrane',

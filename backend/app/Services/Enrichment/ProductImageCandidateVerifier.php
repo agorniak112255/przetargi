@@ -126,7 +126,10 @@ final class ProductImageCandidateVerifier
             return $this->finishSelection($auto, $trustStructured ? $trusted : [], $urls, $max, $product, $pages);
         }
 
-        $expectedColor = $this->identity->expectedColorFamily($product);
+        // droga przez sklepy: kolor tylko z nazwy — zdanie opisu bywa o jednej części rękawicy (nameColorFamily)
+        $expectedColor = $trustStructured
+            ? $this->identity->expectedColorFamily($product)
+            : $this->identity->nameColorFamily($product);
 
         try {
             $response = $this->llm->chatJsonWithImages(

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Models\Product;
+use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\ProductImageCandidateVerifier;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductPageFetcher;
@@ -98,5 +99,46 @@ final class ShopImageGuardsTest extends TestCase
         // zdjęcie z kodem wyrobu w adresie nie potrzebuje modelu wizyjnego także w trybie ścisłym
         $coded = 'https://www.gloves.co.uk/user/products/large/Ansell-HyFlex-11-135-Gloves.jpg';
         $this->assertSame([$coded], $verifier->select($hyflex, [$coded], $pages, 1, [$coded], trustStructured: false));
+    }
+
+    /** cas-technik.eu: packshot „48-501.jpg” przy EDGE 48501 — model z myślnikiem, jak piszą go sklepy. */
+    public function test_dashed_ansell_model_in_file_name_names_the_product(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $edge = new Product(['sku' => '48501110', 'name' => 'EDGE 48501', 'manufacturer' => 'Ansell']);
+
+        $this->assertTrue($identity->imageUrlMentionsProduct('https://cas-technik.eu/media/92/18/d5/1689063880/48-501.jpg?ts=1756127514', $edge));
+        $this->assertFalse($identity->imageUrlMentionsProduct('https://cas-technik.eu/media/92/18/d5/1689063880/48-502.jpg', $edge));
+    }
+
+    /** ActivArmr 07-112: opis „wkładka w kolorze niebieskim”, packshot zielono-czarny — w drodze przez sklepy kolor tylko z nazwy. */
+    public function test_shop_path_compares_colour_only_from_the_product_name(): void
+    {
+        $packshot = 'https://cas-technik.eu/media/ea/95/2c/1689005123/activarmr-07-112-u-card-size-9xssvvhq4hhl4ia5107.jpg';
+        $menu = 'https://cas-technik.eu/media/2e/c0/be/1761124928/Berufbereiche_Kategorien_Start_1920x1920.jpg';
+        $im = imagecreatetruecolor(320, 480);
+        ob_start();
+        imagejpeg($im);
+        $jpeg = (string) ob_get_clean();
+        Http::fake(['*' => Http::response($jpeg, 200, ['Content-Type' => 'image/jpeg'])]);
+        $llm = \Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonWithImages')->andReturn(['candidates' => [
+            ['index' => 0, 'is_relevant_product' => true, 'is_logo_or_banner' => false, 'is_watermarked' => false, 'dominant_color' => 'zielony', 'confidence' => 0.95],
+            ['index' => 1, 'is_relevant_product' => false, 'is_logo_or_banner' => false, 'is_watermarked' => false, 'dominant_color' => 'pomarańczowy', 'confidence' => 0.9],
+        ]]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        $verifier = app(ProductImageCandidateVerifier::class);
+        $glove = new Product([
+            'sku' => '7112110', 'name' => 'ActivArmr 07112', 'manufacturer' => 'Ansell',
+            'description' => 'Wkładka wykonana jest z dzianiny w kolorze niebieskim i jest w pełni impregnowana.',
+        ]);
+        $pages = [['url' => 'https://cas-technik.eu/ansell-vibraguard-07-112/ih-07112-10', 'text' => 'Ansell VibraGuard 07-112']];
+
+        $this->assertSame([$packshot], $verifier->select($glove, [$packshot, $menu], $pages, 1, [], trustStructured: false));
+        $this->assertSame([], $verifier->select($glove, [$packshot, $menu], $pages, 1), 'zwykła droga porównuje kolor z opisu jak dotąd');
+
+        // kolor w nazwie obowiązuje także w drodze przez sklepy
+        $black = new Product(['sku' => '7112110', 'name' => 'ActivArmr 07112 Black', 'manufacturer' => 'Ansell']);
+        $this->assertSame([], $verifier->select($black, [$packshot, $menu], $pages, 1, [], trustStructured: false));
     }
 }
