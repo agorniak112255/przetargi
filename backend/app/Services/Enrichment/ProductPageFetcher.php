@@ -437,12 +437,15 @@ final class ProductPageFetcher
         $viaReader = null;
         if (! $this->bypassCache) {
             $cached = Cache::get($this->readerCacheKey($url));
-            if (is_array($cached) && isset($cached['text'])) {
+            // Wpis sprzed odczytu ramki norm (bez klucza norm_facts) jest nieaktualny: strona Ansella z pamięci
+            // dawałaby przez 24 h opis bez norm producenta — czytamy ją jeszcze raz.
+            if (is_array($cached) && isset($cached['text']) && array_key_exists('norm_facts', $cached)) {
                 $viaReader = [
                     'text' => (string) ($cached['text'] ?? ''),
                     'image_urls' => is_array($cached['image_urls'] ?? null) ? $cached['image_urls'] : [],
                     'document_urls' => is_array($cached['document_urls'] ?? null) ? $cached['document_urls'] : [],
                     'document_labels' => is_array($cached['document_labels'] ?? null) ? $cached['document_labels'] : [],
+                    'norm_facts' => is_array($cached['norm_facts'] ?? null) ? $cached['norm_facts'] : [],
                 ];
             }
         }
@@ -480,6 +483,11 @@ final class ProductPageFetcher
                 $page = ['url' => $url, 'text' => $text];
                 if ($optionSizes !== []) {
                     $page['option_sizes'] = $optionSizes;
+                }
+                // Ramka norm z pełnego markdownu (BlockedPageReader::normFacts) — tekst strony jej już nie niesie.
+                // Za normy producenta bierze ją ProductEnrichmentService tylko ze strony producenta, jak przy HTML.
+                if (($viaReader['norm_facts'] ?? []) !== []) {
+                    $page['norm_facts'] = $viaReader['norm_facts'];
                 }
                 $accessories = (new ProductAccessoryExtractor)->fromText($text);
                 if ($accessories !== []) {

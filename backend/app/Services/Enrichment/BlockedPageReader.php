@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Services\Ai\AiSettingsService;
+use App\Services\Norms\AnsellNormPageReader;
+use App\Services\Norms\ReaderMarkdownPage;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -45,7 +47,8 @@ final class BlockedPageReader
      *     text: string,
      *     image_urls: list<string>,
      *     document_urls: list<string>,
-     *     document_labels: array<string, string>
+     *     document_labels: array<string, string>,
+     *     norm_facts: list<array{label: string, value: ?string}>
      * }|null
      */
     public function fetch(string $url): ?array
@@ -97,7 +100,27 @@ final class BlockedPageReader
             'document_urls' => array_keys($documents),
             // etykieta odsyłacza z markdownu — bez niej rodzaj pliku zgadywalibyśmy z samego adresu
             'document_labels' => array_filter($documents, static fn (string $label): bool => $label !== ''),
+            'norm_facts' => $this->normFacts($markdown, $url),
         ];
+    }
+
+    /**
+     * Ramka norm strony producenta z pełnego markdownu — zanim text przytnie go do 5000 znaków i zgubi obrazki.
+     * Ansell podaje normy jako podpis ikony z kodem obok („![Image 30: EN 388:2016 +A1:2018](…) 4131A”), a jego
+     * karta przychodzi tylko przez reader (Incapsula). Bez tego przebieg opisu nie miał norm producenta: 05.10.2026
+     * żadna z 369 opisanych kart cennika Ansella, HyFlex 11-840 bez EN 388 4131A i EN 407 X1XXXX. Ten sam czytnik co
+     * norms:from-manufacturer-pages; pary idą do ProductPageFetcher jak ramka norm zwykłej strony (norm_facts).
+     *
+     * @return list<array{label: string, value: ?string}>
+     */
+    private function normFacts(string $markdown, string $url): array
+    {
+        $reader = new AnsellNormPageReader;
+        if (! $reader->supports((string) parse_url($url, PHP_URL_HOST))) {
+            return [];
+        }
+
+        return $reader->read(ReaderMarkdownPage::toHtml($markdown), $url)?->rows ?? [];
     }
 
     /**

@@ -6,11 +6,14 @@ namespace Tests\Feature\Norms;
 
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Services\Enrichment\BlockedPageReader;
+use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Norms\AnsellNormPageReader;
 use App\Services\Norms\ManufacturerNormIdentity;
 use App\Services\Norms\ReaderMarkdownPage;
 use App\Support\ManufacturerNormFacts;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
@@ -80,6 +83,75 @@ final class AnsellManufacturerNormsTest extends TestCase
             ->assertSuccessful();
         $this->assertSame('4X43EP', ManufacturerNormFacts::context($card->fresh()->manufacturer_norms)['en388'] ?? null);
         @unlink($plan);
+    }
+
+    /**
+     * 05.10.2026: żadna z 369 kart cennika Ansella opisanych tego dnia nie miała norm producenta — karta przychodzi
+     * przez reader, a tekst strony z readera nie niesie już ikon ramki norm. Pary bierzemy z pełnego markdownu.
+     */
+    public function test_enrichment_fetch_through_reader_carries_the_norm_frame(): void
+    {
+        Http::fake([
+            'r.jina.ai/*' => Http::response((string) file_get_contents(base_path('tests/Fixtures/norms/ansell-ringers-r065-pl.md')), 200),
+            'www.ansell.com/*' => Http::response((string) file_get_contents(base_path('tests/Fixtures/norms/ansell-incapsula-wall.html')), 200, ['Content-Type' => 'text/html']),
+            '*' => Http::response('', 404),
+        ]);
+        $card = $this->ringers();
+
+        $reader = app(BlockedPageReader::class)->fetch(self::R065);
+        $this->assertSame([
+            ['label' => 'EN 388:2016', 'value' => '4X43EP'],
+            ['label' => 'EN407:2020', 'value' => 'X1XXXX'],
+            ['label' => 'EN ISO 21420:2020', 'value' => null],
+        ], $reader['norm_facts'] ?? null);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => self::R065, 'title' => 'RINGERS R065', 'snippet' => '']],
+            (string) $card->sku,
+            1,
+            ['www.ansell.com'],
+            $card,
+        );
+        $page = collect($fetched['pages'])->firstWhere('url', self::R065);
+        $this->assertNotNull($page, 'strona z readera potwierdza kartę');
+        $this->assertSame($reader['norm_facts'], $page['norm_facts'] ?? null);
+    }
+
+    /** Strona z pamięci readera sprzed tej zmiany (bez norm_facts) nie może przez 24 h dawać opisu bez norm. */
+    public function test_reader_cache_entry_without_norm_facts_is_read_again(): void
+    {
+        Http::fake([
+            'r.jina.ai/*' => Http::response((string) file_get_contents(base_path('tests/Fixtures/norms/ansell-ringers-r065-pl.md')), 200),
+            'www.ansell.com/*' => Http::response((string) file_get_contents(base_path('tests/Fixtures/norms/ansell-incapsula-wall.html')), 200, ['Content-Type' => 'text/html']),
+            '*' => Http::response('', 404),
+        ]);
+        $card = $this->ringers();
+        $fetcher = app(ProductPageFetcher::class);
+        $key = (new \ReflectionMethod($fetcher, 'readerCacheKey'))->invoke($fetcher, self::R065);
+        Cache::put($key, [
+            'text' => 'RINGERS R065 Ansell rękawice do prac udarowych 065',
+            'image_urls' => [],
+            'document_urls' => [],
+            'document_labels' => [],
+        ], now()->addHour());
+
+        $fetched = $fetcher->fetch([['url' => self::R065, 'title' => 'RINGERS R065', 'snippet' => '']], (string) $card->sku, 1, ['www.ansell.com'], $card);
+
+        $page = collect($fetched['pages'])->firstWhere('url', self::R065);
+        $this->assertSame('4X43EP', collect($page['norm_facts'] ?? [])->firstWhere('label', 'EN 388:2016')['value'] ?? null);
+        Http::assertSent(static fn ($request): bool => str_contains($request->url(), 'r.jina.ai'));
+    }
+
+    /** Ramkę norm z readera czytamy tylko na stronach Ansella — inne witryny idą przez swoje ramki w HTML. */
+    public function test_reader_page_of_another_host_has_no_norm_facts(): void
+    {
+        Http::fake([
+            'r.jina.ai/*' => Http::response((string) file_get_contents(base_path('tests/Fixtures/norms/ansell-ringers-r065-pl.md')), 200),
+        ]);
+
+        $reader = app(BlockedPageReader::class)->fetch('https://sklep.example/ringers-r065');
+
+        $this->assertSame([], $reader['norm_facts'] ?? null);
     }
 
     private function page(string $fixture): string
