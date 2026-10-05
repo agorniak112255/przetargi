@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useAuth } from '../auth'
 import { BTN_PRIMARY, BTN_SM, ConfirmDialog, ErrorBar } from '../components/CampaignsUi'
-import { can } from '../lib/api'
 import { errorText, fmtDateTime, fmtInt } from '../lib/campaignFormat'
 import { createOffer, deleteOffer, listOffers, type OfferListRow } from '../lib/offers'
 import { plural } from '../lib/plural'
@@ -13,7 +11,6 @@ import { plural } from '../lib/plural'
  */
 export function Offers() {
   const navigate = useNavigate()
-  const { user } = useAuth()
   const [rows, setRows] = useState<OfferListRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -69,8 +66,6 @@ export function Offers() {
     }
   }
 
-  const canProducts = can(user, 'products.view')
-  const canInventory = can(user, 'inventory.view') || can(user, 'campaigns.use')
 
   return (
     <>
@@ -151,23 +146,8 @@ export function Offers() {
                     'Ładowanie…'
                   ) : (
                     <>
-                      Nie ma jeszcze ofert. Załóż nową ofertę albo zaznacz towar w{' '}
-                      {canProducts ? (
-                        <Link to="/products" className="text-blue-600 hover:underline">
-                          Produktach
-                        </Link>
-                      ) : (
-                        'Produktach'
-                      )}{' '}
-                      lub{' '}
-                      {canInventory ? (
-                        <Link to="/zapasy" className="text-blue-600 hover:underline">
-                          Zapasach
-                        </Link>
-                      ) : (
-                        'Zapasach'
-                      )}{' '}
-                      i wybierz „Dodaj do oferty”.
+                      Nie ma jeszcze ofert. Kliknij „+ Nowa oferta” — produkty dodasz w ofercie wyszukiwarką albo
+                      z listy Produktów i Zapasów.
                     </>
                   )}
                 </td>

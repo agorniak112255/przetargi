@@ -4,7 +4,9 @@ import { useAuth } from '../auth'
 import { AddToCampaignMenu } from '../components/AddToCampaignMenu'
 import { AddToOfferMenu } from '../components/AddToOfferMenu'
 import { CampaignPickBanner } from '../components/CampaignPickBanner'
+import { OfferPickBanner } from '../components/OfferPickBanner'
 import { useCampaignTarget } from '../lib/campaignTarget'
+import { useOfferTarget } from '../lib/offerTarget'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
 import { DeleteProductsDialog } from '../components/DeleteProductsDialog'
@@ -300,9 +302,17 @@ export function Products() {
   const canMergeCards = can(user, 'card_matches.decide')
   const canCampaign = can(user, 'campaigns.use')
   const canOffer = can(user, 'offers.use')
-  const canSelect = canEnrich || canDelete || canMergeCards || canCampaign || canOffer
   // lista otwarta z kreatora kampanii (?kampania=ID) — „Dodaj do K-…” i powrót do kampanii
   const campaignPick = useCampaignTarget()
+  // lista otwarta z oferty (?oferta=ID) — „Dodaj do OF-…” i powrót do oferty
+  const offerPick = useOfferTarget()
+  // dodawanie do kampanii i oferty tylko z przypiętej belki (lista otwarta z kreatora albo z oferty)
+  const canSelect =
+    canEnrich ||
+    canDelete ||
+    canMergeCards ||
+    (canCampaign && campaignPick.campaignId !== null) ||
+    (canOffer && offerPick.offerId !== null)
   const hasActions = canEnrich || canExportPresta || canDelete
   // Fraza z adresu (?q=) — „Pokaż wszystkie” z wyszukiwania globalnego otwiera listę z tą frazą.
   const urlQ = searchParams.get('q') ?? ''
@@ -880,6 +890,22 @@ export function Products() {
           />
         </div>
       )}
+      {canOffer && offerPick.offerId !== null && (
+        // przypięty u góry jak przy kampanii: do której oferty dobierasz karty i przycisk dodania przy przewijaniu
+        <div className="app-sticky-bar sticky top-0 z-30 -mx-1 mb-4 px-1">
+          <OfferPickBanner
+            {...offerPick}
+            what="karty"
+            action={
+              <AddToOfferMenu
+                productIds={selectedIds}
+                target={offerPick.target}
+                buttonClassName="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+              />
+            }
+          />
+        </div>
+      )}
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Produkty</h1>
@@ -1066,23 +1092,6 @@ export function Products() {
             >
               Połącz zaznaczone{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
             </button>
-          )}
-          {canCampaign && (
-            <AddToCampaignMenu
-              productIds={selectedIds}
-              placement="down"
-              showCount
-              target={campaignPick.target}
-              buttonClassName="rounded border border-sky-300 px-3 py-2 text-xs text-sky-800 hover:bg-sky-50 disabled:opacity-50"
-            />
-          )}
-          {canOffer && (
-            <AddToOfferMenu
-              productIds={selectedIds}
-              placement="down"
-              showCount
-              buttonClassName="rounded border border-emerald-300 px-3 py-2 text-xs text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
-            />
           )}
           {canDelete && (
             <button

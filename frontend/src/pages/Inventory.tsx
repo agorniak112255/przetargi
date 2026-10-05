@@ -4,7 +4,9 @@ import { useAuth } from '../auth'
 import { AddToCampaignMenu, CAMPAIGN_MAX_ITEMS } from '../components/AddToCampaignMenu'
 import { AddToOfferMenu } from '../components/AddToOfferMenu'
 import { CampaignPickBanner } from '../components/CampaignPickBanner'
+import { OfferPickBanner } from '../components/OfferPickBanner'
 import { useCampaignTarget } from '../lib/campaignTarget'
+import { useOfferTarget } from '../lib/offerTarget'
 import { InventoryTabs } from '../components/InventoryTabs'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import {
@@ -155,6 +157,8 @@ export function Inventory() {
   const [params, setParams] = useSearchParams()
   // lista otwarta z kreatora kampanii (?kampania=ID) — „Dodaj do K-…” i powrót do kampanii
   const campaignPick = useCampaignTarget()
+  // lista otwarta z oferty (?oferta=ID) — „Dodaj do OF-…” i powrót do oferty
+  const offerPick = useOfferTarget()
 
   const months = pick(params.get('months'), MONTHS, DEFAULT_MONTHS)
   const neverSold = params.get('never_sold') !== '0'
@@ -367,6 +371,7 @@ export function Inventory() {
       {/* przypięte u góry: do której kampanii dobierasz towar i co zaznaczono — widoczne przy przewijaniu */}
       <div className="app-sticky-bar sticky top-0 z-30 -mx-1 space-y-2 px-1 pb-2 empty:hidden">
         <CampaignPickBanner {...campaignPick} what="towar" />
+        {canOffer && <OfferPickBanner {...offerPick} what="towar" />}
         {canSelect && selected.size > 0 && (
           <div className="app-bulk-bar flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-slate-800 px-4 py-2.5 text-sm text-white shadow-xl">
             <span>
@@ -394,14 +399,16 @@ export function Inventory() {
               >
                 Wyczyść
               </button>
-              {canOffer && (
+              {/* lista otwarta z kampanii albo z oferty — tylko przycisk tego, z czego przyszedłeś */}
+              {canOffer && campaignPick.campaignId === null && (
                 <AddToOfferMenu
                   erpItemIds={[...selected.keys()]}
+                  target={offerPick.target}
                   placement="down"
                   buttonClassName="rounded bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-emerald-400 disabled:opacity-50"
                 />
               )}
-              {canCampaign && (
+              {canCampaign && offerPick.offerId === null && (
                 <AddToCampaignMenu
                   erpItemIds={[...selected.keys()]}
                   target={campaignPick.target}

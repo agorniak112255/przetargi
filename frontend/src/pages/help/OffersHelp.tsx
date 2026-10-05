@@ -147,51 +147,36 @@ export function OffersHelp() {
         },
         {
           action: 'Produkty z listy Produktów albo Zapasów',
-          does: 'Na liście Produkty albo Zapasy zaznaczasz pozycje i klikasz „Dodaj do oferty”. Menu proponuje nową ofertę z zaznaczonych albo dopisanie do jednej z pięciu ostatnio zmienianych ofert — także już wysłanej, bo oferta zawsze zostaje do edycji. Pozycje, które już są w ofercie, nie dublują się. Po kliknięciu otwiera się oferta. Oferta mieści ograniczoną liczbę pozycji — gdy zaznaczonych jest za dużo, menu pokaże komunikat i nic nie zostanie dodane.',
-          click: 'Zaznacz wiersze (Shift+klik: zakres), potem „Dodaj do oferty ▾” → „Nowa oferta z zaznaczonych” albo „Do oferty „…””.',
+          does: 'W ofercie kliknij „Wybierz w Produktach” albo „Wybierz w Zapasach” (przy pozycjach: „albo zaznacz w Produktach / Zapasach”). Lista otworzy się z zieloną belką „Dobierasz karty do oferty OF-…” przypiętą u góry — zostaje widoczna, gdy przewijasz listę. Zaznaczasz pozycje i klikasz na belce „Dodaj do OF-…”: produkty trafiają do oferty, a Ty wracasz do niej. Pozycje, które już są w ofercie, nie dublują się. „← Wróć do oferty” wraca bez dodawania. W Zapasach przy zaznaczonych jest też menu „Dodaj do oferty ▾” — nowa oferta z zaznaczonych albo dopisanie do jednej z ostatnich ofert.',
+          click: 'W ofercie „Wybierz w Produktach” → zaznacz wiersze (Shift+klik: zakres) → na belce u góry „Dodaj do OF-0008”.',
           tone: 'blue',
           screen: (
-            <AppFrame nav="Zapasy">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-800 px-4 py-2.5 text-xs text-white">
+            <AppFrame nav="Produkty">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-950">
                 <span>
-                  <b className="tabular-nums">3</b> zaznaczone · razem ok. <b className="tabular-nums">4 180 zł</b> zapasu
+                  Dobierasz karty do oferty <b>OF-0008</b> „Obuwie S3 — zapytanie telefoniczne” — 2 z 30 pozycji, zostało
+                  28. Zaznacz i kliknij „Dodaj do OF-0008”.
                 </span>
                 <span className="flex items-center gap-2">
-                  <span className="rounded border border-slate-500 px-3 py-1.5">Wyczyść</span>
                   <Mark>
-                    <span className="inline-block rounded bg-emerald-500 px-3 py-1.5 font-semibold text-slate-900">
-                      Dodaj do oferty ▾
+                    <span className="inline-block rounded bg-emerald-600 px-3 py-1.5 font-semibold text-white">
+                      Dodaj do OF-0008 (3)
                     </span>
                   </Mark>
-                  <span className="rounded bg-sky-500 px-3 py-1.5 font-semibold text-slate-900">Dodaj do kampanii ▾</span>
+                  <span className="rounded border border-emerald-300 bg-white px-3 py-1.5 font-medium">← Wróć do oferty</span>
                 </span>
               </div>
-              <div className="ml-auto w-80 rounded-xl border border-slate-200 bg-white p-2 text-xs shadow-xl">
-                <div className="rounded-lg bg-slate-100 px-2.5 py-2">
-                  <span className="block font-semibold">Nowa oferta z zaznaczonych</span>
-                  <span className="block text-[11px] text-slate-500">
-                    3 pozycje · cena: koszt zakupu + Twoja domyślna marża
-                  </span>
-                </div>
-                <div className="my-1 border-t border-slate-100" />
-                <div className="px-2.5 py-2">
-                  <span className="block font-semibold">Do oferty „Obuwie S3 — zapytanie telefoniczne”</span>
-                  <span className="block text-[11px] text-slate-500">OF-0008 · 2 pozycje · zmieniona 05.10.2026</span>
-                </div>
-                <div className="px-2.5 py-2">
-                  <span className="block font-semibold">Do oferty „Rękawice dla działu utrzymania ruchu”</span>
-                  <span className="block text-[11px] text-slate-500">
-                    OF-0007 · 4 pozycje · zmieniona 03.10.2026 · wysłana 03.10.2026
-                  </span>
-                </div>
-              </div>
+              <h1 className="mb-1 text-lg font-semibold">Produkty</h1>
+              <p className="text-xs text-slate-500">
+                Belka zostaje u góry ekranu, gdy przewijasz listę — przycisk dodania jest zawsze pod ręką.
+              </p>
             </AppFrame>
           ),
         },
         {
           action: 'Ceny w ofercie',
-          does: 'Przy każdej pozycji widzisz stan magazynu, koszt zakupu (średni koszt partii towaru z ERP XL, a dla karty bez towaru w XL — cenę zakupu karty) i cenę sugerowaną = koszt zakupu + Twoja domyślna marża z Moje konto → Oferty → „Domyślna marża”. Cena sugerowana wpisuje się sama jako „Cena netto w ofercie” przy dodaniu pozycji — możesz ją zmienić, a „wstaw sugerowaną” przywraca ją jednym kliknięciem. Gdy kosztu brak, pole jest puste i trzeba wpisać cenę ręcznie: bez ceny przy każdej pozycji oferty nie da się wysłać ani skopiować. Cena niższa od kosztu zakupu dostaje ostrzeżenie, ale nie blokuje wysyłki. Kolejne produkty dodasz też wyszukiwarką „Dodaj kartę produktu” w samej ofercie (wymaga uprawnienia „Produkty — podgląd”); kolejność pozycji w mailu zmieniasz strzałkami w górę i w dół.',
-          click: 'Kliknij w pole „Cena netto w ofercie” i wpisz kwotę. Nowy produkt: „Dodaj kartę produktu” nad tabelą — wpisz nazwę lub kod i wybierz kartę z listy.',
+          does: 'Przy każdej pozycji widzisz stan magazynu, koszt zakupu (średni koszt partii towaru z ERP XL, a dla karty bez towaru w XL — cenę zakupu karty) i cenę sugerowaną = koszt zakupu + Twoja domyślna marża z Moje konto → Oferty → „Domyślna marża”. Cena sugerowana wpisuje się sama jako „Cena netto w ofercie” przy dodaniu pozycji — możesz ją zmienić, a „wstaw sugerowaną” przywraca ją jednym kliknięciem. Gdy kosztu brak, pole jest puste i trzeba wpisać cenę ręcznie: bez ceny przy każdej pozycji oferty nie da się wysłać ani skopiować. Cena niższa od kosztu zakupu dostaje ostrzeżenie, ale nie blokuje wysyłki. Kolejne produkty dodasz też przyciskiem „+ Dodaj produkt” w samej ofercie: otwiera duże okno z wyszukiwarką (każde słowo zawęża listę), podglądem karty ze zdjęciem i opisem — wybierz kartę i „Dodaj … do oferty”; okno zostaje otwarte, więc dodasz kilka produktów pod rząd (wymaga uprawnienia „Produkty — podgląd”); kolejność pozycji w mailu zmieniasz strzałkami w górę i w dół.',
+          click: 'Kliknij w pole „Cena netto w ofercie” i wpisz kwotę. Nowy produkt: „+ Dodaj produkt” nad tabelą — wpisz nazwę lub kod, kliknij kartę i „Dodaj … do oferty”.',
           tone: 'amber',
           screen: (
             <AppFrame nav="Oferty">
@@ -200,10 +185,7 @@ export function OffersHelp() {
                 <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                   <Chip tone="red">bez ceny: 1</Chip>
                   <Chip tone="amber">poniżej kosztu: 1</Chip>
-                  <span className="ml-auto">Dodaj kartę produktu:</span>
-                  <span className="w-48 rounded border border-slate-300 bg-white px-2 py-1 text-slate-400">
-                    nazwa albo kod produktu…
-                  </span>
+                  <span className="ml-auto rounded bg-blue-600 px-3 py-1 font-medium text-white">+ Dodaj produkt</span>
                 </div>
                 <table className="w-full text-left text-xs">
                   <thead>

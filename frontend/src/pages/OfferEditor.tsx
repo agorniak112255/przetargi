@@ -12,7 +12,7 @@ import {
   Modal,
   type ChipTone,
 } from '../components/CampaignsUi'
-import { ProductSearchSelect } from '../components/ProductSearchSelect'
+import { CardPickerModal } from '../components/CardPickerModal'
 import { api, ApiError, can } from '../lib/api'
 import { errorText, fmtDate, fmtDateTime, fmtQty, moneyInputValue, parseMoney } from '../lib/campaignFormat'
 import {
@@ -392,8 +392,9 @@ function ItemsSection({
   onError: (message: string) => void
 }) {
   const { user } = useAuth()
-  const [adding, setAdding] = useState(false)
-  const searchBox = useRef<HTMLDivElement>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerNotice, setPickerNotice] = useState('')
+  const [pickerErr, setPickerErr] = useState('')
   const items = offer.items
   const max = offer.limits.max_items
   const full = items.length >= max
@@ -405,14 +406,31 @@ function ItemsSection({
   const patchItem = (item: OfferItem, patch: OfferItemPatch) =>
     mutate(() => updateOfferItem(offer.id, item.id, patch), 'Nie udało się zapisać pozycji.')
 
-  async function addProduct(productId: number) {
-    setAdding(true)
-    await mutate(() => addOfferItems(offer.id, { product_ids: [productId] }), 'Nie udało się dodać produktu.')
-    setAdding(false)
+  const inOffer = new Set(items.map((i) => i.product_id).filter((id): id is number => id !== null))
+
+  function openPicker() {
+    setPickerNotice('')
+    setPickerErr('')
+    setPickerOpen(true)
   }
 
-  function focusSearch() {
-    searchBox.current?.querySelector('input')?.focus()
+  /** Okno zostaje otwarte — można dodać kilka produktów pod rząd. */
+  async function addProduct(productId: number, sku: string): Promise<boolean> {
+    setPickerErr('')
+    setPickerNotice('')
+    const before = items.length
+    const o = await mutate(() => addOfferItems(offer.id, { product_ids: [productId] }), 'Nie udało się dodać produktu.')
+    if (o === null) {
+      setPickerErr('Nie udało się dodać produktu — spróbuj ponownie.')
+      return false
+    }
+    // serwer pomija kartę, której towar XL już jest w ofercie
+    setPickerNotice(
+      o.items.length > before
+        ? `Dodano ${sku} do oferty (${o.items.length} z ${o.limits.max_items}). Możesz dodać kolejny produkt albo zamknąć okno.`
+        : `${sku} jest już w ofercie (jako ten sam towar z XL) — nic nie dodano.`,
+    )
+    return true
   }
 
   const noPrice = items.filter((i) => i.warnings.no_price && (i.erp_item_id != null || i.product_id != null)).length
@@ -431,39 +449,31 @@ function ItemsSection({
           {belowCost > 0 && <Chip tone="amber">poniżej kosztu: {belowCost}</Chip>}
           {noImage > 0 && <Chip tone="amber">bez zdjęcia: {noImage}</Chip>}
         </div>
-        {canSearch ? (
-          <div ref={searchBox} className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-            <span>Dodaj kartę produktu:</span>
-            {/* pole zawsze puste: wybór karty od razu dodaje pozycję, a pole wraca do szukania */}
-            <ProductSearchSelect
-              products={[]}
-              value=""
-              disabled={full || adding}
-              showSelectedCard={false}
-              className="w-80 max-w-full"
-              onChange={(pid) => {
-                const id = Number(pid)
-                if (id > 0) void addProduct(id)
-              }}
-            />
-            {adding && <span className="text-slate-500">dodaję…</span>}
-            {items.length > 0 && (
-              <>
-                <span>albo zaznacz w</span>
-                <Link to="/products" className={`${BTN_SM} inline-block`}>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          {canSearch && (
+            <button type="button" className={BTN_PRIMARY} disabled={full} onClick={openPicker}>
+              + Dodaj produkt
+            </button>
+          )}
+          {items.length > 0 && (canSearch || canInventory) && (
+            <>
+              <span>albo zaznacz w</span>
+              {canSearch && (
+                <Link to={`/products?oferta=${offer.id}`} className={`${BTN_SM} inline-block`}>
                   Produktach
                 </Link>
-                {canInventory && (
-                  <Link to="/zapasy" className={`${BTN_SM} inline-block`}>
-                    Zapasach
-                  </Link>
-                )}
-              </>
-            )}
-          </div>
-        ) : (
-          <span className="text-xs text-slate-500">Wyszukiwanie kart wymaga uprawnienia „Produkty — podgląd”.</span>
-        )}
+              )}
+              {canInventory && (
+                <Link to={`/zapasy?oferta=${offer.id}`} className={`${BTN_SM} inline-block`}>
+                  Zapasach
+                </Link>
+              )}
+            </>
+          )}
+          {!canSearch && (
+            <span className="text-slate-500">Wyszukiwanie kart wymaga uprawnienia „Produkty — podgląd”.</span>
+          )}
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
@@ -504,25 +514,25 @@ function ItemsSection({
                     <p className="text-sm font-medium text-slate-700">Oferta nie ma jeszcze produktów — dodaj je:</p>
                     <div className="mt-3 flex flex-wrap justify-center gap-2">
                       {canSearch && (
-                        <button type="button" className={BTN_PRIMARY} onClick={focusSearch}>
+                        <button type="button" className={BTN_PRIMARY} onClick={openPicker}>
                           Wyszukaj kartę produktu
                         </button>
                       )}
                       {canSearch && (
-                        <Link to="/products" className={`${BTN} inline-block`}>
+                        <Link to={`/products?oferta=${offer.id}`} className={`${BTN} inline-block`}>
                           Wybierz w Produktach
                         </Link>
                       )}
                       {canInventory && (
-                        <Link to="/zapasy" className={`${BTN} inline-block`}>
+                        <Link to={`/zapasy?oferta=${offer.id}`} className={`${BTN} inline-block`}>
                           Wybierz w Zapasach
                         </Link>
                       )}
                     </div>
                     <p className="mt-3 text-[11px] text-slate-500">
-                      „Wyszukaj kartę produktu” — wpisz nazwę albo kod w polu w prawym górnym rogu i kliknij produkt na
-                      liście. W Produktach i Zapasach zaznacz pozycje kwadracikami po lewej, kliknij „Dodaj do oferty”
-                      i wybierz {offer.code ?? 'tę ofertę'}.
+                      „Wyszukaj kartę produktu” otwiera okno z wyszukiwarką, podglądem karty i opisem. W Produktach
+                      i Zapasach zaznacz pozycje kwadracikami po lewej i kliknij „Dodaj do {offer.code ?? 'oferty'}” na
+                      belce u góry listy.
                     </p>
                   </div>
                 </td>
@@ -537,6 +547,38 @@ function ItemsSection({
         i skopiować ofertę można dopiero, gdy każda pozycja ma cenę. Najwyżej {max} pozycji.
         {full && <b className="font-medium text-amber-800"> Oferta ma już najwięcej pozycji.</b>}
       </p>
+      {pickerOpen && (
+        <CardPickerModal
+          title={`Dodaj produkt do oferty ${offer.code ?? ''}`.trim()}
+          header={
+            <p className="mt-0.5 text-sm text-slate-800">
+              <span className="font-medium">{offer.subject.trim() || 'Oferta bez tematu'}</span>
+              <span className="text-slate-500">
+                {' '}
+                · {items.length} z {max} pozycji
+              </span>
+            </p>
+          }
+          emptyHint="Wpisz co najmniej 2 znaki — nazwę, kod, model albo producenta. Każde kolejne słowo zawęża listę."
+          badgesFor={(id) =>
+            inOffer.has(id) ? (
+              <span className="rounded bg-emerald-50 px-1.5 text-[10px] text-emerald-800">już w ofercie</span>
+            ) : null
+          }
+          canSubmit={(pick) => !inOffer.has(pick.id) && !full}
+          notice={pickerNotice && <p className="rounded bg-emerald-50 px-2 py-1 text-emerald-800">{pickerNotice}</p>}
+          error={pickerErr || (full ? `Oferta ma już ${max} pozycji — więcej się nie zmieści.` : '')}
+          placeholder="Wpisz nazwę, kod, model albo producenta — każde kolejne słowo zawęża listę"
+          ariaLabel="Szukaj karty produktu po nazwie, kodzie, modelu albo producencie"
+          footerHint="Cena w ofercie = koszt zakupu + Twoja marża (zmienisz ją w tabeli). Okno zostaje otwarte — możesz dodać kilka produktów. ↑ ↓ wybór · dwuklik = pełny podgląd · Ctrl+Enter = dodaj"
+          submitLabel={(pick, busy) =>
+            busy ? 'Dodaję…' : pick ? (inOffer.has(pick.id) ? 'Już w ofercie' : `Dodaj ${pick.sku} do oferty`) : 'Wybierz kartę z listy'
+          }
+          previewQuery=""
+          onClose={() => setPickerOpen(false)}
+          onPick={addProduct}
+        />
+      )}
     </div>
   )
 }

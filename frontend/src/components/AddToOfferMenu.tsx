@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { addOfferItems, createOffer, listOffers, type Offer, type OfferListRow } from '../lib/offers'
 import { plural } from '../lib/plural'
+import type { OfferTarget } from '../lib/offerTarget'
 import { formatDate } from '../lib/priceChange'
 
 /** Tyle ostatnio zmienianych ofert użytkownika pokazuje menu. */
@@ -22,9 +23,12 @@ export function AddToOfferMenu({
   placement = 'down',
   buttonClassName,
   showCount = false,
+  target = null,
 }: {
   erpItemIds?: number[]
   productIds?: number[]
+  /** Lista otwarta z oferty (?oferta=ID): jeden przycisk „Dodaj do OF-…” zamiast menu, potem powrót do oferty. */
+  target?: OfferTarget | null
   /** Menu nad przyciskiem (pasek na dole ekranu) albo pod nim (pasek narzędzi). */
   placement?: 'up' | 'down'
   buttonClassName: string
@@ -101,6 +105,34 @@ export function AddToOfferMenu({
   const body = {
     ...(erpItemIds.length > 0 ? { erp_item_ids: erpItemIds } : {}),
     ...(productIds.length > 0 ? { product_ids: productIds } : {}),
+  }
+
+  if (target) {
+    const room = target.maxItems - target.itemsCount
+    return (
+      <div className="relative">
+        <button
+          type="button"
+          disabled={count === 0 || busy || room <= 0}
+          onClick={() => void run(() => addOfferItems(target.id, body))}
+          className={buttonClassName}
+          title={
+            room <= 0
+              ? `Oferta ${target.code} ma już ${target.maxItems} pozycji`
+              : count > room
+                ? `Zmieści się jeszcze ${positions(room)} — nadmiar serwer odrzuci`
+                : `Dodaje zaznaczone do oferty ${target.code} i wraca do oferty`
+          }
+        >
+          {busy ? 'Dodaję…' : `Dodaj do ${target.code}${count > 0 ? ` (${count})` : ''}`}
+        </button>
+        {err && (
+          <p className="absolute right-0 top-full z-40 mt-1 w-72 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-700 shadow">
+            {err}
+          </p>
+        )}
+      </div>
+    )
   }
 
   return (
