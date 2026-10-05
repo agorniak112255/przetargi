@@ -459,6 +459,58 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame('Rękawica ochronna kat. II, nitryl.'."\n".'Druga linia opisu.', $connector->description($products['F09 PLUS']));
     }
 
+    public function test_required_box_makes_the_box_quantity_the_minimum_and_the_step(): void
+    {
+        $this->items = [
+            // CITRIN 7 jak w sklepie 05.10.2026: „Ilość w op. zbiorczym 12 para. Sprzedajemy wyłącznie wielokrotności tej liczby.”
+            $this->item(1927, 'CITRIN 7', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN 7', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN', 1.75, 2.0, ''),
+            $this->item(1928, 'CITRIN 8', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN 8', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN', 1.75, 2.0, ''),
+            // bez wymogu opakowania (QuantityPerBox puste) — bez ograniczenia
+            $this->item(2100, 'RACER 7', 'RĘKAWICE RS ARBEITSSCHUTZ RACER 7', 'RĘKAWICE RS ARBEITSSCHUTZ RACER', 3.0, 3.5, '', ['RequiredBox' => false, 'QuantityPerBox' => null]),
+            // rozmiary w różnych opakowaniach — warunek zależy od rozmiaru
+            $this->item(2200, 'MIX 8', 'RĘKAWICE MIX 8', 'RĘKAWICE MIX', 4.0, 4.5, ''),
+            $this->item(2201, 'MIX 9', 'RĘKAWICE MIX 9', 'RĘKAWICE MIX', 4.0, 4.5, '', ['QuantityPerBox' => 6]),
+            // wymagane opakowanie bez liczby i rozmiar bez pola — warunku nie znamy
+            $this->item(2300, 'NOBOX 8', 'RĘKAWICE NOBOX 8', 'RĘKAWICE NOBOX', 4.0, 4.5, '', ['QuantityPerBox' => null]),
+            $this->item(2400, 'PART 8', 'RĘKAWICE PART 8', 'RĘKAWICE PART', 4.0, 4.5, ''),
+            $this->item(2401, 'PART 9', 'RĘKAWICE PART 9', 'RĘKAWICE PART', 4.0, 4.5, '', ['RequiredBox' => null]),
+        ];
+        $this->fakeSite();
+        $connector = $this->connector();
+        $products = $this->productsBySku($connector);
+
+        $this->assertSame(
+            ['order_min_qty' => 12.0, 'order_step_qty' => 12.0, 'order_unit' => 'para', 'order_varies' => false],
+            $connector->price($products['CITRIN'])?->order?->slotValues(),
+        );
+        $racer = $connector->price($products['RACER'])?->order;
+        $this->assertNotNull($racer);
+        $this->assertFalse($racer->restricts());
+        $this->assertSame(['order_min_qty' => 1.0, 'order_step_qty' => null, 'order_unit' => 'para', 'order_varies' => false], $racer->slotValues());
+        $this->assertSame(
+            ['order_min_qty' => null, 'order_step_qty' => null, 'order_unit' => 'para', 'order_varies' => true],
+            $connector->price($products['MIX'])?->order?->slotValues(),
+        );
+        $this->assertNotNull($connector->price($products['NOBOX']));
+        $this->assertNull($connector->price($products['NOBOX'])->order);
+        $this->assertNull($connector->price($products['PART'])?->order);
+    }
+
+    public function test_sync_saves_the_order_condition_on_the_account_slot(): void
+    {
+        Storage::fake('public');
+        $this->fakeSite();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $f09 = Product::query()->where('sku', 'F09 PLUS')->sole();
+        $slot = ProductSourcePrice::query()->where('product_id', $f09->id)->where('source_key', ProductSourcePrice::b2bKey((int) $this->account()->id))->sole();
+        $this->assertSame(12.0, (float) $slot->order_min_qty);
+        $this->assertSame(12.0, (float) $slot->order_step_qty);
+        $this->assertSame('para', $slot->order_unit);
+        $this->assertFalse((bool) $slot->order_varies);
+    }
+
     public function test_shop_card_has_page_parameters_norms_and_trade_data_of_every_size(): void
     {
         $this->fakeSite();
@@ -801,6 +853,9 @@ final class TegroConnectorTest extends TestCase
             'Model' => $model,
             'Brand' => 'G-REX',
             'Unit' => 'para',
+            // jak u 420 z 455 pozycji sklepu 05.10.2026: tylko wielokrotności opakowania zbiorczego 12 par
+            'RequiredBox' => true,
+            'QuantityPerBox' => 12,
             'Vat' => 23,
             'InStock' => true,
             'RetailPriceNet' => ['Value' => $retail, 'Currency' => 'PLN'],

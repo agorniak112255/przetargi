@@ -30,8 +30,11 @@ final class TegroB2bClient
 
     public const BASE = 'https://b2b.tegro.pl';
 
-    /** Pola listy produktów z API (ApiProduct w /swagger/docs/v3). */
-    public const PRODUCT_FIELDS = 'Id,Name,Ean,Sku,Description,Model,Brand,Unit,Vat,InStock,RetailPriceNet,PriceAfterDiscountNet,Attributes,Categories,Photo';
+    /**
+     * Pola listy produktów z API (ApiProduct w /swagger/docs/v3). RequiredBox + QuantityPerBox = warunek zamawiania
+     * (sprzedaż tylko w wielokrotnościach opakowania zbiorczego, TegroB2bConnector::orderOf).
+     */
+    public const PRODUCT_FIELDS = 'Id,Name,Ean,Sku,Description,Model,Brand,Unit,RequiredBox,QuantityPerBox,Vat,InStock,RetailPriceNet,PriceAfterDiscountNet,Attributes,Categories,Photo';
 
     private const LOGIN_PAGE_URL = self::BASE.'/pl/logowanie';
 

@@ -190,9 +190,67 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
         return $brand !== '' ? $brand : self::label();
     }
 
+    /** Cena karty (najtańszy rozmiar) z warunkiem zamawiania karty (groupOrder). */
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
     {
-        return self::sizePrice(['PriceAfterDiscountNet' => $product->raw['price'] ?? null, 'RetailPriceNet' => $product->raw['retail_price'] ?? null]);
+        $price = self::sizePrice(['PriceAfterDiscountNet' => $product->raw['price'] ?? null, 'RetailPriceNet' => $product->raw['retail_price'] ?? null]);
+        $order = $product->raw['order'] ?? null;
+        if ($price === null || ! $order instanceof B2bOrderQuantity) {
+            return $price;
+        }
+
+        return new B2bRemotePrice(net: $price->net, base: $price->base, discountPercent: $price->discountPercent, currency: $price->currency, order: $order);
+    }
+
+    /**
+     * Warunek zamawiania pozycji z API (odczyt konta #9 05.10.2026, 455 pozycji): RequiredBox true = sklep sprzedaje
+     * wyłącznie wielokrotności opakowania zbiorczego QuantityPerBox (CITRIN 7: RequiredBox true, QuantityPerBox 12,
+     * Unit „para” — na stronie „Ilość w op. zbiorczym 12 para. Uwaga! Sprzedajemy wyłącznie wielokrotności tej
+     * liczby.”), więc QuantityPerBox jest minimum i krokiem; 424 pozycje (420 po 12, 3 po 6, 1 po 10). RequiredBox false =
+     * bez wymogu opakowania (31 pozycji, QuantityPerBox puste). Units (przelicznik „Wiązka”) bywa zerowy — nie używamy. Jednostka = Unit pozycji dosłownie. RequiredBox spoza
+     * true/false albo true bez liczby w opakowaniu = null: warunku nie znamy, zapisany zostaje.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    public static function orderOf(array $item): ?B2bOrderQuantity
+    {
+        $required = $item['RequiredBox'] ?? null;
+        $unit = self::text($item['Unit'] ?? null);
+        $unit = $unit !== '' ? $unit : null;
+        if ($required === false) {
+            return new B2bOrderQuantity(min: 1.0, step: null, unit: $unit);
+        }
+        $box = $item['QuantityPerBox'] ?? null;
+        if ($required !== true || ! is_numeric($box) || (float) $box <= 0) {
+            return null;
+        }
+        $box = (float) $box;
+
+        return $box > 1 ? new B2bOrderQuantity(min: $box, step: $box, unit: $unit) : new B2bOrderQuantity(min: 1.0, step: null, unit: $unit);
+    }
+
+    /**
+     * Warunek karty z warunków jej rozmiarów: wszystkie takie same — ten warunek; różne — „zależy od rozmiaru”
+     * (varies, jednostka tylko wspólna); choć jeden rozmiar bez znanego warunku — null (nie zgadujemy).
+     *
+     * @param  list<array{item: array<string, mixed>, size: string|null}>  $group
+     */
+    private static function groupOrder(array $group): ?B2bOrderQuantity
+    {
+        $orders = [];
+        foreach ($group as $member) {
+            $order = self::orderOf($member['item']);
+            if ($order === null) {
+                return null;
+            }
+            $orders[json_encode([$order->min, $order->step, $order->unit])] = $order;
+        }
+        if (count($orders) === 1) {
+            return array_values($orders)[0];
+        }
+        $units = array_unique(array_map(static fn (B2bOrderQuantity $o): ?string => $o->unit, array_values($orders)));
+
+        return new B2bOrderQuantity(min: null, step: null, unit: count($units) === 1 ? $units[0] : null, varies: true);
     }
 
     /**
@@ -607,6 +665,7 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
                 'unit' => self::text($first['Unit'] ?? null),
                 'price' => $cheapest['PriceAfterDiscountNet'] ?? null,
                 'retail_price' => $cheapest['RetailPriceNet'] ?? null,
+                'order' => self::groupOrder($group),
                 'photo' => $photo,
                 'categories' => $categories,
                 'attributes' => $attributes,
