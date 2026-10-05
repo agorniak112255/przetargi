@@ -206,7 +206,7 @@ export default function App() {
             <Route
               path="ogloszenia"
               element={
-                <PermissionGuard anyOf={['tenders.create', 'tenders.view_all']}>
+                <PermissionGuard anyOf={['notices.view']}>
                   <Notices />
                 </PermissionGuard>
               }

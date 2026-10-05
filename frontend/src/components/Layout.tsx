@@ -23,7 +23,7 @@ type NavLinkItem = {
 const links: NavLinkItem[] = [
   { to: '/', label: 'Dashboard', icon: 'dashboard', permission: 'dashboard.view' },
   { to: '/tenders', label: 'Przetargi', icon: 'tenders', anyOf: ['tenders.view_own', 'tenders.view_all'] },
-  { to: '/ogloszenia', label: 'Ogłoszenia', icon: 'notices', anyOf: ['tenders.create', 'tenders.view_all'] },
+  { to: '/ogloszenia', label: 'Ogłoszenia', icon: 'notices', anyOf: ['notices.view'] },
   { to: '/products', label: 'Produkty', icon: 'products', permission: 'products.view' },
   { to: '/zapasy', label: 'Zapasy', icon: 'inventory', anyOf: ['inventory.view', 'campaigns.use'] },
   { to: '/raport-zapasow', label: 'Raport dla zarządu', icon: 'reports', permission: 'inventory.report.view' },

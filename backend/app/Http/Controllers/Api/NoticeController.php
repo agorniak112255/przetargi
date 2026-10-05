@@ -27,7 +27,8 @@ use RuntimeException;
 /**
  * Zakładka „Ogłoszenia”: lista ogłoszeń o zamówieniu z Biuletynu (NoticeListQuery), wspólna decyzja „pominięte”
  * i zakładanie przetargu z ogłoszenia (NoticeTenderCreator). Uprawnienia w trasach: lista i pomijanie —
- * tenders.create albo tenders.view_all; zakładanie przetargu — tenders.create.
+ * notices.view (od 05.10.2026 osobne uprawnienie, wcześniej tenders.create albo tenders.view_all); zakładanie
+ * przetargu — notices.view i tenders.create.
  * „Pominięte” dotyczy postępowania (bzp_number), nie wersji ogłoszenia — nowa wersja nie wraca do „Nowe”.
  */
 class NoticeController extends Controller

@@ -288,14 +288,14 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     });
 
     // zakładka Ogłoszenia: ogłoszenia o zamówieniu z Biuletynu, wspólne „pominięte”, przetarg z ogłoszenia
-    Route::middleware('permission:tenders.create|tenders.view_all')->group(function (): void {
+    Route::middleware('permission:notices.view')->group(function (): void {
         Route::get('/notices', [NoticeController::class, 'index']);
         Route::get('/notices/{notice}', [NoticeController::class, 'show'])->whereNumber('notice');
         Route::get('/notices/{notice}/items', [NoticeController::class, 'items'])->whereNumber('notice');
         Route::post('/notices/{notice}/skip', [NoticeController::class, 'skip']);
         Route::delete('/notices/{notice}/skip', [NoticeController::class, 'unskip']);
     });
-    Route::post('/notices/{notice}/tender', [NoticeController::class, 'createTender'])->middleware('permission:tenders.create');
+    Route::post('/notices/{notice}/tender', [NoticeController::class, 'createTender'])->middleware(['permission:notices.view', 'permission:tenders.create']);
 
     Route::get('/exchange-rates', ExchangeRateController::class)->middleware('permission:products.view');
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
