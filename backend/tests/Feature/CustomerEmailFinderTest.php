@@ -153,6 +153,20 @@ final class CustomerEmailFinderTest extends TestCase
         $this->assertSame(['biuro@firma.pl', 'handel@firma.pl', 'sklep@firma.pl', 'bok@firma.pl'], CustomerEmailFinder::emailsIn($text));
     }
 
+    public function test_directory_page_must_be_about_the_client(): void
+    {
+        $tokens = ['pociask'];
+        // strona innej firmy z NIP-em klienta w spisie firm w okolicy — nie
+        $this->assertFalse(CustomerEmailFinder::pageAboutClient(
+            'https://cabb.pl/firma/cezary-szczepanik-firma-handlowouslugowa-geo-komp-6842157343',
+            '<title>Geo-Komp Cezary Szczepanik</title> Firmy w okolicy: Pociask NIP 8181008250', $tokens, '8181008250',
+        ));
+        // strona klienta: słowo nazwy w adresie, NIP w adresie, słowo nazwy w tytule z czytnika
+        $this->assertTrue(CustomerEmailFinder::pageAboutClient('https://www.krs-online.com.pl/firma/1538424-pociask-w-autoryzowany', '', $tokens, '8181008250'));
+        $this->assertTrue(CustomerEmailFinder::pageAboutClient('https://mapa.targeo.pl/8181008250/nip/firma', '', [], '8181008250'));
+        $this->assertTrue(CustomerEmailFinder::pageAboutClient('https://panoramafirm.pl/x', "Title: Zakład POCIASK — Panorama Firm\n", $tokens, ''));
+    }
+
     public function test_card_and_decided_addresses_do_not_come_back(): void
     {
         $this->customer(['emails' => ['biuro@go-kom.pl']]);

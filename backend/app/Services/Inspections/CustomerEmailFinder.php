@@ -299,6 +299,9 @@ final class CustomerEmailFinder
                 continue;
             }
             $nipOnPage = $nip !== '' && str_contains((string) preg_replace('/\D+/', '', $text), $nip);
+            // katalog: strona MUSI być o kliencie (jego NIP albo słowo nazwy w adresie strony lub tytule) — strona innej
+            // firmy wymienia NIP klienta w spisie „firmy w okolicy” (POCIASK 06.10.2026: cabb.pl o firmie Geo-Komp)
+            $aboutClient = $source !== CustomerEmailSuggestion::SOURCE_DIRECTORY || self::pageAboutClient($url, $text, $tokens, $nip);
             $before = count($out);
             foreach (self::emailsIn($text) as $email) {
                 $domain = substr($email, (int) strpos($email, '@') + 1);
@@ -307,8 +310,8 @@ final class CustomerEmailFinder
                     continue;
                 }
                 if ($source === CustomerEmailSuggestion::SOURCE_DIRECTORY) {
-                    // katalog to wiele firm — tylko z NIP-em klienta na tej stronie
-                    if (! $nipOnPage) {
+                    // katalog to wiele firm — tylko strona o kliencie i z jego NIP-em
+                    if (! $nipOnPage || ! $aboutClient) {
                         continue;
                     }
                     $evidence = CustomerEmailSuggestion::EVIDENCE_NIP;
@@ -350,12 +353,22 @@ final class CustomerEmailFinder
     private function fetchPages(array $urls): array
     {
         $urls = array_values(array_unique($urls));
-        $allowed = array_values(array_filter($urls, function (string $url): bool {
+        // tylko http(s) na portach 80/443 i serwery z adresem publicznym; połączenie przypięte do sprawdzonego adresu
+        // (CURLOPT_RESOLVE), więc drugie zapytanie DNS nie podmieni go na adres wewnętrzny
+        $pins = [];
+        foreach ($urls as $url) {
             $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
-
-            return in_array($scheme, ['http', 'https'], true) && $this->guard->problem((string) parse_url($url, PHP_URL_HOST)) === null;
-        }));
-        $guard = $this->guard;
+            $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+            $port = parse_url($url, PHP_URL_PORT);
+            if (! in_array($scheme, ['http', 'https'], true) || $host === '' || ($port !== null && ! in_array($port, [80, 443], true))) {
+                continue;
+            }
+            $ips = $this->guard->publicIps($host);
+            if ($ips !== null) {
+                $pins[$url] = [$host.':80:'.$ips[0], $host.':443:'.$ips[0]];
+            }
+        }
+        $allowed = array_keys($pins);
         $responses = $allowed === [] ? [] : Http::pool(fn (Pool $pool): array => array_map(
             static fn (string $url) => $pool->as($url)
                 ->timeout(self::DIRECT_TIMEOUT)
@@ -364,16 +377,32 @@ final class CustomerEmailFinder
                     'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
                     'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
                     'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.5',
+                    // bez kompresji — limit bajtów liczy wtedy dokładnie to, co trafi do pamięci (bez bomby gzip)
+                    'Accept-Encoding' => 'identity',
                 ])
-                ->withOptions(['allow_redirects' => [
-                    'max' => 3,
-                    // przekierowanie na serwer w sieci wewnętrznej — przerwane
-                    'on_redirect' => static function ($request, $response, UriInterface $uri) use ($guard): void {
-                        if ($guard->problem($uri->getHost()) !== null) {
-                            throw new RuntimeException('Przekierowanie poza sieć publiczną.');
-                        }
-                    },
-                ]])
+                ->withOptions([
+                    'decode_content' => false,
+                    'allow_redirects' => [
+                        'max' => 3,
+                        'protocols' => ['http', 'https'],
+                        // tylko w obrębie tej samej domeny (http→https, inna ścieżka) — przypięty adres obowiązuje dalej;
+                        // inny serwer albo inny port = przerwane (strona idzie do czytnika jak każda, która odmówiła)
+                        'on_redirect' => static function ($request, $response, UriInterface $uri) use ($url): void {
+                            $port = $uri->getPort();
+                            if (strtolower($uri->getHost()) !== strtolower((string) parse_url($url, PHP_URL_HOST))
+                                || ($port !== null && ! in_array($port, [80, 443], true))) {
+                                throw new RuntimeException('Przekierowanie na inny serwer — pominięte.');
+                            }
+                        },
+                    ],
+                    'curl' => [
+                        CURLOPT_RESOLVE => $pins[$url],
+                        // twardy limit rozmiaru: deklarowany (Content-Length) i faktycznie pobrany
+                        CURLOPT_MAXFILESIZE => self::DIRECT_MAX_BYTES,
+                        CURLOPT_NOPROGRESS => false,
+                        CURLOPT_XFERINFOFUNCTION => static fn ($ch, int $dlTotal, int $dlNow): int => $dlNow > self::DIRECT_MAX_BYTES ? 1 : 0,
+                    ],
+                ])
                 ->get($url),
             $allowed,
         ));
@@ -398,6 +427,33 @@ final class CustomerEmailFinder
         }
 
         return $out;
+    }
+
+    /**
+     * Strona katalogu jest o kliencie: jego NIP (cyframi) albo słowo nazwy (≥ 4 litery) w adresie strony albo w tytule
+     * (<title> albo „Title:” z czytnika) — nie tylko gdzieś w treści.
+     *
+     * @param  list<string>  $tokens  słowa nazwy klienta (bez polskich znaków, małe litery)
+     */
+    public static function pageAboutClient(string $url, string $text, array $tokens, string $nip): bool
+    {
+        $title = '';
+        if (preg_match('/<title[^>]*>(.*?)<\/title>/is', $text, $m) === 1 || preg_match('/^Title:\s*(.+)$/mi', $text, $m) === 1) {
+            $title = $m[1];
+        }
+        $where = self::fold(rawurldecode($url).' '.$title);
+        if ($nip !== '' && str_contains((string) preg_replace('/\D+/', '', rawurldecode($url).' '.$title), $nip)) {
+            return true;
+        }
+        $squash = (string) preg_replace('/[^a-z0-9]/', '', $where);
+        foreach ($tokens as $t) {
+            $t = (string) preg_replace('/[^a-z0-9]/', '', $t);
+            if (strlen($t) >= 4 && str_contains($squash, $t)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** HTML → tekst do szukania adresów i NIP-u: encje (&#64;, &amp;), adresy Cloudflare (data-cfemail), mailto. */

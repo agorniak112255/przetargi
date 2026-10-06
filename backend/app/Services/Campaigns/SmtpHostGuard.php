@@ -35,6 +35,30 @@ class SmtpHostGuard
         $this->resolver = $resolver ?? self::resolveDns(...);
     }
 
+    /**
+     * Adresy IP serwera do przypięcia połączenia (CURLOPT_RESOLVE) — połączenie idzie dokładnie pod sprawdzony adres,
+     * bez drugiego zapytania DNS (podmiana adresu między sprawdzeniem a połączeniem). null = serwer niedozwolony.
+     *
+     * @return list<string>|null
+     */
+    public function publicIps(string $host): ?array
+    {
+        if ($this->problem($host) !== null) {
+            return null;
+        }
+        $ips = ($this->resolver)(rtrim(mb_strtolower(trim($host)), '.'));
+        if ($ips === []) {
+            return null;
+        }
+        foreach ($ips as $ip) {
+            if (! self::isPublicIp($ip)) {
+                return null;
+            }
+        }
+
+        return array_values($ips);
+    }
+
     /** Komunikat dla użytkownika albo null, gdy serwer dozwolony. */
     public function problem(string $host): ?string
     {
