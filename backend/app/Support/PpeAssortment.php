@@ -2700,6 +2700,9 @@ final class PpeAssortment
         if ($this->isEyeWearAccessory($nameText) && ! $this->isEyeWearAccessory($requirement)) {
             return false;
         }
+        if ($this->eyeWearPartConflictText($requirement, $nameText)) {
+            return false;
+        }
         $reqType = $this->articleType($requirement, self::FAMILY_EYES);
         if ($reqType === null) {
             return true;
@@ -2733,6 +2736,58 @@ final class PpeAssortment
             .'|zestaw\w*\s+czesci\s+zamienn|hygiene\s+kit|poduszk\w*\s+higien|cushion\s+kit|hygiene\s+pad)\w*/u',
             $t
         ) === 1;
+    }
+
+    /**
+     * Część okularów albo gogli pod wymaganiem o same okulary/gogle: zapytania #91 i #93 (06.10.2026) — pod „Gogle Bolle
+     * Rush+ 2.0 XP RUSXMN10E … z paskiem” wchodził „RUSH+ 2.0 XP – Zestaw pianki i paska” z 96%, bo nazwa modelu
+     * ratowała kartę bez rozpoznanej rodziny. Tylko w tę stronę (karta jest częścią, wymaganie nie) — jak etui.
+     */
+    public function eyeWearPartConflict(string $requirement, Product $product): bool
+    {
+        return $this->family($requirement) === self::FAMILY_EYES
+            && ! $this->isEyeWearSet($requirement)
+            && $this->eyeWearPartConflictText($requirement, $this->productNameText($product));
+    }
+
+    private function eyeWearPartConflictText(string $requirement, string $nameText): bool
+    {
+        return $this->namesEyeWearPart($nameText)
+            && ! $this->namesEyeWearPart($requirement)
+            && ! $this->isEyeWearAccessory($requirement);
+    }
+
+    /** Rzeczownik części okularów/gogli (tekst po normalize()). Bez „nakładki” — w żargonie to okulary na okulary. */
+    private const EYE_WEAR_PART = '\b(?:piank(?:a|i|e|ow\w*)?|pianek|wkladk\w*|pas(?:ek|ka|ki|kiem|kow|kami)|tasm(?:a|e|y)|tasiemk\w*'
+        .'|opask\w*|uszczelk\w*|foam|straps?|headbands?|gaskets?|czesc\w*\s+zamienn\w*|czesci\s+zamienn\w*|spare\s+parts?'
+        .'|(?:soczewk|szybk)\w*\s+(?:zamienn|wymienn)\w*|replacement\s+lens\w*)\b';
+
+    /**
+     * Słowa, które mówią, że karta to cały wyrób: rzeczownik okularów/gogli albo ich oprawka i barwa soczewki
+     * („PACAYA CLEAR STRAP”, „Flex Seal Blue frame Elasticated strap Clear” to gogle z paskiem, nie pasek).
+     */
+    private const EYE_WEAR_ARTICLE = '\b(?:okular\w*|gogl\w*|przylbic\w*|goggles?|glasses|spectacles?|eyewear|eyeshields?|overspecs?'
+        .'|visors?|faceshields?|brill\w*|lunettes?|oprawk\w*|frames?|bezbarwn\w*|przezroczyst\w*|przyciemn\w*|dymion\w*|clear|smoke)\b';
+
+    /**
+     * Nazwa karty to część okularów albo gogli (pianka, pasek, uszczelka, wkładka, soczewka zamienna): rzeczownik części
+     * stoi przed rzeczownikiem wyrobu albo wyrobu w nazwie nie ma. Przedmiot po „do/dla/na/for” to to, do czego część
+     * pasuje („Uszczelka do okularów”), a część po „z/with” to wyposażenie wyrobu („…, z opaską i zausznikami”,
+     * „Gogle … z paskiem”) — wtedy to nie część. Sonda produkcji 06.10.2026: 117 kart oczu z takim rzeczownikiem;
+     * przymiotniki („uszczelnione gogle”, „nakładkowe okulary”) nie są rzeczownikami części.
+     */
+    public function namesEyeWearPart(string $text): bool
+    {
+        $t = preg_replace('/\b(?:do|dla|na|for|to)\s+\S+/u', ' ', $this->normalize($text)) ?? '';
+        if (preg_match('/'.self::EYE_WEAR_PART.'/u', $t, $part, PREG_OFFSET_CAPTURE) !== 1) {
+            return false;
+        }
+        $before = substr($t, 0, (int) $part[0][1]);
+        if (preg_match('/\b(?:z|ze|w|i|oraz|with|and|plus)\s*$/u', $before) === 1) {
+            return false;
+        }
+
+        return preg_match('/'.self::EYE_WEAR_ARTICLE.'/u', $before) !== 1;
     }
 
     /**

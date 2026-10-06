@@ -677,13 +677,11 @@ final class ProductModelFuzzy
      */
     public function variantCodeWrittenInQuery(string $query, Product $product): bool
     {
-        $words = [];
-        foreach (preg_split('/[\s,;()]+/u', $query) ?: [] as $word) {
-            $code = $this->compact($word);
-            if (mb_strlen($code) >= 5 && preg_match('/\d/', $code) === 1) {
-                $words[$code] = true;
-            }
-        }
+        $words = array_filter(
+            $this->queryCodeWords($query),
+            static fn (string $code): bool => mb_strlen($code) >= 5 && preg_match('/\d/', $code) === 1,
+            ARRAY_FILTER_USE_KEY,
+        );
         if ($words === [] || $product->id === null) {
             return false;
         }
@@ -699,6 +697,51 @@ final class ProductModelFuzzy
         }
 
         return false;
+    }
+
+    /**
+     * Klient przepisał cały SKU karty jako osobne słowo („Gogle Bolle Rush+ 2.0 XP RUSXMN10E”, zapytanie #93): wskazał
+     * wyrób, a nie tylko jego rodzaj. Liczy się dokładna równość bez separatorów (RUSX-MN10E = RUSXMN10E) i kształt kodu
+     * — od 6 znaków z literą i cyfrą albo od 7 cyfr — żeby rok, ilość, norma czy klasa („S3”, „4X42C”) nie udawały kodu.
+     */
+    public function skuWrittenInQuery(string $query, Product $product): bool
+    {
+        $sku = $this->compact((string) $product->sku);
+
+        return $this->isWrittenCodeShape($sku) && isset($this->queryCodeWords($query)[$sku]);
+    }
+
+    /**
+     * Słowa zapytania bez separatorów — także części listy po ukośniku („RUSXMN10E/RUSXMN20E”) obok całego słowa
+     * (kod „8543/8/35” zostaje w całości).
+     *
+     * @return array<string, true>
+     */
+    private function queryCodeWords(string $query): array
+    {
+        $words = [];
+        foreach (preg_split('/[\s,;()]+/u', $query) ?: [] as $word) {
+            foreach ([$word, ...explode('/', $word)] as $part) {
+                $code = $this->compact($part);
+                if ($code !== '') {
+                    $words[$code] = true;
+                }
+            }
+        }
+
+        return $words;
+    }
+
+    private function isWrittenCodeShape(string $code): bool
+    {
+        if (ctype_digit($code)) {
+            return mb_strlen($code) >= 7;
+        }
+
+        return mb_strlen($code) >= 6
+            && preg_match('/[a-z]/', $code) === 1
+            && preg_match('/\d/', $code) === 1
+            && ! $this->isClassOrLevelMarking($code);
     }
 
     /**
@@ -1671,6 +1714,11 @@ final class ProductModelFuzzy
             return 0;
         }
 
+        // Krótsza seria cyfr w środku kodu też nie jest literówką: „rusxmn10e” i „rusxmn70e” dzieli jedna zmiana, a to
+        // okulary i zestaw pianki z paskiem (zapytanie #93, 06.10.2026, 96% „literówka w nazwie modelu”). W kodzie
+        // mieszanym okno musi mieć te same cyfry co igła; literówki w literach (TEPM-ICE 700) zostają tolerowane.
+        $digits = $this->isMixedModelCode($needle) ? (preg_replace('/\D+/u', '', $needle) ?? '') : '';
+
         $nLen = mb_strlen($needle);
         $hLen = mb_strlen($hay);
         $best = 99;
@@ -1679,6 +1727,9 @@ final class ProductModelFuzzy
         for ($i = 0; $i <= max(0, $hLen - $min); $i++) {
             for ($w = $min; $w <= $max && ($i + $w) <= $hLen; $w++) {
                 $window = mb_substr($hay, $i, $w);
+                if ($digits !== '' && preg_replace('/\D+/u', '', $window) !== $digits) {
+                    continue;
+                }
                 if (function_exists('levenshtein') && strlen($needle) < 255 && strlen($window) < 255) {
                     $best = min($best, levenshtein($needle, $window));
                 }

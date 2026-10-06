@@ -597,6 +597,44 @@ final class ProductModelFuzzyTest extends TestCase
         ));
     }
 
+    /** Zapytanie #93: klient przepisał SKU karty — dokładna równość bez separatorów, tylko kształt kodu. */
+    #[Test]
+    public function sku_written_in_query_is_an_exact_code_word(): void
+    {
+        $query = 'Gogle Bolle Rush+ 2.0 XP RUSXMN10E - bezbarwne z paskiem';
+        $glasses = $this->product('RUSXMN10E', 'RUSH+ 2.0 XP - rozmiar M/L – Hybrydowe okulary ochronne bezbarwne', 'Bolle');
+
+        $this->assertTrue($this->fuzzy->skuWrittenInQuery($query, $glasses));
+        $this->assertTrue($this->fuzzy->skuWrittenInQuery('Gogle Bolle RUSX-MN10E', $glasses));
+        $this->assertTrue($this->fuzzy->skuWrittenInQuery('Gogle Bolle RUSXMN20E/RUSXMN10E', $glasses));
+        $this->assertTrue($this->fuzzy->skuWrittenInQuery('Nauszniki 3M 7000103989', $this->product('7000103989', 'Nauszniki X2A', '3M')));
+
+        $this->assertFalse($this->fuzzy->skuWrittenInQuery($query, $this->product('RUSXMN70E', 'RUSH+ 2.0 XP – Zestaw pianki i paska', 'Bolle')));
+        // SKU z dopiskiem rozmiaru to inny kod — klient go nie napisał
+        $this->assertFalse($this->fuzzy->skuWrittenInQuery($query, $this->product('RUSXMN10E-M', 'RUSH+ 2.0 XP M', 'Bolle')));
+        // krótkie kody, klasy i kody dystrybutorów nie udają przepisanego SKU
+        $this->assertFalse($this->fuzzy->skuWrittenInQuery('Półmaska 3M 3000', $this->product('3000', 'Półmaska 3000', '3M')));
+        $this->assertFalse($this->fuzzy->skuWrittenInQuery('Buty S3 rozmiar 42', $this->product('S3', 'Buty S3', 'X')));
+        $this->assertFalse($this->fuzzy->skuWrittenInQuery('Rękawice 4X42C', $this->product('4X42C', 'Rękawice', 'X')));
+        $this->assertFalse($this->fuzzy->skuWrittenInQuery('Rękawice HyCron 27-600', $this->product('27-600', 'HyCron', 'Ansell')));
+    }
+
+    /**
+     * Zapytanie #93: „rusxmn70e” (zestaw pianki i paska) był „literówką” „rusxmn10e” (okulary) i dostawał 96%.
+     * Inna cyfra w kodzie mieszanym to inny wyrób; literówka w literach dalej przechodzi.
+     */
+    #[Test]
+    public function other_digit_inside_a_mixed_code_is_not_a_typo(): void
+    {
+        $part = $this->product('RUSXMN70E', 'RUSH+ 2.0 XP – Zestaw pianki i paska', 'Bolle');
+        $glasses = $this->product('RUSXMN10E', 'RUSH+ 2.0 XP - rozmiar M/L – Hybrydowe okulary ochronne bezbarwne', 'Bolle');
+
+        $this->assertSame(0, $this->fuzzy->score('Bolle RUSXMN10E', $part));
+        $this->assertGreaterThanOrEqual(90, $this->fuzzy->score('Bolle RUSXMN10E', $glasses));
+        // literówka w literach kodu zostaje tolerowana
+        $this->assertGreaterThan(0, $this->fuzzy->score('Bolle RUSXNM10E', $glasses));
+    }
+
     private function product(string $sku, string $name, string $manufacturer): Product
     {
         $p = new Product;

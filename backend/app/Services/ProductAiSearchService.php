@@ -4616,9 +4616,16 @@ final class ProductAiSearchService
         if ($this->slangRewriteFor($query) === null) {
             return true;
         }
-        $hay = $this->slangProductHaystack($product);
+        if ($this->catalogSlang->matchesEvidence($query, $this->slangProductHaystack($product))) {
+            return true;
+        }
 
-        return $this->catalogSlang->matchesEvidence($query, $hay);
+        // Klient przepisał kod tej karty — wskazał wyrób, a słowo żargonu jest tylko jego opisem. „Gogle Bolle Rush+ 2.0 XP
+        // RUSXMN10E” (zapytania #91, #93): karta RUSXMN10E to „hybrydowe okulary”, słowa „gogle” nie ma, więc odpadała,
+        // a przechodził zestaw pianki i paska, którego opis mówi o goglach. Pozostałe bramki (rodzina, SNR, klasa
+        // obuwia, izolacja, cięcie) dalej działają. Sprawdzenie wariantu pyta bazę, więc idzie na końcu.
+        return $this->modelFuzzy->skuWrittenInQuery($query, $product)
+            || $this->modelFuzzy->variantCodeWrittenInQuery($query, $product);
     }
 
     /**
@@ -4677,7 +4684,8 @@ final class ProductAiSearchService
     {
         return $this->modelFuzzy->matches($query, $product)
             && ! $this->assortment->wearFamilyConflict($query, $product)
-            && ! $this->assortment->hearingVariantConflict($query, $product);
+            && ! $this->assortment->hearingVariantConflict($query, $product)
+            && ! $this->assortment->eyeWearPartConflict($query, $product);
     }
 
     /**
@@ -5906,6 +5914,7 @@ final class ProductAiSearchService
                 $row['ai_match_percent'] = min(99, max(80, $this->modelFuzzy->score($query, $product)));
                 // Kod przepisany przez klienta nie ma literówki — stary opis sugerował zgadywanie.
                 $row['ai_match_reason'] = $this->modelFuzzy->matchesDeclaredCode($query, $product)
+                    || $this->modelFuzzy->skuWrittenInQuery($query, $product)
                     ? 'Kod z zapytania klienta.'
                     : 'Marka i model z wymagania (literówka w nazwie modelu jest dopuszczalna).';
             } else {

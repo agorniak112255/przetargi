@@ -1637,6 +1637,57 @@ final class PpeAssortmentTest extends TestCase
         $this->assertTrue($this->assortment->meetsRequiredWeldingFilter('Okulary ochronne bezbarwne, EN 166', $clear), 'wymaganie bez filtra spawalniczego');
     }
 
+    /**
+     * Część okularów/gogli (zapytania #91 i #93) — prawdziwe nazwy z sondy katalogu produkcji 06.10.2026, także te,
+     * które wzorzec musi zostawić jako wyrób (przymiotniki, wyposażenie po „z/with”, oprawka i barwa soczewki).
+     */
+    #[Test]
+    #[DataProvider('eyeWearPartNames')]
+    public function names_eye_wear_part(string $name, bool $part): void
+    {
+        $this->assertSame($part, $this->assortment->namesEyeWearPart($name), $name);
+    }
+
+    /** @return array<string, array{0: string, 1: bool}> */
+    public static function eyeWearPartNames(): array
+    {
+        return [
+            'zestaw pianki i paska' => ['RUSH+ 2.0 XP – Zestaw pianki i paska', true],
+            'pianka do gogli' => ['Pianka do gogli Bolle Rush+', true],
+            'uszczelka do okularów' => ['Uszczelka do okularów uvex x-fit i x-fit pro 9199.001', true],
+            'tasiemka na zausznik' => ['Gumowa tasiemka uvex planet nasuwana na zausznik 9958.030', true],
+            'wkładka piankowa' => ['3M™ Solus™ 1000 piankowa wkładka. 1000G-EU, 100 szt./opakowanie', true],
+            'taśma nagłowna' => ['3M™ Solus™ 1000 Taśma nagłowna do okularów ochronnych, regulowana, nylonowa', true],
+            'zestaw uszczelki z pianki' => ['Zestaw uszczelki z pianki oraz elastycznej taśmy do modeli COBRA', true],
+            'angielski pasek' => ['COMBAT STRAP – elastyczne mocowanie i rozciąganie', true],
+            'soczewka zamienna' => ['Soczewka zamienna do gogli Bolle Atom', true],
+            'gogle z paskiem' => ['Gogle Bolle Rush+ 2.0 XP RUSXMN10E - bezbarwne z paskiem', false],
+            'gogle z pianką' => ['SPECTRUM – Bezbarwne/Uszczelnione gogle ochronne z pianką', false],
+            'uszczelnione gogle' => ['CHRONOSOFT – Przezroczyste uszczelnione gogle balistyczne', false],
+            'nakładkowe okulary' => ['3M™ Visitor Nakładkowe okulary ochronne, przezroczyste soczewki', false],
+            'wyposażenie po z' => ['Altimeter, Przydymione, Sightgard, UV400, z opaską i zausznikami, 12x', false],
+            'oprawka i pasek' => ['Honeywell Flexseal 1011384 – Flex Seal czarna oprawka pasek z neoprenu IR 5', false],
+            'barwa soczewki' => ['PACAYA CLEAR STRAP', false],
+            'gogle bez części' => ['Gogle ochronne pośrednio wentylowane', false],
+            'okulary z wymienną pianką' => ['Okulary ochronne z wymienną pianką', false],
+        ];
+    }
+
+    #[Test]
+    public function eye_wear_part_conflicts_only_with_a_request_for_the_eye_wear_itself(): void
+    {
+        $part = $this->card('RUSXMN70E', 'RUSH+ 2.0 XP – Zestaw pianki i paska');
+        $goggles = $this->card('RUSXMN10E', 'RUSH+ 2.0 XP - rozmiar M/L – Hybrydowe okulary ochronne bezbarwne');
+
+        $this->assertTrue($this->assortment->eyeWearPartConflict('Gogle Bolle Rush+ 2.0 XP RUSXMN10E - bezbarwne z paskiem', $part));
+        $this->assertFalse($this->assortment->compatibleProduct('Gogle Bolle Rush+ 2.0 XP bezbarwne z paskiem', $part));
+        $this->assertFalse($this->assortment->eyeWearPartConflict('Gogle Bolle Rush+ 2.0 XP RUSXMN10E - bezbarwne z paskiem', $goggles));
+        // klient prosi o część — część jest tym, czego szuka
+        $this->assertFalse($this->assortment->eyeWearPartConflict('Zestaw pianki i paska do gogli Bolle Rush+ 2.0 XP', $part));
+        // bez rodziny oczu w wymaganiu reguła milczy (kod sam rozstrzyga w ProductModelFuzzy)
+        $this->assertFalse($this->assortment->eyeWearPartConflict('Bolle RUSXMN10E', $part));
+    }
+
     private function card(string $sku, string $name, array $attrs = []): Product
     {
         $product = new Product;
