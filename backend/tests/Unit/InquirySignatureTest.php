@@ -161,6 +161,86 @@ final class InquirySignatureTest extends TestCase
     }
 
     /**
+     * Układ z produkcji (zapytania #91 i #93, 06.10.2026; dane osobowe zmienione): klientka odpisuje Outlookiem
+     * nad naszą ofertą. Stopka sięgała do końca maila, więc kontakt dostawał adresy handlowców z „Do:/DW:”,
+     * nasz podpis z cytatu i numer zapytania z „Temat:” jako telefon.
+     */
+    public function test_reply_over_outlook_quote_reads_only_the_senders_footer(): void
+    {
+        $mail = implode("\n", [
+            'Dzień dobry,',
+            'proszę jeszcze o 5 szt. kasków ochronnych białych.',
+            '',
+            'Pozdrawiam',
+            'Anna Nowak',
+            'anna.nowak@firma.pl',
+            'tel. 600 100 200',
+            '________________________________',
+            'Od: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Wysłane: czwartek, 1 października 2026 11:05',
+            'Do: Nowak, Anna <anna.nowak@firma.pl>',
+            'DW: Izabela - Supon <izabela@supon.rzeszow.pl>',
+            'Temat: RE: Zapytanie ofertowe 056709365',
+            '',
+            'W załączeniu oferta.',
+            '',
+            'Pozdrawiam',
+            'Jan Handlowiec',
+            'PHT Supon Sp. z o.o.',
+            'ul. Miłocińska 17, 35-232 Rzeszów',
+            'tel. 017 860 28 53',
+        ]);
+
+        $contact = InquirySignature::extract($mail, 'anna.nowak@firma.pl', 'RE: Zapytanie ofertowe 056709365', 'anna.nowak@firma.pl');
+
+        $this->assertNotNull($contact);
+        $this->assertSame('Anna Nowak', $contact['person']);
+        $this->assertSame(['anna.nowak@firma.pl'], $contact['emails']);
+        $this->assertSame(['600 100 200'], $contact['phones']);
+        $this->assertNull($contact['company']);
+        $this->assertNull($contact['address']);
+        $this->assertStringNotContainsString('Temat:', $contact['raw']);
+
+        $this->assertEveryValueIsInRaw($contact);
+    }
+
+    /**
+     * Ponaglenie #93 bez rozpoznanego nadawcy wątku (tak liczył się kontakt przed 4c7b889): pierwszy blok
+     * Outlooka to cytat. Nad nim nie ma rozpoznawalnej stopki, więc kontaktu nie ma — zamiast adresów
+     * handlowców i numeru zapytania z historii.
+     */
+    public function test_follow_up_without_thread_sender_takes_nothing_from_the_quoted_history(): void
+    {
+        $subject = 'Zapytanie ofertowe 056709365';
+
+        $this->assertNull(InquirySignature::extract(InquiryMailTextTest::clientFollowUpMail(), 'anna.nowak@firma.pl', $subject));
+    }
+
+    /**
+     * Układ z produkcji (zapytanie #83, 06.10.2026): Thunderbird cytuje naszą ofertę bez „>”, a klient nie
+     * podpisał się nad cytatem. Pierwszy zwrot grzecznościowy stoi dopiero w cytacie — to podpis handlowca,
+     * nie kontakt klienta.
+     */
+    public function test_closing_inside_unmarked_quote_is_not_the_senders_footer(): void
+    {
+        $mail = implode("\n", [
+            'Dzień dobry,',
+            'czy oferta na kaski jest już gotowa?',
+            '',
+            'W dniu 1.10.2026',
+            'o 11:05, Handel - Supon pisze:',
+            'W załączeniu oferta.',
+            '',
+            'Pozdrawiam',
+            'Jan Handlowiec',
+            'PHT Supon Sp. z o.o.',
+            'tel. 017 860 28 53',
+        ]);
+
+        $this->assertNull(InquirySignature::extract($mail, 'anna.nowak@firma.pl', 'RE: Kaski', 'anna.nowak@firma.pl'));
+    }
+
+    /**
      * @return iterable<string, array{0: string, 1: string|null, 2: string|null}>
      */
     public static function fromHeaders(): iterable

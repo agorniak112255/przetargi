@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Support\InquiryMailText;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class InquiryMailTextTest extends TestCase
@@ -556,7 +557,113 @@ final class InquiryMailTextTest extends TestCase
         $this->assertStringNotContainsString('okularów ochronnych', $clean);
         // podpis ponaglenia to ten sam klient — idzie do stopki (kontakt), nie do analizy
         $this->assertStringNotContainsString('600 100 200', $clean);
-        $this->assertStringContainsString('tel. 600 100 200', InquiryMailText::footerOf($mail, 'RE: Okulary', 'anna.nowak@firma.pl'));
+        $footer = InquiryMailText::footerOf($mail, 'RE: Okulary', 'anna.nowak@firma.pl');
+        $this->assertStringContainsString('tel. 600 100 200', $footer);
+        // nasza oferta pod dopiskiem to cytat — nie stopka klienta
+        $this->assertStringNotContainsString('@supon.rzeszow.pl', $footer);
+        $this->assertStringNotContainsString('W załączeniu oferta', $footer);
+    }
+
+    /**
+     * Zwykła odpowiedź z cytatem (zapytania #91 i #93, 06.10.2026): stopka sięgała od podpisu do końca maila,
+     * więc do kontaktu wchodziły adresy handlowców z „Do:” i numer zapytania z „Temat:” jako telefon.
+     * Stopka kończy się na początku cytatu — w każdej postaci, w jakiej programy pocztowe go zaczynają.
+     *
+     * @return iterable<string, array{0: list<string>}>
+     */
+    public static function quoteHeaders(): iterable
+    {
+        yield 'Outlook' => [[
+            '________________________________',
+            'Od: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Wysłane: czwartek, 1 października 2026 11:05',
+            'Do: Nowak, Anna <anna.nowak@firma.pl>',
+            'DW: Izabela - Supon <izabela@supon.rzeszow.pl>',
+            'Temat: RE: Zapytanie ofertowe 056709365',
+        ]];
+        yield 'Original Message' => [[
+            '-----Original Message-----',
+            'From: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Sent: Thursday, October 1, 2026 11:05 AM',
+            'Subject: RE: Zapytanie ofertowe 056709365',
+        ]];
+        yield 'W dniu … napisał bez „>”' => [[
+            'W dniu 1.10.2026 o 11:05, Handel - Supon <handel@supon.rzeszow.pl> napisał(a):',
+        ]];
+        yield 'Thunderbird „pisze:”' => [[
+            'W dniu 1.10.2026 o 11:05, Handel - Supon pisze:',
+        ]];
+        // układ z zapytania #83
+        yield 'wstęp zawinięty na dwie linie' => [[
+            'W dniu 1.10.2026',
+            'o 11:05, Handel - Supon pisze:',
+        ]];
+        yield 'Gmail: „napisał(a):” w drugiej linii' => [[
+            'W dniu czw., 1 paź 2026 o 11:05 Handel - Supon <handel@supon.rzeszow.pl>',
+            'napisał(a):',
+        ]];
+        yield 'sam blok nagłówków' => [[
+            'From: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Sent: Thursday, October 1, 2026 11:05 AM',
+            'Subject: RE: Zapytanie ofertowe 056709365',
+        ]];
+    }
+
+    /**
+     * @param  list<string>  $quoteHeader
+     */
+    #[DataProvider('quoteHeaders')]
+    public function test_footer_stops_where_the_quote_begins(array $quoteHeader): void
+    {
+        $mail = implode("\n", [
+            'Dzień dobry,',
+            'proszę jeszcze o 5 szt. kasków ochronnych białych.',
+            '',
+            'Pozdrawiam',
+            'Anna Nowak',
+            'tel. 600 100 200',
+            ...$quoteHeader,
+            '',
+            'W załączeniu oferta.',
+            '',
+            'Pozdrawiam',
+            'Jan Handlowiec',
+            'PHT Supon Sp. z o.o.',
+            'ul. Miłocińska 17, 35-232 Rzeszów',
+            'tel. 017 860 28 53',
+        ]);
+
+        $footer = InquiryMailText::footerOf($mail, 'RE: Zapytanie ofertowe 056709365', 'anna.nowak@firma.pl');
+
+        $this->assertSame("Pozdrawiam\nAnna Nowak\ntel. 600 100 200", $footer);
+        // treść do analizy bez zmian: nowa wiadomość zostaje, cytat odpada
+        $clean = InquiryMailText::forAnalysis($mail, 'RE: Zapytanie ofertowe 056709365', 'anna.nowak@firma.pl');
+        $this->assertStringContainsString('5 szt. kasków ochronnych', $clean);
+        $this->assertStringNotContainsString('W załączeniu oferta', $clean);
+    }
+
+    /** Podpis pod „-- ” to stopka nadawcy — kończy się dopiero na cytacie pod nim. */
+    public function test_signature_under_double_dash_stays_in_the_footer_up_to_the_quote(): void
+    {
+        $mail = implode("\n", [
+            'Dzień dobry,',
+            'proszę jeszcze o 5 szt. kasków ochronnych białych.',
+            '-- ',
+            'Anna Nowak',
+            'FIRMA Sp. z o.o.',
+            'tel. 600 100 200',
+            '________________________________',
+            'Od: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Wysłane: czwartek, 1 października 2026 11:05',
+            'Do: Nowak, Anna <anna.nowak@firma.pl>',
+            'Temat: RE: Zapytanie ofertowe 056709365',
+            '',
+            'W załączeniu oferta.',
+        ]);
+
+        $footer = InquiryMailText::footerOf($mail, 'RE: Zapytanie ofertowe 056709365');
+
+        $this->assertSame("-- \nAnna Nowak\nFIRMA Sp. z o.o.\ntel. 600 100 200", $footer);
     }
 
     public static function clientFollowUpMail(): string

@@ -26,6 +26,11 @@ final class InquiryMailText
         '/^on .{0,160}wrote:\s*$/iu',
     ];
 
+    /** Wstęp cytatu w postaci „W dniu … pisze:” / „On … wrote:” — początek i koniec (zob. isQuoteIntro). */
+    private const QUOTE_INTRO_START = '/^(?:w dniu|dnia|on)\s/iu';
+
+    private const QUOTE_INTRO_END = '/(?:napisa[łl]\p{L}*(?:\s*\(a\))?|pisze|wrote)\s*:\s*$/iu';
+
     /** Nagłówek wiadomości przekazanej dalej — samo zapytanie jest pod nim. */
     private const FORWARD_MARKERS = [
         '/^-*\s*treść przekazanej wiadomości\s*-*$/iu',
@@ -140,8 +145,9 @@ final class InquiryMailText
      * Część maila odcięta przed analizą: podpis, stopka firmowa, klauzula
      * poufności albo początek cytatu. Z niej `InquirySignature` wyjmuje kontakt.
      *
-     * Cytowane linie („> …”) i nagłówek przekazania są już usunięte, więc do
-     * stopki nie wchodzą dane z cudzej, wcześniejszej wiadomości.
+     * Cytowane linie („> …”) i nagłówek przekazania są już usunięte, a stopka
+     * kończy się na początku cytatu („____” Outlooka, „W dniu … napisał”), więc
+     * do stopki nie wchodzą dane z cudzej, wcześniejszej wiadomości.
      * Pusty wynik = w mailu nie było nic do odcięcia.
      */
     public static function footerOf(string $raw, ?string $subject = null, ?string $sender = null): string
@@ -355,6 +361,12 @@ final class InquiryMailText
     }
 
     /**
+     * [treść, stopka]. Stopka kończy się tam, gdzie zaczyna się cytat poprzedniej wiadomości. Przy odpowiedzi
+     * Outlookiem pod „____” stoi cała historia wątku: adresy handlowców z „Do:”, numer zapytania z „Temat:”
+     * (brany za telefon), nasze podpisy — a stopka służy do odczytu kontaktu nadawcy (zapytania #91 i #93).
+     * „-- ” cytatu nie zaczyna: pod nim stoi właśnie podpis. Cytat nad miejscem cięcia (wstęp „W dniu … pisze:”,
+     * na którym treści nie tniemy) znaczy, że zwrot i podpis niżej są z cudzej wiadomości — stopki nie ma.
+     *
      * @return array{0: string, 1: string}
      */
     private static function cutWithFooter(string $segment): array
@@ -363,10 +375,11 @@ final class InquiryMailText
         $separator = self::separatorIndex($lines);
         $beforeSeparator = array_slice($lines, 0, $separator);
         $cut = min(self::closingIndex($beforeSeparator), self::contactIndex($beforeSeparator));
+        $quote = self::quoteIndex($lines);
 
         return [
             implode("\n", array_slice($lines, 0, $cut)),
-            implode("\n", array_slice($lines, $cut)),
+            implode("\n", array_slice($lines, $cut, max(0, $quote - $cut))),
         ];
     }
 
@@ -473,6 +486,55 @@ final class InquiryMailText
         }
 
         return count($lines);
+    }
+
+    /**
+     * Indeks linii, od której zaczyna się cytat poprzedniej wiadomości (albo koniec tekstu) — tu kończy się stopka.
+     * Jak separatorIndex(), ale „-- ” cytatu nie zaczyna (pod nim stoi podpis), a wstęp cytatu liczy się także
+     * w postaci, na której treści do analizy nie tniemy (isQuoteIntro).
+     *
+     * @param  list<string>  $lines
+     */
+    private static function quoteIndex(array $lines): int
+    {
+        foreach ($lines as $i => $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '' || preg_match(self::SIGNATURE, $line) === 1) {
+                continue;
+            }
+            if (self::matchesAny($trimmed, self::SEPARATORS) || self::isQuoteIntro($lines, $i)) {
+                return $i;
+            }
+            if ($i > 0 && preg_match(self::HEADER_LINE, $trimmed) === 1 && self::looksLikeHeaderBlock($lines, $i)) {
+                return $i;
+            }
+        }
+
+        return count($lines);
+    }
+
+    /**
+     * Wstęp cytatu, także zawinięty na dwie linie: „W dniu 5.10.2026 o 14:55, Anna Nowak pisze:” (Thunderbird;
+     * zapytanie #83 miało go w dwóch liniach) albo „W dniu pon., 5 paź 2026 o 14:55 Anna Nowak <…>” + „napisał(a):”.
+     * Treści do analizy na nim nie tniemy — pod ponagleniem klienta bywa jego własne zapytanie z pozycjami — ale
+     * stopka nadawcy kończy się tu na pewno.
+     *
+     * @param  list<string>  $lines
+     */
+    private static function isQuoteIntro(array $lines, int $i): bool
+    {
+        $line = trim($lines[$i]);
+        if (preg_match(self::QUOTE_INTRO_START, $line) !== 1) {
+            return false;
+        }
+        $next = trim($lines[$i + 1] ?? '');
+        foreach ([$line, $line.' '.$next] as $intro) {
+            if (mb_strlen($intro) <= 250 && preg_match(self::QUOTE_INTRO_END, $intro) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
