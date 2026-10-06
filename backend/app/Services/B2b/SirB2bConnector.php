@@ -379,7 +379,11 @@ final class SirB2bConnector implements B2bConnector, B2bDocumentSource, B2bForei
 
         return [
             'norm' => $norm,
-            'levels' => implode('; ', array_map(static fn (array $l): string => $l['name'] !== '' ? $l['name'].': '.$l['value'] : $l['value'], $levels)),
+            // nazwy poziomów sklep podaje po włosku — po polsku ze słownika (SirShopTranslations), wartości dosłownie
+            'levels' => implode('; ', array_map(
+                static fn (array $l): string => $l['name'] !== '' ? SirShopTranslations::levelLabel($l['name']).': '.$l['value'] : $l['value'],
+                $levels,
+            )),
         ];
     }
 
@@ -811,7 +815,8 @@ final class SirB2bConnector implements B2bConnector, B2bDocumentSource, B2bForei
     }
 
     /**
-     * Kategoria: dział > grupa towarowa po angielsku ze słownika SAP („GLOVES > GLOVES LEATHER”); bez słownika — nazwa
+     * Kategoria: dział > grupa towarowa ze słownika SAP, po polsku z SirShopTranslations (06.10.2026: „Rękawice >
+     * Rękawice chroniące przed przecięciem”; nazwa spoza słownika zostaje po angielsku); bez słownika SAP — nazwa
      * działu z wyrobu.
      *
      * @param  array<string, mixed>  $father
@@ -820,17 +825,11 @@ final class SirB2bConnector implements B2bConnector, B2bDocumentSource, B2bForei
     {
         $class = self::clean((string) ($father['CLASS'] ?? ''));
         $group = self::clean((string) ($father['MATKL'] ?? ''));
-        $parts = [];
-        $className = $this->dictionary['classes'][$class] ?? self::clean((string) ($father['CLASS_NAME'] ?? ''));
-        if ($className !== '') {
-            $parts[] = $className;
-        }
-        $groupName = $this->dictionary['groups'][$group] ?? '';
-        if ($groupName !== '' && ! in_array($groupName, $parts, true)) {
-            $parts[] = $groupName;
-        }
 
-        return $parts !== [] ? implode(' > ', $parts) : null;
+        return SirShopTranslations::categoryPath(
+            self::clean($this->dictionary['classes'][$class] ?? (string) ($father['CLASS_NAME'] ?? '')),
+            self::clean($this->dictionary['groups'][$group] ?? ''),
+        );
     }
 
     /**
@@ -875,16 +874,17 @@ final class SirB2bConnector implements B2bConnector, B2bDocumentSource, B2bForei
 
         $add(self::SECTION_MAIN, 'Kod wyrobu', $id);
         $add(self::SECTION_MAIN, 'Dawne kody SIR', implode(', ', self::legacyCodes((string) ($father['BISMT'] ?? ''))));
-        $add(self::SECTION_MAIN, 'Dział', $this->dictionary['classes'][$class] ?? (string) ($father['CLASS_NAME'] ?? ''));
-        $add(self::SECTION_MAIN, 'Grupa towarowa', $this->dictionary['groups'][$group] ?? '');
-        $add(self::SECTION_MAIN, 'Kategoria ŚOI', (string) ($father['DPI_CATEG'] ?? ''));
-        $add(self::SECTION_MAIN, 'Kolory', implode(', ', $colours));
+        // wartości ze słowników sklepu po polsku (SirShopTranslations); kody (wyrobu, koloru w nawiasie) dosłownie
+        $add(self::SECTION_MAIN, 'Dział', SirShopTranslations::department(self::clean($this->dictionary['classes'][$class] ?? (string) ($father['CLASS_NAME'] ?? ''))));
+        $add(self::SECTION_MAIN, 'Grupa towarowa', SirShopTranslations::group(self::clean($this->dictionary['groups'][$group] ?? '')));
+        $add(self::SECTION_MAIN, 'Kategoria ŚOI', SirShopTranslations::ppeCategory(self::clean((string) ($father['DPI_CATEG'] ?? ''))));
+        $add(self::SECTION_MAIN, 'Kolory', implode(', ', array_map(SirShopTranslations::colour(...), $colours)));
         $add(self::SECTION_MAIN, 'Rozmiary', implode(', ', array_map('strval', $sizes)));
-        $add(self::SECTION_MAIN, 'Jednostka', (string) ($father['MSEHT'] ?? ''));
+        $add(self::SECTION_MAIN, 'Jednostka', SirShopTranslations::unit(self::clean((string) ($father['MSEHT'] ?? ''))));
         $add(self::SECTION_MAIN, 'Ilość w opakowaniu', self::quantity($father['PACK_QTY'] ?? null));
         $add(self::SECTION_MAIN, 'Ilość w kartonie', self::quantity($father['CART_QTY'] ?? null));
         $add(self::SECTION_MAIN, 'Minimalne zamówienie', self::quantity($father['AUMNG'] ?? null));
-        $add(self::SECTION_MAIN, 'Kraj pochodzenia', (string) ($father['WHERL'] ?? ''));
+        $add(self::SECTION_MAIN, 'Kraj pochodzenia', SirShopTranslations::country(self::clean((string) ($father['WHERL'] ?? ''))));
 
         $seen = [];
         $levelRows = [];

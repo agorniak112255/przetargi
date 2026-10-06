@@ -3312,7 +3312,8 @@ final class B2bCatalogSync
         ?array &$warnings = null,
         bool $takeDescription = true,
     ): array {
-        if ($remote->category !== null && trim((string) ($existing?->category ?? '')) === '') {
+        if ($remote->category !== null
+            && (trim((string) ($existing?->category ?? '')) === '' || $this->followsShopCategory($existing, $link, $remote->category))) {
             $payload['category'] = mb_substr($remote->category, 0, 255);
             $payload['category_source'] = Product::CATEGORY_SOURCE_B2B;
         }
@@ -3399,6 +3400,29 @@ final class B2bCatalogSync
         }
 
         return [$descriptionHash, false];
+    }
+
+    /**
+     * Kategoria wpisana przez sklep B2B i od tamtej pory nietknięta idzie za kategorią sklepu (06.10.2026: kategorie
+     * SIR po polsku ze słownika — 1079 kart miało angielską ścieżkę, a kategorię wpisuje się tylko na pustą kartę).
+     * Nietknięta = źródło b2b i ta sama treść co kategoria-dowód z poprzedniego przebiegu; wybór w panelu (manual),
+     * mapa Presty i ścieżka drzewa mają inne źródło. Tylko karta z jednym kontem B2B — dwa sklepy z różną kategorią
+     * przestawiałyby ją sobie przy każdym przebiegu.
+     */
+    private function followsShopCategory(?Product $existing, ?B2bProductLink $link, string $category): bool
+    {
+        if ($existing === null || $link === null || $existing->category_source !== Product::CATEGORY_SOURCE_B2B) {
+            return false;
+        }
+        $current = trim((string) $existing->category);
+        if ($current === trim($category) || $current !== trim((string) $existing->category_evidence)) {
+            return false;
+        }
+
+        return ! B2bProductLink::query()
+            ->where('product_id', $existing->id)
+            ->where('b2b_account_id', '!=', $link->b2b_account_id)
+            ->exists();
     }
 
     /**

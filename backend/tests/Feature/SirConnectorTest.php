@@ -166,11 +166,12 @@ final class SirConnectorTest extends TestCase
         $this->assertSame(['norm' => 'EN ISO 21420', 'levels' => ''], SirB2bConnector::normRow('EN ISO 21420', []));
         // poziomy jednoznakowe innej normy nie są kodem: „EN 166 F1” zmieniłoby znaczenie
         $this->assertSame(
-            ['norm' => 'EN 166', 'levels' => "Resistenza all'impatto: F; Classe ottica: 1"],
+            // nazwy poziomów po polsku ze słownika (sklep podaje je po włosku), wartości dosłownie
+            ['norm' => 'EN 166', 'levels' => 'Wytrzymałość mechaniczna: F; Klasa optyczna: 1'],
             SirB2bConnector::normRow('EN 166', [$level("Resistenza all'impatto", 'F'), $level('Classe ottica ', '1')]),
         );
         $this->assertSame(
-            ['norm' => 'EN ISO 11612', 'levels' => 'Comportamento alla Fiamma: A1+A2; Calore convettivo: B1'],
+            ['norm' => 'EN ISO 11612', 'levels' => 'Rozprzestrzenianie płomienia: A1+A2; Ciepło konwekcyjne: B1'],
             SirB2bConnector::normRow('EN ISO 11612', [$level('Comportamento alla Fiamma', 'A1+A2'), $level('Calore convettivo', 'B1'), $level('Spruzzi di Alluminio fuso', '')]),
         );
         // EN 388 z poziomem wieloznakowym — nie kod
@@ -196,7 +197,8 @@ final class SirConnectorTest extends TestCase
         $this->assertSame('ok', $gloves->raw['status']);
         $this->assertSame('MA9001B009', $gloves->remoteId);
         $this->assertSame('TESTVIC glove MA9001', $gloves->name);
-        $this->assertSame('GLOVES > GLOVES LEATHER', $gloves->category);
+        // dział ze słownika po polsku; grupa spoza słownika zostaje dosłownie (nie zgadujemy tłumaczenia)
+        $this->assertSame('Rękawice > GLOVES LEATHER', $gloves->category);
         $this->assertSame('https://b2b.sirsafety.com/b2b/product/MA9001', $gloves->sourceUrl);
         $this->assertSame('SIR Safety System', $connector->manufacturer($gloves));
         $this->assertSame('Kolor: GREY (B0); rozmiary: 9, 10', $gloves->variantSummary);
@@ -229,16 +231,16 @@ final class SirConnectorTest extends TestCase
             [
                 'Informacje ze sklepu SIR | Kod wyrobu | MA9001',
                 'Informacje ze sklepu SIR | Dawne kody SIR | 11104',
-                'Informacje ze sklepu SIR | Dział | GLOVES',
+                'Informacje ze sklepu SIR | Dział | Rękawice',
                 'Informacje ze sklepu SIR | Grupa towarowa | GLOVES LEATHER',
                 'Informacje ze sklepu SIR | Kategoria ŚOI | II',
-                'Informacje ze sklepu SIR | Kolory | GREY (B0)',
+                'Informacje ze sklepu SIR | Kolory | szary (B0)',
                 'Informacje ze sklepu SIR | Rozmiary | 9, 10',
-                'Informacje ze sklepu SIR | Jednostka | Pair',
+                'Informacje ze sklepu SIR | Jednostka | para',
                 'Informacje ze sklepu SIR | Ilość w opakowaniu | 12',
                 'Informacje ze sklepu SIR | Ilość w kartonie | 60',
                 'Informacje ze sklepu SIR | Minimalne zamówienie | 12',
-                'Informacje ze sklepu SIR | Kraj pochodzenia | IN',
+                'Informacje ze sklepu SIR | Kraj pochodzenia | Indie',
                 'Normy | Norma | EN 388 3143X',
                 'Normy | Norma | EN ISO 21420',
             ],
@@ -270,7 +272,7 @@ final class SirConnectorTest extends TestCase
         $this->assertFalse($connector->price($trousers)->order->varies);
         $this->assertSame('', $connector->description($trousers));
         $this->assertSame(
-            ['Normy | Norma | EN ISO 13688', 'Normy | Norma | EN 343', "Normy | Poziomy EN 343 | Resistenza alla penetrazione dell'acqua: 3; Resistenza al vapore acqueo: 1"],
+            ['Normy | Norma | EN ISO 13688', 'Normy | Norma | EN 343', 'Normy | Poziomy EN 343 | Wodoszczelność: 3; Opór pary wodnej: 1'],
             array_values(array_filter(
                 array_map(static fn ($f): string => $f->section.' | '.$f->name.' | '.$f->value, $connector->shopFields($trousers)),
                 static fn (string $r): bool => str_starts_with($r, 'Normy'),
