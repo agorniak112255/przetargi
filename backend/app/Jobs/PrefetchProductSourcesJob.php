@@ -15,6 +15,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -35,6 +36,15 @@ class PrefetchProductSourcesJob implements ShouldQueue
     public array $backoff = [5, 5, 10];
 
     public int $timeout = 180;
+
+    /**
+     * Przekroczony czas = od razu failed() i przekazanie produktu do EnrichProductJob, bez ponowień.
+     * Ponowienie po limicie czasu powtarzało to samo wolne szukanie (przy force od czystej pamięci zapytań)
+     * i za każdym razem zlecało opis od nowa, a po 8 próbach produkt zostawał bez EnrichProductJob.
+     * Batch #491 (Ansell, 06.10.2026): 117 ze 150 prefetchy padło tak po ~1,5 h, 110 pozycji wisiało
+     * w „running” bez żadnego joba w kolejce, a jedna karta dostała 8 przebiegów opisu.
+     */
+    public bool $failOnTimeout = true;
 
     /** Osobna kolejka — szukanie nie blokuje slotów vLLM. */
     public const QUEUE = 'prefetch';
@@ -77,14 +87,7 @@ class PrefetchProductSourcesJob implements ShouldQueue
             return;
         }
 
-        $dispatched = false;
-        $dispatchEnrich = function () use (&$dispatched): void {
-            if ($dispatched) {
-                return;
-            }
-            $dispatched = true;
-            EnrichProductJob::dispatch($this->productId, $this->batchId, $this->force);
-        };
+        $dispatchEnrich = fn () => $this->dispatchEnrichOnce();
 
         try {
             $batch->update([
@@ -115,5 +118,43 @@ class PrefetchProductSourcesJob implements ShouldQueue
         }
 
         $dispatchEnrich();
+    }
+
+    /**
+     * Prefetch to tylko rozgrzanie źródeł: jego porażka (limit czasu, wyczerpane próby) nie może zostawić
+     * produktu bez EnrichProductJob, bo pozycja batcha wisiałaby w „running” na zawsze. Opis sam szuka
+     * na żywo, gdy pakietu z prefetchu brak.
+     */
+    public function failed(?Throwable $e): void
+    {
+        $batch = ProductEnrichmentBatch::query()->find($this->batchId);
+        if ($batch === null || $batch->isCancelled()) {
+            return;
+        }
+
+        Log::info('Product source prefetch failed, enrich will search live', [
+            'product_id' => $this->productId,
+            'batch_id' => $this->batchId,
+            'error' => $e?->getMessage(),
+        ]);
+        $this->dispatchEnrichOnce();
+    }
+
+    /**
+     * Jeden EnrichProductJob na produkt w batchu. Znacznik w cache, nie w pamięci joba: przy limicie czasu
+     * worker ginie, więc failed() nie wie, czy przed przerwaniem opis był już zlecony (wyszukiwanie skończone,
+     * przerwało dopiero pobieranie stron).
+     */
+    private function dispatchEnrichOnce(): void
+    {
+        if (! Cache::add(self::enrichDispatchedKey($this->batchId, $this->productId), true, now()->addDay())) {
+            return;
+        }
+        EnrichProductJob::dispatch($this->productId, $this->batchId, $this->force);
+    }
+
+    private static function enrichDispatchedKey(int $batchId, int $productId): string
+    {
+        return 'enrichment:prefetch-enrich-dispatched:'.$batchId.':'.$productId;
     }
 }

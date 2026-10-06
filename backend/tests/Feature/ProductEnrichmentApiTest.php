@@ -43,6 +43,7 @@ use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Queue\TimeoutExceededException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -723,6 +724,84 @@ final class ProductEnrichmentApiTest extends TestCase
         Queue::assertPushed(EnrichProductJob::class, 1);
         Queue::assertPushedOn('enrich', EnrichProductJob::class);
         Http::assertSentCount(1);
+    }
+
+    public function test_prefetch_timeout_hands_product_over_to_enrich(): void
+    {
+        Queue::fake();
+        $product = $this->makeProduct(['sku' => 'PF-TIMEOUT', 'manufacturer' => 'Ansell']);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 1,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'force' => true,
+        ]);
+
+        $job = new PrefetchProductSourcesJob($product->id, $batch->id, true);
+        // limit czasu ma kończyć się failed(), a nie 8 ponowieniami tego samego szukania
+        $this->assertTrue($job->failOnTimeout);
+
+        $job->failed(new TimeoutExceededException(PrefetchProductSourcesJob::class.' has timed out.'));
+
+        Queue::assertPushed(EnrichProductJob::class, 1);
+        Queue::assertPushed(
+            EnrichProductJob::class,
+            fn (EnrichProductJob $enrich): bool => $enrich->productId === $product->id
+                && $enrich->batchId === $batch->id
+                && $enrich->force
+        );
+    }
+
+    public function test_prefetch_failure_after_search_does_not_dispatch_enrich_twice(): void
+    {
+        Queue::fake();
+        $product = $this->makeProduct(['sku' => 'PF-ONCE', 'manufacturer' => 'Uvex']);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCT,
+            'scope_id' => $product->id,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_QUEUED,
+            'force' => false,
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => []]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+
+        (new PrefetchProductSourcesJob($product->id, $batch->id))
+            ->handle(app(ProductEnrichmentService::class), app(PrefetchSlots::class));
+        // limit czasu przy pobieraniu stron: opis zlecony już po wyszukiwaniu, failed() przychodzi z nowej instancji joba
+        (new PrefetchProductSourcesJob($product->id, $batch->id))
+            ->failed(new TimeoutExceededException(PrefetchProductSourcesJob::class.' has timed out.'));
+
+        Queue::assertPushed(EnrichProductJob::class, 1);
+    }
+
+    public function test_prefetch_failure_of_cancelled_batch_does_not_dispatch_enrich(): void
+    {
+        Queue::fake();
+        $product = $this->makeProduct(['sku' => 'PF-CANCEL']);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCT,
+            'scope_id' => $product->id,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_CANCELLED,
+            'force' => false,
+        ]);
+
+        (new PrefetchProductSourcesJob($product->id, $batch->id))
+            ->failed(new TimeoutExceededException(PrefetchProductSourcesJob::class.' has timed out.'));
+
+        Queue::assertNotPushed(EnrichProductJob::class);
     }
 
     public function test_enrich_reuses_prefetch_search_pack_without_second_search(): void
