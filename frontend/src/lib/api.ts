@@ -671,6 +671,9 @@ export type Product = {
   variants_currency?: string | null
   /** Lista produktów z wyszukiwaniem: kody towarów ERP XL (pewne powiązania), po których karta się znalazła. */
   erp_codes?: string[]
+  /** Lista produktów z wyszukiwaniem: numery ze źródła ceny (np. drugi kolor karty łączonej, „0723381-0 (black)”),
+   *  po których karta się znalazła; bez numeru równego SKU karty. */
+  matched_codes?: string[]
   /** Karta pozycji przetargu: aktywne warianty (kolor, rozmiar, kod) do wyboru w ofercie. */
   active_variants?: ProductActiveVariant[]
   enrichment_payload?: {

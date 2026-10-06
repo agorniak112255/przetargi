@@ -1395,6 +1395,14 @@ export function Products() {
                         XL: {p.erp_codes.join(', ')}
                       </div>
                     )}
+                    {p.matched_codes && p.matched_codes.length > 0 && (
+                      <div
+                        className="mt-0.5 font-mono text-[10px] text-slate-500"
+                        title="Numer z cennika, po którym znalazła się karta (np. inny kolor albo rozmiar połączony w tej karcie)"
+                      >
+                        numer: {p.matched_codes.join(', ')}
+                      </div>
+                    )}
                   </td>
                   <td className="p-2 min-w-[14rem] max-w-[26rem]">
                     {/* Długa nazwa do trzech linii (wiersz i tak ma wysokość zdjęcia i przycisków); pełna w podpowiedzi.

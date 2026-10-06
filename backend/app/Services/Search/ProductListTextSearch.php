@@ -103,7 +103,8 @@ final class ProductListTextSearch
      *
      * @param  Builder<Product>  $query
      * @param  list<string>  $words  ProductListTextSearch::phraseWords()
-     * @param  array<string, list<int>>  $erpIdsByWord  słowo → karty wskazane kodem ERP XL (ErpCodeSearch)
+     * @param  array<string, list<int>>  $erpIdsByWord  słowo → karty wskazane kodem ERP XL (ErpCodeSearch) albo numerem ze
+     *                                                  źródła ceny (ProductIdentifierSearch)
      */
     public function applyAllWords(Builder $query, array $words, array $erpIdsByWord): void
     {

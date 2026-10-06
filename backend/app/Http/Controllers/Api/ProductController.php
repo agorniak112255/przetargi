@@ -33,6 +33,7 @@ use App\Services\Pricing\SourcePriceComparison;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
+use App\Services\Search\ProductIdentifierSearch;
 use App\Services\Search\ProductListTextSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ManufacturerNormFacts;
@@ -99,8 +100,10 @@ class ProductController extends Controller
             ]);
 
         $searchTerm = null;
-        // karty wskazane kodem towaru ERP XL (id → kody XL) — dochodzą do wyników obok dopasowań SKU i nazwy
+        // karty wskazane kodem towaru ERP XL (id → kody XL) i numerem ze źródła ceny (id → trafione numery, np. drugi
+        // kolor karty łączonej) — dochodzą do wyników obok dopasowań SKU i nazwy
         $erpCodes = [];
+        $numberHits = [];
         if ($request->filled('q')) {
             $term = trim((string) $request->string('q'));
             $searchTerm = $term;
@@ -114,19 +117,27 @@ class ProductController extends Controller
                 $erpByWord = [];
                 foreach ($words as $word) {
                     $wordCodes = app(ErpCodeSearch::class)->productCodes($word);
-                    $erpByWord[$word] = array_keys($wordCodes);
+                    $wordNumbers = app(ProductIdentifierSearch::class)->productCodes($word);
+                    $erpByWord[$word] = array_values(array_unique([...array_keys($wordCodes), ...array_keys($wordNumbers)]));
                     foreach ($wordCodes as $id => $codes) {
                         $erpCodes[$id] = array_values(array_unique([...($erpCodes[$id] ?? []), ...$codes]));
+                    }
+                    foreach ($wordNumbers as $id => $hit) {
+                        $numberHits[$id] = [
+                            'codes' => array_values(array_unique([...($numberHits[$id]['codes'] ?? []), ...$hit['codes']])),
+                            'exact' => ($numberHits[$id]['exact'] ?? false) || $hit['exact'],
+                        ];
                     }
                 }
                 $this->textSearch->applyAllWords($query, $words, $erpByWord);
             } else {
                 $erpCodes = app(ErpCodeSearch::class)->productCodes($term);
-                if ($erpCodes !== []) {
-                    $erpIds = array_keys($erpCodes);
+                $numberHits = app(ProductIdentifierSearch::class)->productCodes($term);
+                $codeIds = array_values(array_unique([...array_keys($erpCodes), ...array_keys($numberHits)]));
+                if ($codeIds !== []) {
                     $query->where(fn ($outer) => $outer
                         ->where(fn ($text) => $this->textSearch->applyTextSearch($text, $term))
-                        ->orWhereIn('id', $erpIds));
+                        ->orWhereIn('id', $codeIds));
                 } else {
                     $this->textSearch->applyTextSearch($query, $term);
                 }
@@ -217,9 +228,13 @@ class ProductController extends Controller
         // („BW200/LB202FLR/AZ003/2AZ029” → „w200”, „lb202flr”, „az003”…) i zwraca całą rodzinę wyrobu, więc
         // szukana karta stała dotąd w środku listy ułożonej alfabetycznie — na siódmej stronie wyników.
         // Zbioru wyników to nie zawęża: zmienia się tylko kolejność, wybrane sortowanie zostaje kluczem dalszym.
-        // Karta wskazana kodem ERP XL stoi razem z dokładnym SKU.
+        // Karta wskazana kodem ERP XL albo numerem ze źródła równym całej frazie stoi razem z dokładnym SKU.
         if ($searchTerm !== null && $searchTerm !== '') {
-            $this->textSearch->orderByMatch($query, $searchTerm, array_keys($erpCodes));
+            $this->textSearch->orderByMatch(
+                $query,
+                $searchTerm,
+                array_values(array_unique([...array_keys($erpCodes), ...ProductIdentifierSearch::exactIds($numberHits)])),
+            );
         }
 
         // Sortowanie idzie po cenach zapisanych: karta z ceną specjalną stoi tam, gdzie jej cena konta, choć widz bez
@@ -304,7 +319,7 @@ class ProductController extends Controller
         $cheaper = $this->comparison->cheaperSources(collect(array_values($models)), $mask);
         // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — stała liczba zapytań na stronę
         $orderQuantities = $this->comparison->orderQuantities(collect(array_values($models)), $mask);
-        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities, $erpCodes, $mask): array {
+        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities, $erpCodes, $numberHits, $mask): array {
             $id = (int) $row['id'];
             $row['cheaper_source'] = $cheaper[$id] ?? null;
             $row['order_quantity'] = $orderQuantities[$id] ?? null;
@@ -325,6 +340,8 @@ class ProductController extends Controller
             $row['variants_currency'] = $summary['variants_currency'] ?? null;
             // kody ERP XL, po których wyszukiwarka znalazła kartę (pusta lista, gdy trafiła po SKU albo nazwie)
             $row['erp_codes'] = $erpCodes[(int) $row['id']] ?? [];
+            // numery ze źródła ceny, po których wyszukiwarka znalazła kartę (bez numeru równego SKU karty)
+            $row['matched_codes'] = $numberHits[(int) $row['id']]['codes'] ?? [];
 
             // na końcu: ocena wyżej szuka slotu w prawdziwej cenie karty; maska podmienia ceny i ocenę na standardowe
             return $mask->productRow($row);
@@ -404,10 +421,12 @@ class ProductController extends Controller
     {
         $request->validate(['q' => ['required', 'string', 'max:200']]);
         $codes = app(ErpCodeSearch::class);
+        $numbers = app(ProductIdentifierSearch::class);
         $out = [];
         foreach (ProductListTextSearch::phraseWords((string) $request->string('q'), 6) as $word) {
             $count = Product::query();
-            $this->textSearch->applyAllWords($count, [$word], [$word => array_keys($codes->productCodes($word))]);
+            $ids = array_values(array_unique([...array_keys($codes->productCodes($word)), ...array_keys($numbers->productCodes($word))]));
+            $this->textSearch->applyAllWords($count, [$word], [$word => $ids]);
             $out[] = ['word' => $word, 'count' => $count->count()];
         }
 

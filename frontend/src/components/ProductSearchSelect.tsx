@@ -14,6 +14,7 @@ type MiniProduct = {
   currency?: string | null
   images?: Product['images']
   erp_codes?: string[]
+  matched_codes?: string[]
 }
 
 type Props = {
@@ -134,8 +135,13 @@ export function ProductSearchSelect({
     const parts = needle.split(/\s+/).filter(Boolean)
     return all
       .filter((p) => {
-        const hay = norm(`${p.sku} ${p.name} ${p.manufacturer ?? ''} ${(p.erp_codes ?? []).join(' ')}`)
-        return parts.every((part) => hay.includes(part))
+        const hay = norm(`${p.sku} ${p.name} ${p.manufacturer ?? ''} ${(p.erp_codes ?? []).join(' ')} ${(p.matched_codes ?? []).join(' ')}`)
+        // numer z cennika serwer porównuje bez kresek i spacji („07233810” trafia „0723381-0”)
+        const codes = norm((p.matched_codes ?? []).join(' ')).replace(/[^a-z0-9]/g, '')
+        return parts.every((part) => {
+          const compact = part.replace(/[^a-z0-9]/g, '')
+          return hay.includes(part) || (compact !== '' && codes.includes(compact))
+        })
       })
       .slice(0, 80)
   }, [products, remote, q, selected])
@@ -230,6 +236,9 @@ export function ProductSearchSelect({
                 {productDisplayName(p, 48)}
                 {p.erp_codes && p.erp_codes.length > 0 && (
                   <span className="ml-1 font-mono text-[10px] text-slate-500">(kod w XL: {p.erp_codes.join(', ')})</span>
+                )}
+                {p.matched_codes && p.matched_codes.length > 0 && (
+                  <span className="ml-1 font-mono text-[10px] text-slate-500">(numer: {p.matched_codes.join(', ')})</span>
                 )}
               </button>
             </li>

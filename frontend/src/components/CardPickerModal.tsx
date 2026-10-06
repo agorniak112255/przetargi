@@ -519,6 +519,9 @@ export function CardPickerModal({
                         {p && (p.erp_codes?.length ?? 0) > 0 && (
                           <span className="block font-mono text-[10px] text-slate-500">kod w XL: {p.erp_codes!.join(', ')}</span>
                         )}
+                        {p && (p.matched_codes?.length ?? 0) > 0 && (
+                          <span className="block font-mono text-[10px] text-slate-500">numer: {p.matched_codes!.join(', ')}</span>
+                        )}
                       </span>
                       <span className="flex shrink-0 flex-col items-end gap-1">
                         {p && (

@@ -48,6 +48,7 @@ final class GlobalSearch
     public function __construct(
         private readonly ProductListTextSearch $productText,
         private readonly ErpCodeSearch $erpCodes,
+        private readonly ProductIdentifierSearch $numbers,
     ) {}
 
     /**
@@ -103,29 +104,36 @@ final class GlobalSearch
 
     /**
      * Te same karty i ta sama kolejność co lista produktów (/products?q=, sortowanie po nazwie): SKU, nazwa, producent,
-     * numer modelu, marka i kod towaru ERP XL (pewne powiązania).
+     * numer modelu, marka, kod towaru ERP XL (pewne powiązania) i numer ze źródła ceny (ProductIdentifierSearch).
      *
      * @return list<array<string, mixed>>
      */
     private function products(User $user, string $q): array
     {
         $erpCodes = $this->erpCodes->productCodes($q);
+        $numberHits = $this->numbers->productCodes($q);
+        $codeIds = array_values(array_unique([...array_keys($erpCodes), ...array_keys($numberHits)]));
         $query = Product::query()->select(['id', 'sku', 'name', 'manufacturer']);
-        if ($erpCodes !== []) {
+        if ($codeIds !== []) {
             $query->where(fn (Builder $outer) => $outer
                 ->where(fn (Builder $text) => $this->productText->applyTextSearch($text, $q))
-                ->orWhereIn('id', array_keys($erpCodes)));
+                ->orWhereIn('id', $codeIds));
         } else {
             $this->productText->applyTextSearch($query, $q);
         }
-        $this->productText->orderByMatch($query, $q, array_keys($erpCodes));
+        $this->productText->orderByMatch(
+            $query,
+            $q,
+            array_values(array_unique([...array_keys($erpCodes), ...ProductIdentifierSearch::exactIds($numberHits)])),
+        );
         $products = $query->orderBy('name')->orderBy('id')->limit(self::FETCH)->get();
 
         $stocks = $user->can('inventory.view') ? $this->stocks($products->pluck('id')->map(static fn ($id): int => (int) $id)->all()) : null;
 
-        return $products->map(static function (Product $p) use ($erpCodes, $stocks): array {
+        return $products->map(static function (Product $p) use ($erpCodes, $numberHits, $stocks): array {
             $id = (int) $p->id;
             $codes = $erpCodes[$id] ?? [];
+            $numbers = $numberHits[$id]['codes'] ?? [];
             $hit = [
                 'id' => $id,
                 'title' => (string) $p->name,
@@ -133,7 +141,10 @@ final class GlobalSearch
                     trim((string) $p->sku) !== '' ? 'kod produktu '.$p->sku : null,
                     $p->manufacturer,
                 ]),
-                'detail' => $codes !== [] ? 'kod w ERP XL: '.implode(', ', $codes) : null,
+                'detail' => self::join([
+                    $numbers !== [] ? 'numer w cenniku: '.implode(', ', $numbers) : null,
+                    $codes !== [] ? 'kod w ERP XL: '.implode(', ', $codes) : null,
+                ]),
                 'badge' => null,
                 'url' => '/products/'.$id,
             ];
