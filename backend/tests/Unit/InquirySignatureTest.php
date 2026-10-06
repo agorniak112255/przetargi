@@ -167,7 +167,22 @@ final class InquirySignatureTest extends TestCase
      */
     public function test_reply_over_outlook_quote_reads_only_the_senders_footer(): void
     {
-        $mail = implode("\n", [
+        $contact = InquirySignature::extract(self::replyOverOutlookQuoteMail(), 'anna.nowak@firma.pl', 'RE: Zapytanie ofertowe 056709365', 'anna.nowak@firma.pl');
+
+        $this->assertNotNull($contact);
+        $this->assertSame('Anna Nowak', $contact['person']);
+        $this->assertSame(['anna.nowak@firma.pl'], $contact['emails']);
+        $this->assertSame(['600 100 200'], $contact['phones']);
+        $this->assertNull($contact['company']);
+        $this->assertNull($contact['address']);
+        $this->assertStringNotContainsString('Temat:', $contact['raw']);
+
+        $this->assertEveryValueIsInRaw($contact);
+    }
+
+    public static function replyOverOutlookQuoteMail(): string
+    {
+        return implode("\n", [
             'Dzień dobry,',
             'proszę jeszcze o 5 szt. kasków ochronnych białych.',
             '',
@@ -190,18 +205,6 @@ final class InquirySignatureTest extends TestCase
             'ul. Miłocińska 17, 35-232 Rzeszów',
             'tel. 017 860 28 53',
         ]);
-
-        $contact = InquirySignature::extract($mail, 'anna.nowak@firma.pl', 'RE: Zapytanie ofertowe 056709365', 'anna.nowak@firma.pl');
-
-        $this->assertNotNull($contact);
-        $this->assertSame('Anna Nowak', $contact['person']);
-        $this->assertSame(['anna.nowak@firma.pl'], $contact['emails']);
-        $this->assertSame(['600 100 200'], $contact['phones']);
-        $this->assertNull($contact['company']);
-        $this->assertNull($contact['address']);
-        $this->assertStringNotContainsString('Temat:', $contact['raw']);
-
-        $this->assertEveryValueIsInRaw($contact);
     }
 
     /**

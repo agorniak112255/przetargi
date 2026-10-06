@@ -281,18 +281,55 @@ final class ClientInquiryService
     public static function threadSender(?string $from): ?string
     {
         $email = InquirySignature::splitFrom($from)['email'];
-        if ($email === null) {
-            return null;
-        }
+
+        return $email === null || self::isInternalEmail($email) ? null : $email;
+    }
+
+    /** Adres w naszej domenie (`config/inquiries.php` → internal_email_domains), także w poddomenie. */
+    public static function isInternalEmail(string $email): bool
+    {
         $domain = mb_strtolower(substr((string) strrchr($email, '@'), 1));
         foreach ((array) config('inquiries.internal_email_domains', []) as $internal) {
             $internal = mb_strtolower(trim((string) $internal));
             if ($internal !== '' && ($domain === $internal || str_ends_with($domain, '.'.$internal))) {
-                return null;
+                return true;
             }
         }
 
-        return $email;
+        return false;
+    }
+
+    /**
+     * Kontakt ze stopki maila — ten sam przy zakładaniu zapytania i przy przeliczeniu zapisanych
+     * (inquiries:recompute-contact). Plik nie ma stopki maila: „stopką” byłoby wszystko po nagłówku firmowym
+     * pisma, więc liczy się tylko mail wklejony nad nim.
+     *
+     * @return array{person: string|null, company: string|null, emails: list<string>, phones: list<string>, address: string|null, website: string|null, raw: string}|null
+     */
+    public static function contactFromMail(string $body, ?string $channel, ?string $subject, ?string $from): ?array
+    {
+        $mailPart = self::hasFilePart($body, $channel) ? self::splitAtFileMarker($body)[0] : $body;
+
+        return $mailPart === ''
+            ? null
+            : InquirySignature::extract($mailPart, InquirySignature::splitFrom($from)['email'], $subject, self::threadSender($from));
+    }
+
+    /**
+     * Kontakt zapisanego zapytania przeliczony obecnym kodem, z tych samych pól co przy zakładaniu. Temat to
+     * source_subject z bazy — gdy handlowiec żadnego nie podał, analiza dopisała go z treści i tak samo czyta go
+     * „Ponów analizę”.
+     *
+     * @return array{person: string|null, company: string|null, emails: list<string>, phones: list<string>, address: string|null, website: string|null, raw: string}|null
+     */
+    public function recomputedContact(ClientInquiry $inquiry): ?array
+    {
+        return self::contactFromMail(
+            (string) $inquiry->source_body,
+            $this->nullable($inquiry->source_channel) ?? 'web',
+            $this->nullable($inquiry->source_subject),
+            $this->nullable($inquiry->source_from_email),
+        );
     }
 
     /**
@@ -348,11 +385,7 @@ final class ClientInquiryService
         // Nadawca z nagłówka From i kontakt z odciętej stopki — obie rzeczy
         // pochodzą wprost z maila, nic tu nie jest domyślane.
         $sender = InquirySignature::splitFrom($this->nullable($source['from'] ?? null));
-        // Plik nie ma stopki maila — „stopką” byłoby wszystko po nagłówku firmowym pisma.
-        $mailPart = $fromFile ? self::splitAtFileMarker($body)[0] : $body;
-        $contact = $mailPart === ''
-            ? null
-            : InquirySignature::extract($mailPart, $sender['email'], $this->nullable($subject), $threadSender);
+        $contact = self::contactFromMail($body, $channel, $this->nullable($subject), $this->nullable($source['from'] ?? null));
         // Przed zapisem nowego wiersza: potem to on byłby „ostatnim zapytaniem” i warunki przepadłyby.
         $preferences = $this->lastPreferences($user);
 
