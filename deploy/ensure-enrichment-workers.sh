@@ -2,12 +2,15 @@
 # Trzy pule workerów:
 #   - enrich (domyślnie 16) — tylko vLLM / opisy
 #   - prefetch (domyślnie tyle, ile publicznych IP, min. 5, maks. 16) — SearXNG + HTML
-#   - embeddings (domyślnie 3) — wektory do Qdranta, własna tabela jobs_embeddings
+#   - embeddings (domyślnie 1) — wektory do Qdranta, własna tabela jobs_embeddings
 # Kolejka embeddings ma własną, małą pulę: gdy chodziła razem z enrich, wszystkie 16 workerów
 # pobierało z niej zadania w kółko (jedno zadanie to jeden krótki zapis), a `select ... for update`
 # na tabeli `jobs` zakleszczał się z kasowaniem wykonanych wierszy — 22.09.2026 dało to 620 zadań
 # w failed_jobs z MaxAttemptsExceededException. Tempo wektorów ogranicza API osadzeń, nie liczba workerów.
-# Więcej wektorów naraz: EMBEDDING_WORKERS=6 bash deploy/ensure-enrichment-workers.sh
+# Jeden worker, bo przy trzech na własnej tabeli jobs_embeddings workery nadal blokowały się nawzajem
+# (MariaDB 10.5 bez SKIP LOCKED): 05.10.2026 siedem zakleszczeń, gdy o 00:00 UTC ruszyło razem
+# 14 tygodniowych synchronizacji B2B. Jedno zadanie wektora trwa ok. 0,1 s.
+# Więcej wektorów naraz (ryzyko zakleszczeń): EMBEDDING_WORKERS=3 bash deploy/ensure-enrichment-workers.sh
 #   - inquiries (domyślnie 1) — analiza zapytań klientów w tle, własna tabela jobs_inquiries.
 #     Jedna analiza to do kilku minut pracy wspólnego modelu (50 pozycji); drugi worker liczyłby
 #     dwa zapytania naraz kosztem wyszukiwarki i przetargów. Więcej: INQUIRY_WORKERS=2 …
@@ -52,7 +55,7 @@ fi
 
 WORKERS="${WORKERS:-16}"
 PREFETCH_WORKERS="${PREFETCH_WORKERS:-$(( SEARCH_LANES > 5 ? SEARCH_LANES : 5 ))}"
-EMBEDDING_WORKERS="${EMBEDDING_WORKERS:-3}"
+EMBEDDING_WORKERS="${EMBEDDING_WORKERS:-1}"
 INQUIRY_WORKERS="${INQUIRY_WORKERS:-1}"
 echo "==> workery: LLM ${WORKERS} (kolejka enrich) + wyszukiwanie ${PREFETCH_WORKERS} (kolejka prefetch)"
 echo "    wektory ${EMBEDDING_WORKERS} (kolejka embeddings), zapytania klientów ${INQUIRY_WORKERS} (kolejka inquiries)"
