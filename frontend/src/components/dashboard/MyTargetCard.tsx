@@ -76,7 +76,7 @@ export function MyTargetCard() {
       </div>
       <p className="mt-3 text-[11.5px] text-slate-500">
         Sprzedaż netto z faktur i paragonów w ERP XL (po korektach) Twoich klientów, według nocnego odczytu — dzisiejsze
-        dokumenty pojawią się jutro.
+        dokumenty pojawią się jutro. Faktura do WZ liczy się z towarów na jej WZ, a WZ jeszcze bez faktury — od dnia wydania.
       </p>
     </section>
   )

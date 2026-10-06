@@ -10,7 +10,7 @@ use Illuminate\Console\Command;
 use Throwable;
 
 /**
- * Faktury i paragony klientów z ERP XL (nagłówki FS/PA/FSE i korekty) do erp_sale_documents — co noc 05:40 czasu
+ * Faktury i paragony klientów z ERP XL (nagłówki FS/PA/FSE i korekty, faktury do WZ z pozycji WZ) do erp_sale_documents — co noc 05:40 czasu
  * polskiego (tylko przy ERPXL_ENABLED). Reguły w ErpClientDocumentSync; XL tylko czytany.
  */
 final class ErpClientDocumentsCommand extends Command
@@ -79,6 +79,31 @@ final class ErpClientDocumentsCommand extends Command
                 ));
             }
         }
+
+        $d = $stats['deliveries'];
+        if ($d === null) {
+            $this->warn('Kontrola reguły WZ nieudana (szczegóły w dzienniku błędów) — dokumenty zapisane.');
+
+            return self::SUCCESS;
+        }
+        $money = static fn (float $v): string => number_format($v, 2, ',', ' ');
+        $this->info(sprintf(
+            'WZ z fakturą z własnymi pozycjami (spinacz −2033, liczone z faktury): %d WZ, %s zł.',
+            $d['invoice_lines_mode']['documents'],
+            $money($d['invoice_lines_mode']['net']),
+        ));
+        $line = sprintf(
+            'Poza regułą WZ: faktura w spinaczu z pozycjami %d (%s zł), inny spinacz %d (%s zł), korekta z pozycjami do dokumentu bez pozycji %d (%s zł).',
+            $d['invoice_with_lines']['documents'],
+            $money($d['invoice_with_lines']['net']),
+            $d['unknown_link']['documents'],
+            $money($d['unknown_link']['net']),
+            $d['correction_of_lineless']['documents'],
+            $money($d['correction_of_lineless']['net']),
+        );
+        $d['invoice_with_lines']['documents'] + $d['unknown_link']['documents'] + $d['correction_of_lineless']['documents'] === 0
+            ? $this->info($line)
+            : $this->warn($line);
 
         return self::SUCCESS;
     }

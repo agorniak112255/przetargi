@@ -15,7 +15,8 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Sprzedaż towarów z kampanii wysłanych w ostatnich WINDOW_DAYS + MARGIN_DAYS dniach: pozycje FS/PA i ich korekt
+ * Sprzedaż towarów z kampanii wysłanych w ostatnich WINDOW_DAYS + MARGIN_DAYS dniach: pozycje FS/PA/WZ (faktura do WZ
+ * ma towary tylko na WZ — z dniem wydania, także przed wystawieniem faktury) i ich korekt
  * (FSK/PAK, ilość i wartość ze znakiem, z dokumentem korygowanym) od dnia najwcześniejszej wysyłki (erp_sale_lines),
  * z kosztem księgowym pozycji. Tylko te towary i ten okres — jedno krótkie zapytanie do XL w nocy.
  * Pozycje, których XL już nie zwraca (dokument anulowany), są kasowane w tym samym zakresie (także korekty).
@@ -68,7 +69,7 @@ final class ErpCampaignSalesSync
             if ($itemId === null || $soldAt === null) {
                 continue;
             }
-            // koszt 0 = XL go nie podał (FS do WZ) — nieznany, nie zero
+            // koszt 0 = XL go nie podał — nieznany, nie zero
             $cost = round($row['cost'], 2);
             $buffer[] = [
                 'document_type' => $row['document_type'],

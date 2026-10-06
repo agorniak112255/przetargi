@@ -32,7 +32,9 @@ final class CampaignsReport
 
     private const TOP_ITEMS = 10;
 
-    public const RULE = 'Liczymy pozycje faktur i paragonów z ERP XL (nocny odczyt) z towarami kampanii, wystawione klientom, '
+    public const RULE = 'Liczymy pozycje faktur, paragonów i WZ z ERP XL (nocny odczyt) z towarami kampanii, wystawione klientom, '
+        .'do których poszedł mail tej kampanii (faktura wystawiona do WZ ma towary tylko na WZ — liczą się z dniem wydania '
+        .'towaru, także zanim powstanie faktura, a numer pokazujemy z faktury) — '
         .'do których poszedł mail tej kampanii — od dnia maila do 30. dnia po starcie wysyłki, daty w czasie polskim. '
         .'Odbiorcę łączymy z klientem tak, jak zapisano przy wysyłce: klient wybrany z ERP XL albo adres e-mail z karty '
         .'kontrahenta (adres na kilku kartach — liczą się zakupy każdej z nich, raport to oznacza). Gdy klient dostał kilka '
@@ -394,7 +396,7 @@ final class CampaignsReport
             yield [
                 $l['sold_at'],
                 self::text($l['document_number']),
-                $l['is_correction'] ? 'korekta' : ($l['document_type'] === 2034 ? 'paragon' : 'faktura'),
+                self::documentKind($l),
                 self::text($customers[$l['customer_id']] ?? 'kontrahent ERP XL nr '.$l['customer_xl_gid']),
                 self::text($item['code']),
                 self::text($item['name']),
@@ -612,6 +614,22 @@ final class CampaignsReport
         }
 
         return $s === '-0' ? '0' : $s;
+    }
+
+    /**
+     * Rodzaj dokumentu w CSV. Pozycja WZ (2001) ma numer faktury ze spinacza albo — przed jej wystawieniem — własny
+     * numer WZ (ErpXlGateway::itemSaleLines), a datę wydania towaru.
+     *
+     * @param  array{is_correction: bool, document_type: int, document_number: string}  $line
+     */
+    private static function documentKind(array $line): string
+    {
+        return match (true) {
+            $line['is_correction'] => 'korekta',
+            $line['document_type'] === 2034 => 'paragon',
+            $line['document_type'] === 2001 => str_starts_with($line['document_number'], 'WZ') ? 'WZ bez faktury' : 'faktura do WZ',
+            default => 'faktura',
+        };
     }
 
     /** Tekst z ERP XL do komórki CSV — bez interpretacji jako formuła arkusza (=, +, -, @ na początku). */

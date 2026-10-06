@@ -302,6 +302,25 @@ final class FakeErpXlGateway implements ErpXlGateway
         }
     }
 
+    /** @var array<string, array{documents: int, net: float}> wynik deliveryCheck (puste klucze = zero) */
+    public array $deliveryCheckResult = [];
+
+    /** @var list<array{0: int, 1: int}> okresy wywołań deliveryCheck */
+    public array $deliveryCheckCalls = [];
+
+    public function deliveryCheck(int $fromClarionDate, int $toClarionDate): array
+    {
+        $this->deliveryCheckCalls[] = [$fromClarionDate, $toClarionDate];
+        $zero = ['documents' => 0, 'net' => 0.0];
+
+        return [
+            'invoice_with_lines' => $this->deliveryCheckResult['invoice_with_lines'] ?? $zero,
+            'invoice_lines_mode' => $this->deliveryCheckResult['invoice_lines_mode'] ?? $zero,
+            'unknown_link' => $this->deliveryCheckResult['unknown_link'] ?? $zero,
+            'correction_of_lineless' => $this->deliveryCheckResult['correction_of_lineless'] ?? $zero,
+        ];
+    }
+
     public function customerDocumentLines(array $gids, int $fromClarionDate): iterable
     {
         $this->documentLineCalls[] = ['gids' => array_values($gids), 'from' => $fromClarionDate];
@@ -375,7 +394,7 @@ final class FakeErpXlGateway implements ErpXlGateway
      */
     public static function saleDocument(int $documentId, int $date, int $customerGid, float $netValue, int $type = 2033): array
     {
-        $prefix = [2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK'][$type] ?? 'dok. '.$type;
+        $prefix = [2001 => 'WZ', 2009 => 'WZK', 2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK'][$type] ?? 'dok. '.$type;
 
         return [
             'document_type' => $type, 'document_id' => $documentId, 'document_number' => $prefix.'-01H/'.$documentId.'/26/09',

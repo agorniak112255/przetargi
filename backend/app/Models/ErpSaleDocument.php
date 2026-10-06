@@ -9,8 +9,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Nagłówek faktury albo paragonu klienta z Comarch ERP XL (kopia nocna, erp:client-documents). Wartość netto PLN
- * = suma TrE_KsiegowaNetto pozycji; korekty mają wartość ze znakiem (zwykle ujemną). Jedno źródło sprzedaży dla
- * karty klienta, celów handlowców i podpowiedzi zamówień.
+ * = suma TrE_KsiegowaNetto pozycji (faktura do WZ — pozycji jej WZ); korekty mają wartość ze znakiem (zwykle ujemną).
+ * WZ bez zatwierdzonej faktury jest osobnym dokumentem (delivery_note), dopóki faktura nie powstanie — wtedy znika,
+ * a jej wartość przechodzi do faktury. Jedno źródło sprzedaży dla karty klienta, celów handlowców i podpowiedzi zamówień.
  *
  * @property int $document_type
  * @property int $document_id
@@ -32,16 +33,27 @@ class ErpSaleDocument extends Model
 
     public const KIND_RECEIPT_CORRECTION = 'receipt_correction';
 
+    /** WZ (i WZE) bez zatwierdzonej faktury — sprzedaż liczona od dnia wydania (decyzja właściciela 06.10.2026). */
+    public const KIND_DELIVERY_NOTE = 'delivery_note';
+
+    /** WZK bez zatwierdzonej korekty faktury. */
+    public const KIND_DELIVERY_CORRECTION = 'delivery_correction';
+
     public const KINDS = [
         self::KIND_INVOICE,
         self::KIND_RECEIPT,
         self::KIND_EXPORT_INVOICE,
         self::KIND_INVOICE_CORRECTION,
         self::KIND_RECEIPT_CORRECTION,
+        self::KIND_DELIVERY_NOTE,
+        self::KIND_DELIVERY_CORRECTION,
     ];
 
-    /** Typ dokumentu XL (TrN_GIDTyp) → rodzaj: FS, PA, FSE (eksportowa) i korekty FS / PA — jak erp:clients. */
+    /** Typ dokumentu XL (TrN_GIDTyp) → rodzaj: FS, PA, FSE (eksportowa), korekty FS / PA, WZ / WZE / WZK bez faktury — jak erp:clients. */
     public const TYPE_KIND = [
+        2001 => self::KIND_DELIVERY_NOTE,
+        2005 => self::KIND_DELIVERY_NOTE,
+        2009 => self::KIND_DELIVERY_CORRECTION,
         2033 => self::KIND_INVOICE,
         2034 => self::KIND_RECEIPT,
         2037 => self::KIND_EXPORT_INVOICE,
@@ -50,7 +62,7 @@ class ErpSaleDocument extends Model
     ];
 
     /** Rodzaje sprzedaży bez korekt (liczba dokumentów, „ostatni zakup”). */
-    public const SALE_KINDS = [self::KIND_INVOICE, self::KIND_RECEIPT, self::KIND_EXPORT_INVOICE];
+    public const SALE_KINDS = [self::KIND_INVOICE, self::KIND_RECEIPT, self::KIND_EXPORT_INVOICE, self::KIND_DELIVERY_NOTE];
 
     protected $fillable = [
         'document_type',

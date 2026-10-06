@@ -8,9 +8,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
- * Kontrahent z Comarch ERP XL, który kupował (FS/PA) — adresy e-mail i operator, który najczęściej wystawiał mu
- * dokumenty. Zapis: App\Services\Erp\ErpCustomerSync (co noc); XL tylko czytany. Adres, telefony, osoby kontaktowe
- * i opiekun — tylko klienci z terminami przeglądów (App\Services\Inspections\InspectionCustomerDetails).
+ * Kontrahent z Comarch ERP XL, który kupował (FS/PA, faktury do WZ) — adresy e-mail i operator, który najczęściej
+ * wystawiał mu dokumenty. Zapis: App\Services\Erp\ErpCustomerSync (co noc); XL tylko czytany. Adres, telefony, osoby
+ * kontaktowe i opiekun — tylko klienci z terminami przeglądów (App\Services\Inspections\InspectionCustomerDetails).
  */
 class ErpCustomer extends Model
 {

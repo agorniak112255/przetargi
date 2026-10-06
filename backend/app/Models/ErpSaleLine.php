@@ -8,7 +8,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Pozycja faktury (FS), paragonu (PA) albo ich korekty (FSK 2041 / PAK 2042, ilość i wartość ze znakiem) z ERP XL z towarem kampanii — do wyniku „kupili odbiorcy kampanii”.
+ * Pozycja faktury (FS), paragonu (PA), WZ (2001 — towary faktury do WZ albo WZ jeszcze bez faktury; numer z faktury)
+ * albo ich korekty (FSK 2041 / PAK 2042 / WZK 2009, ilość i wartość ze znakiem) z ERP XL z towarem kampanii — do wyniku „kupili odbiorcy kampanii”.
  * Zapis: App\Services\Erp\ErpCampaignSalesSync.
  */
 class ErpSaleLine extends Model

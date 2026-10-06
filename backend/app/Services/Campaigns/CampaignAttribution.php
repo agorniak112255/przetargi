@@ -14,11 +14,12 @@ use Illuminate\Support\Facades\DB;
 /**
  * Przypisanie pozycji faktur i paragonów z ERP XL (erp_sale_lines) kampaniom — podstawa raportu „Wynik kampanii”.
  *
- * - Pozycja sprzedaży (FS 2033 / PA 2034, ilość > 0) klienta K, towaru T, z dnia D należy do kampanii, która ma T
+ * - Pozycja sprzedaży (FS 2033 / PA 2034 / WZ 2001 — faktura do WZ nie ma własnych pozycji, D = dzień WZ; ilość > 0)
+ *   klienta K, towaru T, z dnia D należy do kampanii, która ma T
  *   w pozycjach i której okno dla K obejmuje D (od dnia maila do odbiorcy przypisanego K do dnia startu + 30, czas
  *   polski). Kilka pasujących — wygrywa najpóźniejszy mail do K (remis: wyższe id kampanii); pozostałe widzą pozycję
  *   jako przejętą (taken_over). Liczone globalnie, bez względu na to, kto patrzy.
- * - Korekta (FSK 2041 / PAK 2042) dziedziczy kampanię i ułamek limitu po pozycji korygowanej (ten sam dokument
+ * - Korekta (FSK 2041 / PAK 2042 / WZK 2009) dziedziczy kampanię i ułamek limitu po pozycji korygowanej (ten sam dokument
  *   i towar, najniższy numer pozycji); bez takiej pozycji — „korekta bez przypisanej faktury”, poza wynikiem.
  * - Limit stanu: stan z dnia wysyłki kampanii zużywa każda sprzedaż towaru od dnia startu (wszyscy klienci, wszystkie
  *   kampanie) w kolejności (data, typ, dokument, pozycja); część pozycji ponad pozostały stan nie liczy się do
@@ -32,11 +33,11 @@ use Illuminate\Support\Facades\DB;
  */
 final class CampaignAttribution
 {
-    /** Faktura sprzedaży i paragon. */
-    public const SALE_TYPES = [2033, 2034];
+    /** Faktura sprzedaży, paragon i WZ (pozycje faktury do WZ albo WZ jeszcze bez faktury — ErpXlGateway::itemSaleLines). */
+    public const SALE_TYPES = [2033, 2034, 2001];
 
-    /** Korekta faktury i korekta paragonu. */
-    public const CORRECTION_TYPES = [2041, 2042];
+    /** Korekta faktury, korekta paragonu i korekta WZ (WZK wskazuje WZ). */
+    public const CORRECTION_TYPES = [2041, 2042, 2009];
 
     /** Towar „zalegający”: tyle dni bez sprzedaży (albo wiek partii nigdy niesprzedanego) w dniu startu wysyłki. */
     public const STAGNANT_DAYS = 180;

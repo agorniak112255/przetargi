@@ -11,13 +11,16 @@ use App\Support\PolishTime;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
 /**
  * Faktury i paragony klientów z zakładki Klienci (clients.xl_gid) z Comarch ERP XL do erp_sale_documents — nagłówki
  * FS, PA, FSE i korekty FS/PA (wartość ze znakiem), zatwierdzone, z okna `months` pełnych miesięcy wstecz (od 1. dnia
- * miesiąca). Jedno źródło sprzedaży dla karty klienta, celów handlowców i podpowiedzi zamówień.
+ * miesiąca). Faktura do WZ (bez własnych pozycji w XL) ma wartość z pozycji swoich WZ; WZ bez zatwierdzonej faktury
+ * jest osobnym dokumentem z datą WZ, dopóki faktura nie powstanie (ErpXlGateway::customerDocuments). Jedno źródło
+ * sprzedaży dla karty klienta, celów handlowców i podpowiedzi zamówień.
  *
  * Pamięć (CLI 128 MB): kontrahenci paczkami po 500 do XL, dokumenty strumieniem (kursor), zapis paczkami po 1000
  * (upsert po typie i numerze dokumentu XL), bez dziennika zapytań. W pamięci zostaje tylko mapa numer XL → klient
@@ -27,7 +30,8 @@ use Throwable;
  * dopiero po udanym przebiegu — przerwany odczyt XL nie zostawia karty bez faktur.
  *
  * Kontrola jakości: suma dokumentów bieżącego roku na klienta porównana z clients.sales_net (erp:clients, ta sama
- * reguła XL) — różnica u kogokolwiek trafia do wyniku polecenia, nic nie jest poprawiane.
+ * reguła XL) — różnica u kogokolwiek trafia do wyniku polecenia, nic nie jest poprawiane. Druga kontrola: WZ i korekty
+ * z okna, których reguła WZ nie bierze (ErpXlGateway::deliveryCheck) — podejrzane trafiają też do dziennika.
  */
 final class ErpClientDocumentSync
 {
@@ -58,7 +62,8 @@ final class ErpClientDocumentSync
      *     documents: int,
      *     skipped: int,
      *     removed: int,
-     *     quality: array{year: int, checked: int, mismatched: int, examples: list<array{client_id: int, name: string, clients_net: float, documents_net: float}>}
+     *     quality: array{year: int, checked: int, mismatched: int, examples: list<array{client_id: int, name: string, clients_net: float, documents_net: float}>},
+     *     deliveries: null|array{invoice_with_lines: array{documents: int, net: float}, invoice_lines_mode: array{documents: int, net: float}, unknown_link: array{documents: int, net: float}, correction_of_lineless: array{documents: int, net: float}}
      * }
      */
     public function run(int $months = 36, bool $dryRun = false): array
@@ -144,6 +149,25 @@ final class ErpClientDocumentSync
             Cache::forever(self::SYNCED_AT_CACHE_KEY, $startedAt->toIso8601String());
         }
 
+        // WZ i korekty, których reguła nie bierze — spinacz −2033 to tryb „faktura z pozycjami” (spodziewany). Do
+        // dziennika tylko to, co psuje kwoty: WZ pod fakturą z własnymi pozycjami albo nieznany spinacz. Korekta
+        // z pozycjami do dokumentu bez pozycji (06.10.2026: jedna FSK do FSK, −6 602,85 zł) psuje tylko powiązanie
+        // korekty w kampanii — w wyniku polecenia, bez ostrzeżenia co noc przez całe okno
+        // (sama kontrola; jej błąd nie cofa udanego odczytu — trafia do raportu błędów, wynik null)
+        try {
+            $deliveries = $this->gateway->deliveryCheck(ClarionDate::fromDate($from), ClarionDate::fromDate($today));
+        } catch (Throwable $e) {
+            report($e);
+            $deliveries = null;
+        }
+        $suspicious = $deliveries === null ? [] : array_filter(
+            array_intersect_key($deliveries, array_flip(['invoice_with_lines', 'unknown_link'])),
+            static fn (array $c): bool => $c['documents'] > 0,
+        );
+        if ($suspicious !== []) {
+            Log::warning('erp:client-documents: WZ albo korekty poza regułą sprzedaży z WZ', ['from' => $fromDate, ...$suspicious]);
+        }
+
         return [
             'clients' => count($gids),
             'from' => $fromDate,
@@ -151,6 +175,7 @@ final class ErpClientDocumentSync
             'skipped' => $skipped,
             'removed' => $removed,
             'quality' => $this->quality($year, $yearNet),
+            'deliveries' => $deliveries,
         ];
     }
 

@@ -30,7 +30,7 @@ class ErpCampaignSalesCommand extends Command
 
             return self::FAILURE;
         }
-        $this->info(sprintf('Kampanii: %d, towarów: %d, pozycji FS/PA: %d, usuniętych (anulowane): %d.', $stats['campaigns'], $stats['items'], $stats['lines'], $stats['removed']));
+        $this->info(sprintf('Kampanii: %d, towarów: %d, pozycji FS/PA/WZ i korekt: %d, usuniętych (anulowane): %d.', $stats['campaigns'], $stats['items'], $stats['lines'], $stats['removed']));
 
         return self::SUCCESS;
     }

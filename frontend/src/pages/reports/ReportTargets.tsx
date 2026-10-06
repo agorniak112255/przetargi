@@ -339,7 +339,7 @@ function TargetsCard({
           </h2>
           <p className="mt-0.5 max-w-3xl text-xs text-slate-500">
             Sprzedaż netto z faktur i paragonów w ERP XL, po korektach, klientów przypisanych do handlowca (opiekun z karty w ERP
-            XL albo opiekun w aplikacji).
+            XL albo opiekun w aplikacji). Faktura do WZ liczy się z towarów na jej WZ, a WZ jeszcze bez faktury — od dnia wydania.
           </p>
         </div>
         {d.total.percent != null && (

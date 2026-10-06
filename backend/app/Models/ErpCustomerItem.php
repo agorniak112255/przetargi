@@ -7,7 +7,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-/** Towar XL, który kontrahent kupował (FS/PA z 24 mies.): data ostatniego zakupu, liczba dokumentów, ilość. */
+/** Towar XL, który kontrahent kupował (FS/PA i WZ z 24 mies.): data ostatniego wydania, liczba dokumentów (faktura do WZ = jeden), ilość. */
 class ErpCustomerItem extends Model
 {
     protected $fillable = [

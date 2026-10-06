@@ -13,7 +13,7 @@ class ErpCustomersCommand extends Command
 {
     protected $signature = 'erp:customers';
 
-    protected $description = 'Odczytuje z Comarch ERP XL klientów do kampanii: e-maile, operatora z największą liczbą FS/PA i zakupy z 24 mies. (XL tylko czytany)';
+    protected $description = 'Odczytuje z Comarch ERP XL klientów do kampanii: e-maile, operatora z największą liczbą dokumentów sprzedaży i zakupy z 24 mies. (z WZ) (XL tylko czytany)';
 
     public function handle(ErpXlGateway $gateway, ErpCustomerSync $sync): int
     {

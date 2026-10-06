@@ -11,8 +11,8 @@ use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
- * Zakładka Klienci z Comarch ERP XL: kontrahenci, którzy w roku kupili (FS + PA + FSE minus korekty, netto PLN) za co
- * najmniej próg, z pełną kartą, osobami kontaktowymi i opiekunem. Klienci już powiązani z XL są odświeżani także poniżej
+ * Zakładka Klienci z Comarch ERP XL: kontrahenci, którzy w roku kupili (FS + PA + FSE minus korekty, netto PLN; faktura
+ * do WZ z pozycji jej WZ, WZ bez faktury od dnia wydania — ErpXlGateway::customerSalesTotals) za co najmniej próg, z pełną kartą, osobami kontaktowymi i opiekunem. Klienci już powiązani z XL są odświeżani także poniżej
  * progu (zakupy w roku mogą spaść do zera) — nikogo nie kasujemy. Klient dopisany ręcznie z tym samym NIP-em zostaje
  * powiązany: dostaje numer XL, zakupy, kontakty i opiekuna z XL, a z karty tylko pola, które miał puste (nazwa, wpisane
  * dane i opiekun w panelu bez zmian).

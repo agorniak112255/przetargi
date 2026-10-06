@@ -244,6 +244,40 @@ final class CampaignsReportTest extends TestCase
         $this->assertCount(1, $r['top_items']);
     }
 
+    public function test_wz_lines_are_sales_and_wzk_corrects_them_like_an_invoice_correction(): void
+    {
+        $jan = $this->sender();
+        $boots = $this->erpItem('B1');
+        $alfa = $this->customer('ALFA', ['a@alfa.pl']);
+        $campaign = $this->started($jan, $boots, '2026-09-10 08:00');
+        $this->mail($campaign, $alfa, '2026-09-10 08:10');
+        // faktura do WZ nie ma pozycji w XL: towar z WZ (data wydania), numer z faktury ze spinacza
+        $this->line(31, '2026-09-15', $alfa, $boots, 4, 400, 160, ['document_type' => 2001, 'document_number' => 'FS-01H/77/26/09']);
+        // WZ jeszcze bez faktury — własny numer
+        $this->line(32, '2026-09-28', $alfa, $boots, 1, 100, 40, ['document_type' => 2001, 'document_number' => 'WZ-01H/32/26/09']);
+        // WZK zwrotu 1 szt. z pierwszej WZ (korekta faktury do WZ jest w XL bez pozycji) — dziedziczy kampanię po WZ
+        $this->line(33, '2026-10-02', $alfa, $boots, -1, -100, -40, [
+            'document_type' => 2009, 'document_number' => 'FSK-01H/5/26/10', 'corrects_document_type' => 2001, 'corrects_document_id' => 31,
+        ]);
+
+        Sanctum::actingAs($jan);
+        $sep = $this->report('2026-09');
+        $this->assertSame(500.0, $this->zl($sep['totals']['sales_net']));
+        $this->assertSame(1, $sep['totals']['buyers']);
+        $oct = $this->report('2026-10');
+        $this->assertSame(-100.0, $this->zl($oct['totals']['corrections_net']));
+        $this->assertSame(0, $oct['warnings']['unlinked_corrections']);
+
+        $csv = $this->get('/api/reports/campaigns/csv?month=2026-09')->assertOk()->streamedContent();
+        $rows = array_map(static fn (string $l): array => str_getcsv($l, ';'), array_values(array_filter(explode("\n", substr($csv, 3)))));
+        $this->assertSame([['2026-09-15', 'FS-01H/77/26/09', 'faktura do WZ'], ['2026-09-28', 'WZ-01H/32/26/09', 'WZ bez faktury']], [
+            array_slice($rows[1], 0, 3), array_slice($rows[2], 0, 3),
+        ]);
+
+        // strona kampanii: 400 + 100 − 100
+        $this->assertEquals(['customers' => 1, 'net_value' => 400.0], $this->getJson("/api/campaigns/{$campaign->id}")->assertOk()->json('sales.recipients'));
+    }
+
     public function test_corrections_inherit_campaign_and_fraction_and_unlinked_ones_only_warn(): void
     {
         $jan = $this->sender();

@@ -17,8 +17,8 @@ use Illuminate\Support\Facades\DB;
  *
  * Zawsze bez usuniętych z XL (removed_at); archiwalni liczeni osobno i wyłączeni z pozostałych liczb.
  * Miesiące od dziś (czas polski) po last_sale_at — DATE z XL, bez przeliczania strefy; NULL = brak sprzedaży
- * w oknie 24 mies. synchronizacji. main_operator to operator XL, który wystawił klientowi najwięcej FS/PA —
- * nie opiekun klienta.
+ * w oknie 24 mies. synchronizacji. main_operator to operator XL, który wystawił klientowi najwięcej dokumentów
+ * sprzedaży (FS/PA, faktury do WZ, WZ bez faktury — ErpXlGateway::customerOperators) — nie opiekun klienta.
  */
 final class CustomersReport
 {

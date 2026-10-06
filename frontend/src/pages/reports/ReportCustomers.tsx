@@ -66,8 +66,8 @@ function CustomersBody({ d }: { d: CustomersReportData }) {
   return (
     <>
       <p className="mb-3 text-xs text-slate-500">
-        Dane z ERP XL z synchronizacji: {stampDate(d.synced_at)}. Liczymy faktury i paragony z ostatnich 24 miesięcy — liczby dokumentów, nie wartości
-        sprzedaży.
+        Dane z ERP XL z synchronizacji: {stampDate(d.synced_at)}. Liczymy faktury (także wystawione do WZ) i paragony z ostatnich 24 miesięcy — liczby
+        dokumentów, nie wartości sprzedaży.
       </p>
       <Insights items={insightsOf(d)} />
       <KpiRow

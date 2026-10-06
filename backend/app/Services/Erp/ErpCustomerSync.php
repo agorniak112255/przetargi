@@ -14,7 +14,8 @@ use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
- * Klienci ERP XL do kampanii: kontrahenci z e-mailami (karta, potem aktywne adresy), liczba FS/PA z 24 mies. i operator,
+ * Klienci ERP XL do kampanii: kontrahenci z e-mailami (karta, potem aktywne adresy), liczba dokumentów sprzedaży (FS/PA,
+ * faktury do WZ, WZ bez faktury — ErpXlGateway::customerSales) z 24 mies. i operator,
  * który wystawił ich najwięcej („mój klient”), oraz co kupowali (erp_customer_items, przebudowa w całości). XL tylko
  * czytany. Kontrahentów nie kasujemy — tym, których XL już nie zwrócił, ustawiamy removed_at.
  */
@@ -86,7 +87,7 @@ final class ErpCustomerSync
     }
 
     /**
-     * Liczba FS/PA na klienta (wszystkie, także bez znanego operatora) i operator z największą liczbą dokumentów
+     * Liczba dokumentów sprzedaży na klienta (wszystkie, także bez znanego operatora) i operator z największą liczbą dokumentów
      * (remis — ident alfabetycznie pierwszy, żeby wynik nie zależał od kolejności wierszy z XL).
      *
      * @return array{0: array<int, int>, 1: array<int, string>, 2: array<string, string|null>}

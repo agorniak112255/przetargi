@@ -124,7 +124,7 @@ export function ReportCampaigns() {
       note={
         d
           ? d.data_until
-            ? `faktury i paragony z ERP XL według odczytu z ${readStamp(d.data_until)}`
+            ? `faktury, paragony i WZ z ERP XL według odczytu z ${readStamp(d.data_until)}`
             : 'nie ma jeszcze nocnego odczytu faktur i paragonów z ERP XL'
           : undefined
       }

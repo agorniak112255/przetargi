@@ -13,6 +13,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Mockery;
 use RuntimeException;
 use Tests\Support\FakeErpXlGateway;
@@ -20,8 +21,8 @@ use Tests\TestCase;
 
 /**
  * erp:client-documents: nagłówki FS/PA/FSE i korekt (ze znakiem) klientów z numerem XL, okno pełnych miesięcy,
- * client_id po numerze XL, kasowanie nieaktualnych tylko po udanym przebiegu, zapis paczkami (bez zbierania całości)
- * i kontrola jakości z zakładką Klienci.
+ * client_id po numerze XL, kasowanie nieaktualnych tylko po udanym przebiegu, zapis paczkami (bez zbierania całości),
+ * kontrola jakości z zakładką Klienci, WZ bez faktury jako dokument i kontrola reguły WZ.
  */
 final class ErpClientDocumentSyncTest extends TestCase
 {
@@ -53,8 +54,8 @@ final class ErpClientDocumentSyncTest extends TestCase
             // pierwszy dzień okna i dzień przed nim
             FakeErpXlGateway::saleDocument(5, $this->d('2023-10-01'), 20, 10.00),
             FakeErpXlGateway::saleDocument(6, $this->d('2023-09-30'), 20, 11.00),
-            // rodzaj spoza listy — pomijany
-            FakeErpXlGateway::saleDocument(7, $this->d('2026-09-01'), 20, 12.00, 2001),
+            // rodzaj spoza listy (2036 — faktura wewnętrzna serii 01K, nie sprzedaż) — pomijany
+            FakeErpXlGateway::saleDocument(7, $this->d('2026-09-01'), 20, 12.00, 2036),
         ];
 
         $this->artisan('erp:client-documents')
@@ -74,6 +75,77 @@ final class ErpClientDocumentSyncTest extends TestCase
         $this->assertSame($acme->id, $rows[1]->client_id);
         $this->assertSame($beta->id, $rows[4]->client_id);
         $this->assertSame('FSK-01H/3/26/09', $rows[3]->document_number);
+        $this->assertNotNull(Cache::get(ErpClientDocumentSync::SYNCED_AT_CACHE_KEY));
+    }
+
+    public function test_delivery_note_without_invoice_is_a_sale_until_the_invoice_replaces_it(): void
+    {
+        $acme = $this->client('ACME', 10);
+        // WZ i WZK bez zatwierdzonej faktury — liczą się od dnia wydania (decyzja właściciela 06.10.2026)
+        $this->xl->documentRows = [
+            FakeErpXlGateway::saleDocument(31, $this->d('2026-09-28'), 10, 500.00, 2001),
+            FakeErpXlGateway::saleDocument(32, $this->d('2026-09-29'), 10, -50.00, 2009),
+        ];
+        $this->artisan('erp:client-documents')->assertSuccessful();
+        $rows = ErpSaleDocument::query()->orderBy('document_id')->get();
+        $this->assertSame([['delivery_note', 'WZ-01H/31/26/09', '500.00'], ['delivery_correction', 'WZK-01H/32/26/09', '-50.00']], $rows->map(
+            static fn (ErpSaleDocument $d): array => [$d->kind, $d->document_number, $d->net_value],
+        )->all());
+        $this->assertContains(ErpSaleDocument::KIND_DELIVERY_NOTE, ErpSaleDocument::SALE_KINDS);
+
+        // następnej nocy jest faktura do tej WZ: XL zwraca fakturę z wartością WZ, WZ znika z kopii
+        $this->travel(1)->days();
+        $this->xl->documentRows = [FakeErpXlGateway::saleDocument(77, $this->d('2026-09-30'), 10, 450.00)];
+        $this->artisan('erp:client-documents')->assertSuccessful();
+        $this->assertSame([[77, 'invoice', '450.00', $acme->id]], ErpSaleDocument::query()->get()->map(
+            static fn (ErpSaleDocument $d): array => [$d->document_id, $d->kind, $d->net_value, $d->client_id],
+        )->all());
+    }
+
+    public function test_delivery_rule_check_is_reported_and_suspicious_cases_logged(): void
+    {
+        $this->client('ACME', 10);
+        Log::spy();
+        $this->xl->deliveryCheckResult = [
+            'invoice_lines_mode' => ['documents' => 118, 'net' => 550111.17],
+            'invoice_with_lines' => ['documents' => 2, 'net' => 1500.0],
+            'correction_of_lineless' => ['documents' => 1, 'net' => -6602.85],
+        ];
+
+        $this->artisan('erp:client-documents')
+            ->expectsOutputToContain('WZ z fakturą z własnymi pozycjami (spinacz −2033, liczone z faktury): 118 WZ, 550 111,17 zł.')
+            ->expectsOutputToContain('Poza regułą WZ: faktura w spinaczu z pozycjami 2 (1 500,00 zł), inny spinacz 0 (0,00 zł), korekta z pozycjami do dokumentu bez pozycji 1 (-6 602,85 zł).')
+            ->assertSuccessful();
+        // okres kontroli = okno dokumentów do dziś
+        $this->assertSame([[$this->d('2023-10-01'), $this->d('2026-10-02')]], $this->xl->deliveryCheckCalls);
+        // do dziennika tylko to, co psuje kwoty (korekta do dokumentu bez pozycji psuje tylko powiązanie w kampanii)
+        Log::shouldHaveReceived('warning')->once()->withArgs(static fn (string $message, array $context): bool => str_contains($message, 'poza regułą')
+            && array_keys($context) === ['from', 'invoice_with_lines']);
+
+        // tryb −2033 i sama korekta do dokumentu bez pozycji — bez nowego ostrzeżenia (szpieg ten sam, więc dalej jedno)
+        $this->xl->deliveryCheckResult = [
+            'invoice_lines_mode' => ['documents' => 5, 'net' => 10.0],
+            'correction_of_lineless' => ['documents' => 1, 'net' => -6602.85],
+        ];
+        $this->artisan('erp:client-documents')
+            ->expectsOutputToContain('korekta z pozycjami do dokumentu bez pozycji 1 (-6 602,85 zł)')
+            ->assertSuccessful();
+        Log::shouldHaveReceived('warning')->once();
+    }
+
+    public function test_failed_delivery_check_does_not_undo_a_successful_read(): void
+    {
+        $this->client('ACME', 10);
+        $failing = Mockery::mock(ErpXlGateway::class);
+        $failing->shouldReceive('configured')->andReturnTrue();
+        $failing->shouldReceive('customerDocuments')->andReturn([FakeErpXlGateway::saleDocument(1, $this->d('2026-09-15'), 10, 100.00)]);
+        $failing->shouldReceive('deliveryCheck')->andThrow(new RuntimeException('Timeout'));
+        $this->app->instance(ErpXlGateway::class, $failing);
+
+        $this->artisan('erp:client-documents')
+            ->expectsOutputToContain('Kontrola reguły WZ nieudana (szczegóły w dzienniku błędów) — dokumenty zapisane.')
+            ->assertSuccessful();
+        $this->assertSame(1, ErpSaleDocument::query()->count());
         $this->assertNotNull(Cache::get(ErpClientDocumentSync::SYNCED_AT_CACHE_KEY));
     }
 

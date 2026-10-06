@@ -48,12 +48,13 @@ final class SalesTargetsReport
     ];
 
     public const RULE = 'Sprzedaż netto z faktur i paragonów w ERP XL, po korektach, z nocnego odczytu; dokument liczy się do '
-        .'miesiąca według daty wystawienia. Liczymy tylko klientów '
+        .'miesiąca według daty wystawienia. Faktura wystawiona do WZ ma wartość towarów z jej WZ; WZ, do której nie ma '
+        .'jeszcze faktury, liczy się od dnia wydania towaru, a po wystawieniu faktury — w miesiącu faktury. Liczymy tylko klientów '
         .'z zakładki Klienci (kontrahenci ERP XL, którzy w roku kupili za co najmniej 3000 zł netto; raz dodani zostają '
         .'na liście) — sprzedaży pozostałych kontrahentów ERP XL tu nie ma. Klient należy do handlowca według dzisiejszego '
         .'opiekuna, także w minionych miesiącach: najpierw opiekun z karty w ERP XL, jeśli administrator przypisał tego '
         .'pracownika do konta w aplikacji, a gdy nie — opiekun w aplikacji. „Klient, który kupił” ma w miesiącu co najmniej '
-        .'jedną fakturę albo paragon; „nowy” nie miał żadnej przez 24 miesiące wcześniej.';
+        .'jedną fakturę, paragon albo WZ bez faktury; „nowy” nie miał żadnej przez 24 miesiące wcześniej.';
 
     public function __construct(private readonly ClientAssignment $assignment) {}
 

@@ -24,7 +24,8 @@ use Throwable;
  * Dla zapytań z odpowiedzią z ostatnich N dni (domyślnie SELECT_DAYS = okno + 2 dni zapasu), bez wpisanego wyniku
  * i z pewnym klientem z ERP XL (InquiryClientLinker: wybór handlowca, ten sam adres e-mail, NIP z maila — klient
  * z clients.xl_gid): pozycje FS, PA
- * i FSE tych kontrahentów z ERP XL (ErpXlGateway::customerDocumentLines, od najwcześniejszego dnia odpowiedzi).
+ * i FSE tych kontrahentów z ERP XL (ErpXlGateway::customerDocumentLines, od najwcześniejszego dnia odpowiedzi) — faktura
+ * do WZ z pozycjami swoich WZ, WZ bez faktury pod własnym numerem (jak erp_sale_documents).
  * Towary oferty = ClientInquiryService::offeredProductIds() (wyroby z listu i zatwierdzone zamienniki), porównywane
  * przez powiązania kart z towarami XL o statusie auto albo confirmed (bez towarów usuniętych z XL). Zapisujemy
  * dokumenty z co najmniej jednym trafionym towarem wystawione w oknie [dzień odpowiedzi, +60 dni]: numer, datę,

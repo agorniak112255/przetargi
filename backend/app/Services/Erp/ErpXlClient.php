@@ -39,8 +39,34 @@ final class ErpXlClient implements ErpXlGateway
     /** Aktywny adres kontrahenta; 896 to archiwalne kopie adresów z dokumentów (sprawdzone 30.09.2026). */
     private const ADDRESS_TYPE = 864;
 
-    /** Sprzedaż do klienta w kampaniach: FS i PA. WZ pomijamy — dubluje FS. */
+    /** Sprzedaż do klienta w kampaniach: FS i PA (WZ doliczane osobno — CUSTOMER_DELIVERY_TYPES). */
     private const CUSTOMER_SALE_TYPES = [2033, 2034];
+
+    /**
+     * Faktura do WZ nie ma w XL własnych pozycji (sonda 06.10.2026: 9 923 FS w 2025 = 36,76 mln zł, ~42% sprzedaży) —
+     * towary są tylko na WZ (2001), WZE (2005, do FSE) i WZK (2009, korekta WZ), a faktura w spinaczu dokumentu
+     * (TrN_SpiTyp / TrN_SpiNumer). Pozycje tych dokumentów liczymy jako pozycje faktury ze spinacza, gdy faktura jest
+     * zatwierdzona i nie ma własnych pozycji (spinacz −2033 od 04.2026: faktura MA pozycje — WZ by ją dublowała), albo
+     * jako osobny dokument z datą WZ, gdy faktury jeszcze nie ma (decyzja właściciela 06.10.2026).
+     */
+    private const DELIVERY_SALE_TYPES = [2001, 2005];
+
+    private const DELIVERY_CORRECTION_TYPES = [2009];
+
+    /**
+     * Spinacz WZ −2033 (od 04.2026, SpiNumer = 0): faktura do tej WZ MA własne pozycje — towar liczy się z faktury,
+     * WZ się nie liczy (deliveryCheck pokazuje ich liczbę).
+     */
+    private const INVOICE_WITH_LINES_LINK = -2033;
+
+    /** Korekta FSE (FSEK) — w kontroli reguły WZ (deliveryCheck). */
+    private const EXPORT_CORRECTION_TYPE = 2045;
+
+    /** Dokumenty, które bywają w spinaczu WZ / WZE / WZK: FS, FSE i FSK. */
+    private const DELIVERY_INVOICE_TYPES = [2033, 2037, 2041];
+
+    /** WZ do sprzedaży klienta w kampaniach i zakupach klientów (FS/PA; WZE idzie do FSE, której tu nie liczymy). */
+    private const CUSTOMER_DELIVERY_TYPES = [2001];
 
     /** Stany FS/PA, które się liczą (30.09.2026: FS ma 0–6, 5 = ~97%; 6 = anulowane, 0–2 = bufor/w toku). */
     private const CUSTOMER_SALE_STATES = [3, 4, 5];
@@ -64,7 +90,7 @@ final class ErpXlClient implements ErpXlGateway
      * Skróty numerów dokumentów sprzedaży klienta. FSK i PAK (korekty FS i PA) — oznaczenia przyjęte w aplikacji,
      * do potwierdzenia z numeracją w XL (TraNag nie przechowuje symbolu dokumentu).
      */
-    private const CLIENT_DOCUMENT_PREFIXES = [2001 => 'WZ', 2009 => 'WZK', 2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK', 2045 => 'FSEK'];
+    private const CLIENT_DOCUMENT_PREFIXES = [2001 => 'WZ', 2005 => 'WZE', 2009 => 'WZK', 2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK', 2045 => 'FSEK'];
 
     /**
      * Data sprzedaży dokumentu (Clarion) do „ostatniej sprzedaży” (decyzja właściciela 01.10.2026, wariant B): dokument
@@ -470,21 +496,20 @@ final class ErpXlClient implements ErpXlGateway
 
     public function customerSales(int $fromClarionDate): iterable
     {
-        [$where, $bindings] = $this->customerSaleFilter($fromClarionDate);
-        [$fs, $pa] = self::CUSTOMER_SALE_TYPES;
-        // numery dokumentów liczone osobno dla FS i PA — GIDNumer jest unikalny w obrębie typu
+        // pozycje FS/PA i WZ (pod fakturą albo jeszcze bez niej) z dodatnią ilością; okno i liczba dokumentów po
+        // dokumencie (faktura — jak customerOperators), ostatnia sprzedaż = dzień wydania towaru (WZ, decyzja właściciela
+        // 06.10.2026); typ w kluczu — GIDNumer unikalny w obrębie typu
+        $lines = $this->saleLinesSql(self::CUSTOMER_SALE_TYPES, self::CUSTOMER_DELIVERY_TYPES);
+        $this->yieldToXl();
         $sql = <<<SQL
-            SELECT n.TrN_KntNumer AS customer_gid, e.TrE_TwrNumer AS item_gid, MAX(n.TrN_Data2) AS last_date,
-                   COUNT(DISTINCT CASE WHEN n.TrN_GIDTyp = $fs THEN n.TrN_GIDNumer END)
-                   + COUNT(DISTINCT CASE WHEN n.TrN_GIDTyp = $pa THEN n.TrN_GIDNumer END) AS documents,
-                   SUM(e.TrE_Ilosc) AS quantity
-            FROM CDN.TraElem e
-            JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
-            WHERE $where AND e.TrE_Ilosc > 0
-            GROUP BY n.TrN_KntNumer, e.TrE_TwrNumer
+            SELECT x.customer_gid, x.item_gid, MAX(x.l_date) AS last_date,
+                   COUNT(DISTINCT CAST(x.h_type AS bigint) * 100000000 + x.h_id) AS documents, SUM(x.quantity) AS quantity
+            FROM ($lines) x
+            WHERE x.h_date >= ? AND x.quantity > 0
+            GROUP BY x.customer_gid, x.item_gid
             SQL;
 
-        foreach ($this->db()->cursor($sql, $bindings) as $r) {
+        foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
             yield [
                 'customer_gid' => (int) $r->customer_gid,
                 'item_gid' => (int) $r->item_gid,
@@ -497,20 +522,20 @@ final class ErpXlClient implements ErpXlGateway
 
     public function customerOperators(int $fromClarionDate): iterable
     {
-        [$where, $bindings] = $this->customerSaleFilter($fromClarionDate);
-        // tylko dokumenty z choć jedną pozycją z dodatnią ilością — te same, które liczy customerSales
+        // dokumenty z choć jedną pozycją z dodatnią ilością (te same co customerSales); faktura do WZ liczy się
+        // operatorowi faktury, WZ bez faktury — operatorowi WZ; data dokumentu (faktury)
+        $lines = $this->saleLinesSql(self::CUSTOMER_SALE_TYPES, self::CUSTOMER_DELIVERY_TYPES);
+        $this->yieldToXl();
         $sql = <<<SQL
-            SELECT n.TrN_KntNumer AS customer_gid, o.Ope_Ident AS operator, o.Ope_Nazwisko AS operator_name,
-                   COUNT(*) AS documents
-            FROM CDN.TraNag n
-            LEFT JOIN CDN.OpeKarty o ON o.Ope_GIDNumer = n.TrN_OpeNumerW AND o.Ope_GIDTyp = n.TrN_OpeTypW
-            WHERE $where
-              AND EXISTS (SELECT 1 FROM CDN.TraElem e
-                          WHERE e.TrE_GIDTyp = n.TrN_GIDTyp AND e.TrE_GIDNumer = n.TrN_GIDNumer AND e.TrE_Ilosc > 0)
-            GROUP BY n.TrN_KntNumer, o.Ope_Ident, o.Ope_Nazwisko
+            SELECT x.customer_gid, o.Ope_Ident AS operator, o.Ope_Nazwisko AS operator_name,
+                   COUNT(DISTINCT CAST(x.h_type AS bigint) * 100000000 + x.h_id) AS documents
+            FROM ($lines) x
+            LEFT JOIN CDN.OpeKarty o ON o.Ope_GIDNumer = x.h_ope AND o.Ope_GIDTyp = x.h_ope_typ
+            WHERE x.h_date >= ? AND x.quantity > 0
+            GROUP BY x.customer_gid, o.Ope_Ident, o.Ope_Nazwisko
             SQL;
 
-        foreach ($this->db()->cursor($sql, $bindings) as $r) {
+        foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
             yield [
                 'customer_gid' => (int) $r->customer_gid,
                 'operator' => mb_strtoupper(trim((string) $r->operator)),
@@ -522,38 +547,36 @@ final class ErpXlClient implements ErpXlGateway
 
     public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable
     {
-        $sales = implode(',', self::CUSTOMER_SALE_TYPES);
-        $corrections = implode(',', self::CUSTOMER_SALE_CORRECTION_TYPES);
-        $states = implode(',', self::CUSTOMER_SALE_STATES);
-        $customer = self::CUSTOMER_TYPE;
-        // FS/PA z dodatnią ilością jak dotąd; korekty z każdą niezerową ilością albo wartością (ilość 0 = korekta ceny)
-        $where = "n.TrN_KntTyp = $customer AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ?"
-            ." AND ((n.TrN_GIDTyp IN ($sales) AND e.TrE_Ilosc > 0)"
-            ." OR (n.TrN_GIDTyp IN ($corrections) AND (e.TrE_Ilosc <> 0 OR e.TrE_KsiegowaNetto <> 0)))";
+        $saleTypes = [...self::CUSTOMER_SALE_TYPES, ...self::CUSTOMER_DELIVERY_TYPES];
+        $correctionTypes = [...self::CUSTOMER_SALE_CORRECTION_TYPES, ...self::DELIVERY_CORRECTION_TYPES];
+        $sales = implode(',', $saleTypes);
+        $corrections = implode(',', $correctionTypes);
+        $lines = $this->saleLinesSql(
+            [...self::CUSTOMER_SALE_TYPES, ...self::CUSTOMER_SALE_CORRECTION_TYPES],
+            [...self::CUSTOMER_DELIVERY_TYPES, ...self::DELIVERY_CORRECTION_TYPES],
+        );
+        // sprzedaż z dodatnią ilością jak dotąd; korekty z każdą niezerową ilością albo wartością (ilość 0 = korekta
+        // ceny). Wiersz = pozycja dokumentu, który ma towar (FS/PA albo WZ/WZK — klucz unikalny, korekta WZK wskazuje
+        // WZ), numer z faktury, gdy jest; data = dzień tego dokumentu (WZ — dzień wydania, decyzja 06.10.2026)
+        $where = "x.l_date >= ? AND ((x.l_type IN ($sales) AND x.quantity > 0)"
+            ." OR (x.l_type IN ($corrections) AND (x.quantity <> 0 OR x.net_value <> 0)))";
+        $this->yieldToXl();
         // paczkami — lista towarów kampanii jest krótka, ale limit parametrów MS SQL to 2100
         foreach (array_chunk(array_values(array_unique($itemGids)), 500) as $chunk) {
             $in = implode(',', array_map('intval', $chunk));
-            $sql = <<<SQL
-                SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, e.TrE_GIDLp AS line, n.TrN_TrNSeria AS series,
-                       n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month, n.TrN_Data2 AS doc_date,
-                       n.TrN_KntNumer AS customer_gid, e.TrE_TwrNumer AS item_gid, e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value,
-                       e.TrE_KosztKsiegowy AS cost, n.TrN_ZwrTyp AS corrects_type, n.TrN_ZwrNumer AS corrects_id
-                FROM CDN.TraElem e
-                JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
-                WHERE $where AND e.TrE_TwrNumer IN ($in)
-                SQL;
+            $sql = "SELECT x.* FROM ($lines) x WHERE $where AND x.item_gid IN ($in)";
             foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
-                $type = (int) $r->doc_type;
+                $type = (int) $r->l_type;
                 // dokument korygowany tylko z nagłówka korekty (0 = XL go nie podał)
-                $isCorrection = in_array($type, self::CUSTOMER_SALE_CORRECTION_TYPES, true);
-                $correctsType = $isCorrection && (int) $r->corrects_type > 0 ? (int) $r->corrects_type : null;
-                $correctsId = $isCorrection && (int) $r->corrects_id > 0 ? (int) $r->corrects_id : null;
+                $isCorrection = in_array($type, $correctionTypes, true);
+                $correctsType = $isCorrection && (int) $r->zwr_typ > 0 ? (int) $r->zwr_typ : null;
+                $correctsId = $isCorrection && (int) $r->zwr_numer > 0 ? (int) $r->zwr_numer : null;
                 yield [
                     'document_type' => $type,
-                    'document_id' => (int) $r->document_id,
-                    'line' => (int) $r->line,
-                    'document_number' => $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
-                    'date' => (int) $r->doc_date,
+                    'document_id' => (int) $r->l_id,
+                    'line' => (int) $r->l_lp,
+                    'document_number' => $this->headerNumber($r),
+                    'date' => (int) $r->l_date,
                     'customer_gid' => (int) $r->customer_gid,
                     'item_gid' => (int) $r->item_gid,
                     'quantity' => (float) $r->quantity,
@@ -566,18 +589,103 @@ final class ErpXlClient implements ErpXlGateway
         }
     }
 
-    /**
-     * Warunek sprzedaży do kontrahenta: FS/PA zatwierdzone (TrN_Stan 3–5; 6 = anulowane, 0–2 = bufor/w toku) od daty.
-     *
-     * @return array{0: string, 1: list<int>}
-     */
-    private function customerSaleFilter(int $fromClarionDate): array
+    public function deliveryCheck(int $fromClarionDate, int $toClarionDate): array
     {
-        $types = implode(',', self::CUSTOMER_SALE_TYPES);
+        $deliveries = implode(',', [...self::DELIVERY_SALE_TYPES, ...self::DELIVERY_CORRECTION_TYPES]);
+        $invoices = implode(',', self::DELIVERY_INVOICE_TYPES);
+        // korekty faktur i paragonów (FSK, PAK, FSEK) — WZK koryguje WZ, która zawsze ma pozycje
+        $corrections = implode(',', [...self::CLIENT_CORRECTION_TYPES, self::EXPORT_CORRECTION_TYPE]);
         $states = implode(',', self::CUSTOMER_SALE_STATES);
         $customer = self::CUSTOMER_TYPE;
+        $minus = self::INVOICE_WITH_LINES_LINK;
+        $this->yieldToXl();
+        // wartość z nagłówka (TrN_NettoR) — tu tylko liczymy, czego reguła saleLinesSql nie bierze
+        $row = $this->db()->selectOne(<<<SQL
+            SELECT
+              SUM(CASE WHEN k = 'own_lines' THEN 1 ELSE 0 END) AS own_lines, SUM(CASE WHEN k = 'own_lines' THEN v ELSE 0 END) AS own_lines_net,
+              SUM(CASE WHEN k = 'minus' THEN 1 ELSE 0 END) AS minus, SUM(CASE WHEN k = 'minus' THEN v ELSE 0 END) AS minus_net,
+              SUM(CASE WHEN k = 'other' THEN 1 ELSE 0 END) AS other, SUM(CASE WHEN k = 'other' THEN v ELSE 0 END) AS other_net
+            FROM (
+              SELECT n.TrN_NettoR AS v, CASE
+                  WHEN n.TrN_SpiTyp = $minus THEN 'minus'
+                  WHEN n.TrN_SpiTyp IN ($invoices) THEN CASE WHEN EXISTS (SELECT 1 FROM CDN.TraElem fe
+                       WHERE fe.TrE_GIDTyp = n.TrN_SpiTyp AND fe.TrE_GIDNumer = n.TrN_SpiNumer) THEN 'own_lines' ELSE 'ok' END
+                  WHEN n.TrN_SpiTyp = 0 THEN 'ok' ELSE 'other' END AS k
+              FROM CDN.TraNag n
+              WHERE n.TrN_GIDTyp IN ($deliveries) AND n.TrN_KntTyp = $customer AND n.TrN_Stan IN ($states) AND n.TrN_Data2 BETWEEN ? AND ?
+            ) x
+            SQL, [$fromClarionDate, $toClarionDate]);
+        $orphan = $this->db()->selectOne(<<<SQL
+            SELECT COUNT(*) AS documents, SUM(n.TrN_NettoR) AS net
+            FROM CDN.TraNag n
+            WHERE n.TrN_GIDTyp IN ($corrections) AND n.TrN_KntTyp = $customer AND n.TrN_Stan IN ($states) AND n.TrN_Data2 BETWEEN ? AND ?
+              AND n.TrN_ZwrTyp > 0
+              AND EXISTS (SELECT 1 FROM CDN.TraElem e WHERE e.TrE_GIDTyp = n.TrN_GIDTyp AND e.TrE_GIDNumer = n.TrN_GIDNumer)
+              AND NOT EXISTS (SELECT 1 FROM CDN.TraElem z WHERE z.TrE_GIDTyp = n.TrN_ZwrTyp AND z.TrE_GIDNumer = n.TrN_ZwrNumer)
+            SQL, [$fromClarionDate, $toClarionDate]);
+        $pair = static fn (mixed $count, mixed $net): array => ['documents' => (int) ($count ?? 0), 'net' => round((float) ($net ?? 0), 2)];
 
-        return ["n.TrN_KntTyp = $customer AND n.TrN_GIDTyp IN ($types) AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ?", [$fromClarionDate]];
+        return [
+            'invoice_with_lines' => $pair($row?->own_lines, $row?->own_lines_net),
+            'invoice_lines_mode' => $pair($row?->minus, $row?->minus_net),
+            'unknown_link' => $pair($row?->other, $row?->other_net),
+            'correction_of_lineless' => $pair($orphan?->documents, $orphan?->net),
+        ];
+    }
+
+    /** Numer dokumentu-nagłówka wiersza z saleLinesSql (faktura ze spinacza albo sam dokument). */
+    private function headerNumber(object $row): string
+    {
+        $type = (int) $row->h_type;
+
+        return $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $row->h_series, $row->h_number, $row->h_year, $row->h_month);
+    }
+
+    /**
+     * Pozycje sprzedaży do kontrahenta (TrN_KntTyp 32) jako tabela pochodna — trzy gałęzie o tych samych kolumnach:
+     *
+     * 1. własne pozycje dokumentów $ownTypes (FS, PA, FSE, korekty) zatwierdzonych (stan 3–5);
+     * 2. pozycje WZ / WZE / WZK z $deliveryTypes (stan 3–5) faktury ze spinacza (FS, FSE, FSK) zatwierdzonej i BEZ
+     *    własnych pozycji — nagłówek (h_*: typ, numer, data, kontrahent, operator) z faktury, pozycja (l_*) z WZ;
+     * 3. pozycje WZ / WZE / WZK bez zatwierdzonej faktury (spinacz 0 albo faktura w buforze / anulowana, bez własnych
+     *    pozycji) — nagłówek i pozycja z WZ.
+     *
+     * Spinacz −2033 (faktura z własnymi pozycjami, od 04.2026) i inne typy spinacza nie wchodzą — dublowałyby fakturę.
+     * Filtry (data, kontrahent, towar) nakłada wywołujący na kolumny x.*; MS SQL wpycha je do gałęzi UNION ALL.
+     *
+     * @param  list<int>  $ownTypes
+     * @param  list<int>  $deliveryTypes
+     */
+    private function saleLinesSql(array $ownTypes, array $deliveryTypes): string
+    {
+        $states = implode(',', self::CUSTOMER_SALE_STATES);
+        $customer = self::CUSTOMER_TYPE;
+        $line = 'e.TrE_TwrNumer AS item_gid, e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value,'
+            .' e.TrE_KosztKsiegowy AS cost, n.TrN_GIDTyp AS l_type, n.TrN_GIDNumer AS l_id, e.TrE_GIDLp AS l_lp,'
+            .' n.TrN_Data2 AS l_date, n.TrN_ZwrTyp AS zwr_typ, n.TrN_ZwrNumer AS zwr_numer';
+        $header = static fn (string $a): string => "$a.TrN_GIDTyp AS h_type, $a.TrN_GIDNumer AS h_id, $a.TrN_TrNSeria AS h_series,"
+            ." $a.TrN_TrNNumer AS h_number, $a.TrN_TrNRok AS h_year, $a.TrN_TrNMiesiac AS h_month, $a.TrN_Data2 AS h_date,"
+            ." $a.TrN_KntNumer AS customer_gid, $a.TrN_OpeNumerW AS h_ope, $a.TrN_OpeTypW AS h_ope_typ";
+        $elem = 'FROM CDN.TraElem e JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer';
+        $own = implode(',', $ownTypes);
+        $sql = "SELECT {$header('n')}, $line $elem WHERE n.TrN_KntTyp = $customer AND n.TrN_GIDTyp IN ($own) AND n.TrN_Stan IN ($states)";
+        if ($deliveryTypes === []) {
+            return $sql;
+        }
+
+        $deliveries = implode(',', $deliveryTypes);
+        $invoices = implode(',', self::DELIVERY_INVOICE_TYPES);
+        // faktura ze spinacza bez własnych pozycji (bezpiecznik przed podwójnym liczeniem)
+        $noInvoiceLines = 'NOT EXISTS (SELECT 1 FROM CDN.TraElem fe WHERE fe.TrE_GIDTyp = n.TrN_SpiTyp AND fe.TrE_GIDNumer = n.TrN_SpiNumer)';
+        $spinacz = "LEFT JOIN CDN.TraNag f ON n.TrN_SpiTyp IN ($invoices) AND f.TrN_GIDTyp = n.TrN_SpiTyp AND f.TrN_GIDNumer = n.TrN_SpiNumer";
+
+        return $sql
+            ." UNION ALL SELECT {$header('f')}, $line $elem $spinacz"
+            ." WHERE n.TrN_GIDTyp IN ($deliveries) AND n.TrN_Stan IN ($states) AND n.TrN_SpiTyp IN ($invoices)"
+            ." AND f.TrN_KntTyp = $customer AND f.TrN_Stan IN ($states) AND $noInvoiceLines"
+            ." UNION ALL SELECT {$header('n')}, $line $elem $spinacz"
+            ." WHERE n.TrN_GIDTyp IN ($deliveries) AND n.TrN_KntTyp = $customer AND n.TrN_Stan IN ($states)"
+            ." AND (n.TrN_SpiTyp = 0 OR (n.TrN_SpiTyp IN ($invoices) AND ISNULL(f.TrN_Stan, 0) NOT IN ($states) AND $noInvoiceLines))";
     }
 
     /** Tekst z XL bez zbędnych spacji; pusty = null. */
@@ -676,21 +784,21 @@ final class ErpXlClient implements ErpXlGateway
 
     public function customerSalesTotals(int $fromClarionDate, int $toClarionDate): array
     {
-        $sales = implode(',', self::CLIENT_SALE_TYPES);
-        $types = implode(',', [...self::CLIENT_SALE_TYPES, ...self::CLIENT_CORRECTION_TYPES]);
-        $states = implode(',', self::CUSTOMER_SALE_STATES);
-        $customer = self::CUSTOMER_TYPE;
+        $sales = implode(',', [...self::CLIENT_SALE_TYPES, ...self::DELIVERY_SALE_TYPES]);
+        $lines = $this->saleLinesSql(
+            [...self::CLIENT_SALE_TYPES, ...self::CLIENT_CORRECTION_TYPES],
+            [...self::DELIVERY_SALE_TYPES, ...self::DELIVERY_CORRECTION_TYPES],
+        );
         $this->yieldToXl();
-        // numery dokumentów liczone na typ — GIDNumer jest unikalny w obrębie typu
+        // suma po dokumencie (faktura do WZ = pozycje jej WZ, data faktury); numery dokumentów liczone na typ —
+        // GIDNumer jest unikalny w obrębie typu
         $rows = $this->db()->select(<<<SQL
-            SELECT n.TrN_KntNumer AS customer_gid, SUM(e.TrE_KsiegowaNetto) AS net,
-                   COUNT(DISTINCT CASE WHEN n.TrN_GIDTyp IN ($sales) THEN CAST(n.TrN_GIDTyp AS bigint) * 100000000 + n.TrN_GIDNumer END) AS documents,
-                   MAX(CASE WHEN n.TrN_GIDTyp IN ($sales) THEN n.TrN_Data2 ELSE 0 END) AS last_date
-            FROM CDN.TraElem e
-            JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
-            WHERE n.TrN_KntTyp = $customer AND n.TrN_KntNumer > 0 AND n.TrN_GIDTyp IN ($types)
-              AND n.TrN_Stan IN ($states) AND n.TrN_Data2 BETWEEN ? AND ?
-            GROUP BY n.TrN_KntNumer
+            SELECT x.customer_gid, SUM(x.net_value) AS net,
+                   COUNT(DISTINCT CASE WHEN x.h_type IN ($sales) THEN CAST(x.h_type AS bigint) * 100000000 + x.h_id END) AS documents,
+                   MAX(CASE WHEN x.h_type IN ($sales) THEN x.h_date ELSE 0 END) AS last_date
+            FROM ($lines) x
+            WHERE x.customer_gid > 0 AND x.h_date BETWEEN ? AND ?
+            GROUP BY x.customer_gid
             SQL, [$fromClarionDate, $toClarionDate]);
 
         return array_map(static fn ($r): array => [
@@ -801,32 +909,29 @@ final class ErpXlClient implements ErpXlGateway
 
     public function customerDocuments(array $gids, int $fromClarionDate): iterable
     {
-        $types = implode(',', [...self::CLIENT_SALE_TYPES, ...self::CLIENT_CORRECTION_TYPES]);
-        $states = implode(',', self::CUSTOMER_SALE_STATES);
-        $customer = self::CUSTOMER_TYPE;
+        $lines = $this->saleLinesSql(
+            [...self::CLIENT_SALE_TYPES, ...self::CLIENT_CORRECTION_TYPES],
+            [...self::DELIVERY_SALE_TYPES, ...self::DELIVERY_CORRECTION_TYPES],
+        );
         $this->yieldToXl();
         // paczki po 500 kontrahentów (limit parametrów MS SQL 2100 — numery wpisane w zapytanie jako liczby całkowite);
-        // GROUP BY wszystkich kolumn nagłówka, bo MS SQL nie pozwala wybrać kolumny spoza grupowania
+        // nagłówek = faktura (do WZ — z sumą pozycji jej WZ i WZK) albo WZ bez faktury; GROUP BY wszystkich kolumn
+        // nagłówka, bo MS SQL nie pozwala wybrać kolumny spoza grupowania
         foreach (array_chunk(array_values(array_unique(array_map('intval', $gids))), 500) as $chunk) {
             $in = implode(',', $chunk);
             $sql = <<<SQL
-                SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, n.TrN_TrNSeria AS series,
-                       n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month,
-                       n.TrN_Data2 AS doc_date, n.TrN_KntNumer AS customer_gid, SUM(e.TrE_KsiegowaNetto) AS net_value
-                FROM CDN.TraElem e
-                JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
-                WHERE n.TrN_KntTyp = $customer AND n.TrN_KntNumer IN ($in) AND n.TrN_GIDTyp IN ($types)
-                  AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ?
-                GROUP BY n.TrN_GIDTyp, n.TrN_GIDNumer, n.TrN_TrNSeria, n.TrN_TrNNumer, n.TrN_TrNRok, n.TrN_TrNMiesiac,
-                         n.TrN_Data2, n.TrN_KntNumer
+                SELECT x.h_type, x.h_id, x.h_series, x.h_number, x.h_year, x.h_month, x.h_date, x.customer_gid,
+                       SUM(x.net_value) AS net_value
+                FROM ($lines) x
+                WHERE x.customer_gid IN ($in) AND x.h_date >= ?
+                GROUP BY x.h_type, x.h_id, x.h_series, x.h_number, x.h_year, x.h_month, x.h_date, x.customer_gid
                 SQL;
             foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
-                $type = (int) $r->doc_type;
                 yield [
-                    'document_type' => $type,
-                    'document_id' => (int) $r->document_id,
-                    'document_number' => $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
-                    'date' => (int) $r->doc_date,
+                    'document_type' => (int) $r->h_type,
+                    'document_id' => (int) $r->h_id,
+                    'document_number' => $this->headerNumber($r),
+                    'date' => (int) $r->h_date,
                     'customer_gid' => (int) $r->customer_gid,
                     'net_value' => round((float) $r->net_value, 2),
                 ];
@@ -836,29 +941,18 @@ final class ErpXlClient implements ErpXlGateway
 
     public function customerDocumentLines(array $gids, int $fromClarionDate): iterable
     {
-        $types = implode(',', self::CLIENT_SALE_TYPES);
-        $states = implode(',', self::CUSTOMER_SALE_STATES);
-        $customer = self::CUSTOMER_TYPE;
+        $lines = $this->saleLinesSql(self::CLIENT_SALE_TYPES, self::DELIVERY_SALE_TYPES);
         $this->yieldToXl();
+        // pozycje WZ pod fakturą (dokument, data i kontrahent faktury) albo pod WZ bez faktury — jak customerDocuments
         foreach (array_chunk(array_values(array_unique(array_map('intval', $gids))), 500) as $chunk) {
             $in = implode(',', $chunk);
-            $sql = <<<SQL
-                SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, n.TrN_TrNSeria AS series,
-                       n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month,
-                       n.TrN_Data2 AS doc_date, n.TrN_KntNumer AS customer_gid, e.TrE_TwrNumer AS item_gid,
-                       e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value
-                FROM CDN.TraElem e
-                JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
-                WHERE n.TrN_KntTyp = $customer AND n.TrN_KntNumer IN ($in) AND n.TrN_GIDTyp IN ($types)
-                  AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ? AND e.TrE_Ilosc > 0
-                SQL;
+            $sql = "SELECT x.* FROM ($lines) x WHERE x.customer_gid IN ($in) AND x.h_date >= ? AND x.quantity > 0";
             foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
-                $type = (int) $r->doc_type;
                 yield [
-                    'document_type' => $type,
-                    'document_id' => (int) $r->document_id,
-                    'document_number' => $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
-                    'date' => (int) $r->doc_date,
+                    'document_type' => (int) $r->h_type,
+                    'document_id' => (int) $r->h_id,
+                    'document_number' => $this->headerNumber($r),
+                    'date' => (int) $r->h_date,
                     'customer_gid' => (int) $r->customer_gid,
                     'item_gid' => (int) $r->item_gid,
                     'quantity' => (float) $r->quantity,

@@ -39,6 +39,8 @@ export const DOCUMENT_KIND_LABEL: Record<string, string> = {
   export_invoice: 'Faktura eksportowa',
   invoice_correction: 'Korekta faktury',
   receipt_correction: 'Korekta paragonu',
+  delivery_note: 'WZ (jeszcze bez faktury)',
+  delivery_correction: 'Korekta WZ (jeszcze bez faktury)',
 }
 
 /** Czas między dwiema chwilami słowami: „30 minutach”, „2 godzinach”, „3 dniach” (do „Odpowiedź po …”). */

@@ -104,15 +104,18 @@ interface ErpXlGateway
     public function customerAddressEmails(): iterable;
 
     /**
-     * Sprzedaż (FS, PA — bez WZ, bo dubluje FS) od daty: na kontrahenta i towar data ostatniego dokumentu (Clarion),
-     * liczba dokumentów i ilość. Strumień (setki tysięcy wierszy).
+     * Sprzedaż od daty dokumentu na kontrahenta i towar: pozycje FS i PA oraz WZ — faktura do WZ nie ma w XL własnych
+     * pozycji, więc jej towary to pozycje WZ ze spinacza (kontrahent i data okna z faktury); WZ bez zatwierdzonej
+     * faktury liczy się sama (zob. ErpXlClient::saleLinesSql). last_date = ostatni dzień wydania towaru (data FS/PA,
+     * dla WZ data WZ), documents = liczba dokumentów (faktura do WZ = jeden dokument), ilość. Strumień.
      *
      * @return iterable<array{customer_gid: int, item_gid: int, last_date: int, documents: int, quantity: float}>
      */
     public function customerSales(int $fromClarionDate): iterable;
 
     /**
-     * Liczba FS/PA od daty na kontrahenta i operatora, który je wystawił (Ope_Ident po trim i wielkich literach; pusty,
+     * Liczba dokumentów jak w customerSales (FS/PA z pozycjami, faktury do WZ, WZ bez faktury) od daty na kontrahenta
+     * i operatora, który je wystawił (faktura do WZ — operator faktury; Ope_Ident po trim i wielkich literach; pusty,
      * gdy XL nie zna operatora). Strumień.
      *
      * @return iterable<array{customer_gid: int, operator: string, operator_name: ?string, documents: int}>
@@ -120,11 +123,13 @@ interface ErpXlGateway
     public function customerOperators(int $fromClarionDate): iterable;
 
     /**
-     * Pozycje FS i PA (zatwierdzone, do kontrahenta, ilość > 0) i ich korekt FSK 2041 / PAK 2042 (te same stany, ilość
-     * albo wartość ≠ 0 — ze znakiem, ilość 0 = korekta ceny) z towarami z listy od daty — wynik kampanii „kupili
-     * odbiorcy”. net_value = TrE_KsiegowaNetto (PLN netto; na paragonie bez VAT), cost = TrE_KosztKsiegowy (PLN, ze
-     * znakiem; 0 = XL nie podał kosztu, np. FS do WZ). corrects_type / corrects_id — dokument korygowany z nagłówka
-     * korekty (TrN_ZwrTyp / TrN_ZwrNumer); null dla FS/PA i gdy XL go nie podał. Strumień.
+     * Pozycje FS, PA i WZ 2001 (zatwierdzone, do kontrahenta, ilość > 0) i ich korekt FSK 2041 / PAK 2042 / WZK 2009
+     * (te same stany, ilość albo wartość ≠ 0 — ze znakiem, ilość 0 = korekta ceny) z towarami z listy od daty — wynik
+     * kampanii „kupili odbiorcy”. Faktura do WZ nie ma własnych pozycji: wiersz = pozycja WZ / WZK (document_type
+     * 2001 / 2009, data WZ), document_number i kontrahent — z faktury (korekty FSK) ze spinacza, a gdy jej jeszcze nie ma
+     * — z WZ. net_value = TrE_KsiegowaNetto (PLN netto; na paragonie bez VAT), cost = TrE_KosztKsiegowy (PLN, ze
+     * znakiem; 0 = XL nie podał kosztu). corrects_type / corrects_id — dokument korygowany z nagłówka korekty
+     * (TrN_ZwrTyp / TrN_ZwrNumer; WZK → WZ); null dla sprzedaży i gdy XL go nie podał. Strumień.
      *
      * @param  list<int>  $itemGids
      * @return iterable<array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float, cost: float, corrects_type: int|null, corrects_id: int|null}>
@@ -153,9 +158,11 @@ interface ErpXlGateway
     public function saleHistory(array $gids, int $fromClarionDate): array;
 
     /**
-     * Zakupy kontrahentów w okresie [od, do] (daty Clarion, TrN_Data2): netto PLN (TrE_KsiegowaNetto) z FS, PA i FSE
-     * zatwierdzonych (TrN_Stan 3–5) pomniejszone o ich korekty; documents = liczba FS/PA/FSE bez korekt; last_date —
-     * ostatni z tych dokumentów (0, gdy kontrahent ma same korekty). Bez kontrahenta jednorazowego (numer 0).
+     * Zakupy kontrahentów w okresie [od, do] (daty Clarion, TrN_Data2 dokumentu): netto PLN (TrE_KsiegowaNetto) z FS,
+     * PA i FSE zatwierdzonych (TrN_Stan 3–5) pomniejszone o ich korekty — faktura (korekta) do WZ / WZE / WZK z pozycji
+     * dokumentów ze spinacza, WZ bez zatwierdzonej faktury jako osobny dokument z datą WZ; documents = liczba
+     * dokumentów sprzedaży bez korekt; last_date — ostatni z nich (0, gdy kontrahent ma same korekty). Bez kontrahenta
+     * jednorazowego (numer 0).
      *
      * @return list<array{customer_gid: int, net: float, documents: int, last_date: int}>
      */
@@ -190,8 +197,9 @@ interface ErpXlGateway
 
     /**
      * Nagłówki dokumentów sprzedaży kontrahentów z listy od daty (Clarion, TrN_Data2): FS, PA, FSE i korekty FS/PA —
-     * zatwierdzone (TrN_Stan 3–5), jak customerSalesTotals. net_value = suma TrE_KsiegowaNetto pozycji dokumentu (netto
-     * PLN; korekty ze znakiem). Kontrahenci paczkami po 500, strumień (kursor).
+     * zatwierdzone (TrN_Stan 3–5), jak customerSalesTotals (ta sama reguła WZ: faktura do WZ z sumą pozycji jej WZ,
+     * WZ 2001 / WZE 2005 / WZK 2009 bez zatwierdzonej faktury jako własny nagłówek). net_value = suma TrE_KsiegowaNetto
+     * pozycji (netto PLN; korekty ze znakiem). Kontrahenci paczkami po 500, strumień (kursor).
      *
      * @param  list<int>  $gids
      * @return iterable<array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, net_value: float}>
@@ -200,13 +208,25 @@ interface ErpXlGateway
 
     /**
      * Pozycje FS, PA i FSE (zatwierdzone, TrE_Ilosc > 0) kontrahentów z listy od daty — do podpowiedzi „możliwe
-     * zamówienie z oferty”. Wiersz = pozycja dokumentu (ten sam towar może wystąpić kilka razy). net_value =
-     * TrE_KsiegowaNetto. Kontrahenci paczkami po 500, strumień.
+     * zamówienie z oferty”; faktura do WZ / WZE z pozycjami swoich WZ (dokument, data i kontrahent z faktury), WZ bez
+     * zatwierdzonej faktury pod własnym numerem — dokumenty jak w customerDocuments. Wiersz = pozycja (ten sam towar
+     * może wystąpić kilka razy). net_value = TrE_KsiegowaNetto. Kontrahenci paczkami po 500, strumień.
      *
      * @param  list<int>  $gids
      * @return iterable<array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}>
      */
     public function customerDocumentLines(array $gids, int $fromClarionDate): iterable;
+
+    /**
+     * Kontrola reguły WZ za okres (daty WZ / korekty, stan 3–5, kontrahent 32) — czego sprzedaż z pozycji NIE bierze:
+     * invoice_with_lines = WZ / WZE / WZK, której faktura w spinaczu ma własne pozycje (bezpiecznik przed podwójnym
+     * liczeniem; od 2019 nie było), invoice_lines_mode = WZ ze spinaczem −2033 (od 04.2026: faktura z własnymi pozycjami
+     * — towar liczy się z faktury), unknown_link = inny typ w spinaczu, correction_of_lineless = korekta z własnymi
+     * pozycjami do dokumentu bez pozycji (np. FSK do faktury do WZ — kampania jej nie powiąże). net = TrN_NettoR.
+     *
+     * @return array{invoice_with_lines: array{documents: int, net: float}, invoice_lines_mode: array{documents: int, net: float}, unknown_link: array{documents: int, net: float}, correction_of_lineless: array{documents: int, net: float}}
+     */
+    public function deliveryCheck(int $fromClarionDate, int $toClarionDate): array;
 
     /**
      * Usługi (Twr_Typ = 4) o numerze większym niż $afterGid, rosnąco — katalog modułu Przeglądy. Jednostka pusta = null.
