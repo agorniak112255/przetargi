@@ -16,4 +16,12 @@ class Role extends SpatieRole
         'display_name',
         'guard_name',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            // osoby, których oferty widzi rola z offers.view_selected (App\Services\Offers\OfferVisibility)
+            'offer_visible_user_ids' => 'array',
+        ];
+    }
 }

@@ -99,9 +99,18 @@ export type OfferInspectionLinePatch = {
   position?: number
 }
 
+/** Autor oferty — nadawca maili ze swojej skrzynki. */
+export type OfferAuthor = { id: number; name: string; email: string }
+
 export type Offer = {
   id: number
   kind: OfferKind
+  author: OfferAuthor | null
+  /**
+   * false = oferta innej osoby, widoczna z uprawnieniem „Oferty — podgląd wszystkich” albo „… wybranych osób”:
+   * tylko podgląd (zmiana, wysyłka, usunięcie — 403).
+   */
+  can_edit: boolean
   /** Tylko oferta przeglądu; null dla ofert produktowych. */
   customer: OfferCustomer | null
   /** Wiersze oferty przeglądu; dla ofert produktowych pusta lista. */
@@ -131,6 +140,12 @@ export type OfferListRow = {
   items_count: number
   /** Adresy z udaną wysyłką (status sent), wszystkie wysyłki razem. */
   recipients_count: number
+  /** Te adresy (bez powtórzeń) — do wyszukiwania na liście. */
+  recipient_emails: string[]
+  /** Autor oferty — nadawca maili ze swojej skrzynki. */
+  author: OfferAuthor | null
+  /** false = oferta innej osoby — tylko podgląd. */
+  can_edit: boolean
   last_sent_at: string | null
   last_copied_at: string | null
   updated_at: string

@@ -12,7 +12,20 @@ type RoleRow = {
   permissions: string[]
   /** dostęp z sieci całej grupy; konto z własnym ustawieniem go nie dziedziczy */
   network_access?: 'any' | 'local'
+  /** osoby, których oferty widzi rola z uprawnieniem „Oferty — podgląd ofert wybranych osób” */
+  offer_visible_user_ids?: number[]
 }
+
+type UserOption = {
+  id: number
+  name: string
+}
+
+/** Uprawnienie, bez którego lista osób (oferty do podglądu) nic nie daje. */
+const OFFERS_VIEW_SELECTED = 'offers.view_selected'
+const OFFERS_VIEW_ALL = 'offers.view_all'
+/** Od tylu osób pokazujemy wyszukiwarkę nad listą. */
+const USER_SEARCH_FROM = 10
 
 type PermissionDef = {
   key: string
@@ -23,6 +36,7 @@ type PermissionDef = {
 
 type RolesResponse = {
   roles: RoleRow[]
+  users?: UserOption[]
   all_permissions: string[]
   permission_definitions: PermissionDef[]
 }
@@ -40,23 +54,30 @@ export function AdminRoles() {
   const [copyFrom, setCopyFrom] = useState('handlowiec')
   // null = nie edytujemy; obiekt = otwarte pola zmiany nazwy i kodu wybranej roli
   const [renaming, setRenaming] = useState<{ label: string; code: string } | null>(null)
+  const [users, setUsers] = useState<UserOption[]>([])
+  // osoby zaznaczone na ekranie (oferty do podglądu); zapis osobno przyciskiem „Zapisz osoby”
+  const [viewers, setViewers] = useState<Set<number>>(new Set())
+  const [viewerQuery, setViewerQuery] = useState('')
 
   async function load() {
     const data = await api<RolesResponse>('/admin/roles')
     setRoles(data.roles)
+    setUsers(data.users ?? [])
     setDefinitions(data.permission_definitions ?? [])
     if (!selected && data.roles[0]) {
       selectRole(data.roles[0])
     } else if (selected) {
       const role = data.roles.find((r) => r.name === selected)
-      if (role) selectRole(role)
+      // ta sama rola po zapisie uprawnień: niezapisane zaznaczenia osób zostają na ekranie
+      if (role) selectRole(role, true)
       else if (data.roles[0]) selectRole(data.roles[0])
     }
   }
 
-  function selectRole(role: RoleRow) {
+  function selectRole(role: RoleRow, keepViewers = false) {
     setSelected(role.name)
     setChecked(new Set(role.permissions))
+    if (!keepViewers) setViewers(new Set(role.offer_visible_user_ids ?? []))
     setRenaming(null)
   }
 
@@ -117,6 +138,44 @@ export function AdminRoles() {
     } finally {
       setBusy(false)
     }
+  }
+
+  /** Osoby, których oferty widzi rola — zapis osobno od zaznaczeń uprawnień (te zostają na ekranie niezapisane). */
+  async function saveOfferViewers() {
+    if (!selected) return
+    // tylko osoby z bieżącej listy — usunięte konto odrzuciłby serwer
+    const known = new Set(users.map((u) => u.id))
+    const ids = [...viewers].filter((id) => known.has(id)).sort((a, b) => a - b)
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const updated = await api<RoleRow>(`/admin/roles/${selected}/offer-viewers`, {
+        method: 'PATCH',
+        body: JSON.stringify({ user_ids: ids }),
+      })
+      const saved = updated.offer_visible_user_ids ?? []
+      setRoles((prev) =>
+        prev.map((r) => (r.name === updated.name ? { ...r, offer_visible_user_ids: saved } : r)),
+      )
+      setViewers(new Set(saved))
+      setMsg(
+        `Zapisano osoby, których oferty widzi rola „${updated.label ?? updated.name}”: ${saved.length}.`,
+      )
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function toggleViewer(id: number) {
+    setViewers((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   async function onCreateRole(e: FormEvent) {
@@ -211,6 +270,28 @@ export function AdminRoles() {
   }, [definitions])
 
   const selectedRole = roles.find((r) => r.name === selected)
+
+  const savedViewers = new Set(selectedRole?.offer_visible_user_ids ?? [])
+  const viewersDirty = viewers.size !== savedViewers.size || [...viewers].some((id) => !savedViewers.has(id))
+  const viewerNeedle = viewerQuery.trim().toLocaleLowerCase('pl')
+  const shownUsers =
+    viewerNeedle === '' ? users : users.filter((u) => u.name.toLocaleLowerCase('pl').includes(viewerNeedle))
+  const allShownViewers = shownUsers.length > 0 && shownUsers.every((u) => viewers.has(u.id))
+  const viewersCount = users.filter((u) => viewers.has(u.id)).length
+  // działa według zapisanych uprawnień roli, nie zaznaczeń na ekranie
+  const viewSelectedSaved = selectedRole?.permissions.includes(OFFERS_VIEW_SELECTED) ?? false
+  const viewAllSaved = selectedRole?.permissions.includes(OFFERS_VIEW_ALL) ?? false
+
+  function toggleAllShownViewers() {
+    setViewers((prev) => {
+      const next = new Set(prev)
+      for (const u of shownUsers) {
+        if (allShownViewers) next.delete(u.id)
+        else next.add(u.id)
+      }
+      return next
+    })
+  }
 
   return (
     <div>
@@ -424,6 +505,86 @@ export function AdminRoles() {
           >
             Zapisz uprawnienia
           </button>
+
+          <section
+            className={`mt-5 max-w-3xl rounded-xl p-4 shadow-sm ${viewSelectedSaved ? 'bg-white' : 'bg-slate-100'}`}
+            aria-label="Oferty których osób widzi ta rola"
+          >
+            <h2 className={`text-sm font-semibold ${viewSelectedSaved ? 'text-slate-800' : 'text-slate-500'}`}>
+              Oferty których osób widzi ta rola
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Osoby z tą rolą widzą oferty zaznaczonych osób tylko do podglądu — zmienia i wysyła je autor.
+            </p>
+            {!viewSelectedSaved && (
+              <p className="mt-1 text-xs text-amber-800">
+                Działa po nadaniu uprawnienia „Oferty — podgląd ofert wybranych osób”
+                {checked.has(OFFERS_VIEW_SELECTED) ? ' — jest zaznaczone wyżej, zapisz uprawnienia.' : '.'}
+              </p>
+            )}
+            {viewAllSaved && (
+              <p className="mt-1 text-xs text-slate-500">
+                Ta rola ma też uprawnienie „Oferty — podgląd wszystkich”, więc i tak widzi oferty wszystkich osób.
+              </p>
+            )}
+            <div className={`mt-3 ${viewSelectedSaved ? '' : 'opacity-60'}`}>
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                {users.length >= USER_SEARCH_FROM && (
+                  <input
+                    type="search"
+                    className="w-56 rounded border px-2 py-1 text-sm text-slate-900"
+                    placeholder="Szukaj po imieniu i nazwisku"
+                    aria-label="Szukaj osoby"
+                    value={viewerQuery}
+                    onChange={(e) => setViewerQuery(e.target.value)}
+                  />
+                )}
+                <button
+                  type="button"
+                  disabled={busy || shownUsers.length === 0}
+                  onClick={toggleAllShownViewers}
+                  className="rounded bg-slate-200 px-2 py-1 text-xs text-slate-800 hover:bg-slate-300 disabled:opacity-50"
+                >
+                  {allShownViewers
+                    ? viewerNeedle === ''
+                      ? 'Odznacz wszystkich'
+                      : 'Odznacz znalezionych'
+                    : viewerNeedle === ''
+                      ? 'Zaznacz wszystkich'
+                      : 'Zaznacz znalezionych'}
+                </button>
+                <span>
+                  zaznaczono {viewersCount} z {users.length}
+                </span>
+              </div>
+              <ul className="grid max-h-64 gap-1 overflow-auto sm:grid-cols-2">
+                {shownUsers.map((u) => (
+                  <li key={u.id}>
+                    <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-slate-800 hover:bg-slate-50">
+                      <input type="checkbox" checked={viewers.has(u.id)} onChange={() => toggleViewer(u.id)} />
+                      {u.name}
+                    </label>
+                  </li>
+                ))}
+                {shownUsers.length === 0 && (
+                  <li className="px-2 py-1 text-xs text-slate-500">
+                    {users.length === 0 ? 'Brak użytkowników.' : 'Nikogo nie znaleziono.'}
+                  </li>
+                )}
+              </ul>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={busy || !viewersDirty}
+                onClick={() => void saveOfferViewers()}
+                className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                Zapisz osoby
+              </button>
+              {viewersDirty && <span className="text-xs text-amber-800">niezapisane zmiany na liście osób</span>}
+            </div>
+          </section>
         </>
       )}
 

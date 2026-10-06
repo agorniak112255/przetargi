@@ -77,6 +77,8 @@ final class PermissionCatalog
         'campaigns.delete',
         'campaigns.view',
         'offers.use',
+        'offers.view_all',
+        'offers.view_selected',
         // moduł Przeglądy (06.10.2026) — na start tylko admin (rolePermissions: admin = ALL); innym nadaje właściciel
         'inspections.view',
         'inspections.manage',
@@ -256,6 +258,8 @@ final class PermissionCatalog
             ['campaigns.delete', 'Kampanie — usuwanie wysłanych', 'Może usunąć wysłaną albo anulowaną kampanię razem z jej odbiorcami, kliknięciami i odpowiedziami (wypisy z mailingu zostają). Cudze kampanie — tylko z uprawnieniem „Kampanie — wszystkie”. Własny projekt usuwa każdy bez tego uprawnienia.', 'Kampanie'],
             ['campaigns.view', 'Kampanie — podgląd wysłanych', 'Widzi kampanie wszystkich pracowników po rozpoczęciu wysyłki (w trakcie, wysłane i anulowane): treść maila, pozycje, odbiorców, kliknięcia, odpowiedzi i sprzedaż. Nie zmienia, nie wysyła, nie duplikuje i nie usuwa kampanii. Może wysłać mail testowy tylko na własny adres. Projekty innych osób są niewidoczne.', 'Kampanie'],
             ['offers.use', 'Oferty dla klientów', 'Może przygotować ofertę z towarów ERP XL i kart produktów, skopiować ją do własnej wiadomości albo wysłać ze swojej skrzynki pod podane adresy (osobny mail do każdego adresu). Przy pozycjach widzi koszt zakupu towaru z ERP XL i cenę zakupu karty produktu. Dodawanie produktów z listy produktów wymaga też uprawnienia „Produkty — podgląd”.', 'Kampanie'],
+            ['offers.view_all', 'Oferty — podgląd wszystkich', 'Widzi na liście „Oferty” oferty wszystkich pracowników (z produktami i oferty przeglądu — każdą w zakresie uprawnień „Oferty dla klientów” i „Przeglądy — oferty dla klientów”) i może je otworzyć do podglądu: treść, pozycje, wysyłki, PDF. Zmienia i wysyła ofertę tylko jej autor. Bez tego uprawnienia każdy widzi wyłącznie swoje oferty.', 'Kampanie'],
+            ['offers.view_selected', 'Oferty — podgląd ofert wybranych osób', 'Widzi oferty osób wybranych w ustawieniach tej roli (lista pod uprawnieniami roli) — tylko do podglądu, jak „Oferty — podgląd wszystkich”, ale tylko tych osób. Zmienia i wysyła ofertę tylko jej autor.', 'Kampanie'],
             ['inquiries.view_others', 'Zapytania — otwieranie cudzych', 'Może otworzyć zapytanie innego pracownika i zobaczyć mail klienta, dobrane pozycje i przygotowany list. Tylko podgląd — zmieniać i wysyłać może wyłącznie autor.', 'Zapytania'],
             ['inspections.view', 'Przeglądy — lista terminów', 'Widzi zakładkę „Przeglądy”: klientów, którym mija albo minął termin przeglądu (gaśnic, hydrantów i innych pozycji z listy przeglądów), wyliczony z faktur sprzedaży w ERP XL — z ilością, datą i wartością netto ostatniego przeglądu lub zakupu. Może pobrać listę do Excela i raport PDF.', 'Przeglądy'],
             ['inspections.manage', 'Przeglądy — lista pozycji i odstępy', 'Może dodawać usługi i towary z ERP XL do listy przeglądów, ustawiać dla każdej co ile miesięcy wypada przegląd, wskazać usługę, która odnawia towar, oraz zatwierdzać i odrzucać podpowiedzi podobnych pozycji. Może też pomijać klientów na liście terminów.', 'Przeglądy'],

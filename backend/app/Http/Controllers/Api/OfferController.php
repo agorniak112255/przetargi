@@ -20,6 +20,7 @@ use App\Services\Offers\OfferItemPresenter;
 use App\Services\Offers\OfferPdf;
 use App\Services\Offers\OfferRenderer;
 use App\Services\Offers\OfferSender;
+use App\Services\Offers\OfferVisibility;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
@@ -56,8 +57,10 @@ class OfferController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
+        $authors = OfferVisibility::authorIds($user);
         $offers = Offer::query()
-            ->where('user_id', $user->id)
+            // swoje; z offers.view_all — wszystkie, z offers.view_selected — także osób wybranych w roli
+            ->when($authors !== null, static fn ($q) => $q->whereIn('user_id', $authors))
             // tylko rodzaje, do których konto ma uprawnienie
             ->whereIn('kind', $this->allowedKinds($user))
             ->withCount(['items', 'inspectionLines'])
@@ -69,8 +72,17 @@ class OfferController extends Controller
                     ->toBase(),
                 'recipients_count',
             )
+            ->with('user:id,name,email')
             ->orderByDesc('updated_at')->orderByDesc('id')
             ->get();
+        // adresy z udaną wysyłką (do wyszukiwania na liście) — jednym zapytaniem, bez powtórzeń
+        $sentTo = [];
+        foreach ($offers->pluck('id')->chunk(500) as $chunk) {
+            foreach (OfferRecipient::query()->whereIn('offer_id', $chunk->all())->where('status', OfferRecipient::STATUS_SENT)
+                ->orderBy('id')->get(['offer_id', 'email']) as $r) {
+                $sentTo[(int) $r->offer_id][mb_strtolower((string) $r->email)] ??= (string) $r->email;
+            }
+        }
         $customers = $this->customers($offers->filter(static fn (Offer $o): bool => $o->isInspection())->pluck('customer_xl_gid')->all());
 
         return response()->json([
@@ -83,6 +95,11 @@ class OfferController extends Controller
                 // oferta przeglądu: liczba wierszy przeglądu
                 'items_count' => (int) $o->getAttribute($o->isInspection() ? 'inspection_lines_count' : 'items_count'),
                 'recipients_count' => (int) $o->getAttribute('recipients_count'),
+                'recipient_emails' => array_values($sentTo[(int) $o->id] ?? []),
+                // autor oferty — nadawca maili
+                'author' => $o->user !== null ? ['id' => (int) $o->user->id, 'name' => (string) $o->user->name, 'email' => (string) $o->user->email] : null,
+                // cudza oferta (widoczna z offers.view_all / view_selected) — tylko podgląd
+                'can_edit' => (int) $o->user_id === (int) $user->id,
                 'last_sent_at' => $o->last_sent_at?->toIso8601String(),
                 'last_copied_at' => $o->last_copied_at?->toIso8601String(),
                 'updated_at' => $o->updated_at?->toIso8601String(),
@@ -112,7 +129,7 @@ class OfferController extends Controller
 
     public function show(Request $request, Offer $offer): JsonResponse
     {
-        $this->authorizeOwner($request, $offer);
+        $this->authorizeView($request, $offer);
 
         return response()->json($this->present($offer, $request->user()));
     }
@@ -313,7 +330,7 @@ class OfferController extends Controller
 
     public function preview(Request $request, Offer $offer): JsonResponse
     {
-        $this->authorizeOwner($request, $offer);
+        $this->authorizeView($request, $offer);
         // podgląd = to, co handlowiec kopiuje do Thunderbirda — bez podpisu, bo doda go program pocztowy; forma
         // „pdf” — krótki mail bez produktów (oferta w załączniku)
         $delivery = $this->delivery($offer);
@@ -338,7 +355,7 @@ class OfferController extends Controller
      */
     public function pdf(Request $request, Offer $offer): Response
     {
-        $this->authorizeOwner($request, $offer);
+        $this->authorizeView($request, $offer);
         OfferSender::assertReady($offer, 'przed pobraniem PDF');
 
         return $this->pdfResponse($this->pdf->render($offer, $request->user()), OfferPdf::filename($offer));
@@ -347,7 +364,7 @@ class OfferController extends Controller
     /** PDF, który dostali klienci w tej wysyłce — zapisany przy wysyłce, nie składany na nowo. */
     public function sendPdf(Request $request, Offer $offer, OfferSend $send): Response
     {
-        $this->authorizeOwner($request, $offer);
+        $this->authorizeView($request, $offer);
         if ((int) $send->offer_id !== (int) $offer->id || $send->pdf_path === null) {
             abort(404);
         }
@@ -393,7 +410,7 @@ class OfferController extends Controller
     /** Dokładnie to, co dostali klienci w tej wysyłce. */
     public function showSend(Request $request, Offer $offer, OfferSend $send): JsonResponse
     {
-        $this->authorizeOwner($request, $offer);
+        $this->authorizeView($request, $offer);
         if ((int) $send->offer_id !== (int) $offer->id) {
             abort(404);
         }
@@ -623,11 +640,15 @@ class OfferController extends Controller
      * Ofertę widzi i zmienia tylko autor; cudza = 404 (bez zdradzania, że istnieje). Oferta przeglądu bez uprawnienia
      * inspections.offer — też 404; oferta z produktami bez offers.use — 403.
      */
-    private function authorizeOwner(Request $request, Offer $offer): void
+    /**
+     * Podgląd: rodzaj oferty w uprawnieniach konta i autor w zakresie widoczności (swoje; offers.view_all — wszystkie;
+     * offers.view_selected — osób wybranych w roli). Niewidoczna oferta = 404 (bez zdradzania, że istnieje).
+     */
+    private function authorizeView(Request $request, Offer $offer): void
     {
         /** @var User $user */
         $user = $request->user();
-        if ((int) $offer->user_id !== (int) $user->id) {
+        if (! OfferVisibility::canView($user, (int) $offer->user_id)) {
             abort(404);
         }
         if ($offer->isInspection()) {
@@ -636,6 +657,15 @@ class OfferController extends Controller
             }
         } elseif (! $user->can('offers.use')) {
             abort(403, 'Brak uprawnienia do ofert z produktami.');
+        }
+    }
+
+    /** Zmiana, wysyłka, usunięcie — tylko autor (mail wychodzi z jego skrzynki); cudza widoczna oferta = 403. */
+    private function authorizeOwner(Request $request, Offer $offer): void
+    {
+        $this->authorizeView($request, $offer);
+        if ((int) $offer->user_id !== (int) $request->user()->id) {
+            abort(403, 'To oferta innej osoby — zmienia ją i wysyła tylko jej autor.');
         }
     }
 
@@ -711,9 +741,16 @@ class OfferController extends Controller
         $inspection = $offer->isInspection();
         $xlGid = (int) $offer->customer_xl_gid;
 
+        $offer->loadMissing('user:id,name,email');
+
         return [
             'id' => (int) $offer->id,
             'kind' => $inspection ? Offer::KIND_INSPECTION : Offer::KIND_PRODUCTS,
+            'author' => $offer->user !== null
+                ? ['id' => (int) $offer->user->id, 'name' => (string) $offer->user->name, 'email' => (string) $offer->user->email]
+                : null,
+            // cudza oferta (widoczna z offers.view_all / offers.view_selected) — tylko podgląd
+            'can_edit' => (int) $offer->user_id === (int) $viewer->id,
             // oferta przeglądu: klient z kartoteki XL i wiersze terminów (bez cen); oferta z produktami: null i []
             'customer' => $inspection ? $this->presentCustomer($xlGid, $this->customers([$xlGid])[$xlGid] ?? null) : null,
             'inspection_lines' => $inspection ? $offer->inspectionLines()->get()->map(static fn (OfferInspectionLine $l): array => [

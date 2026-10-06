@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { BTN, BTN_PRIMARY, BTN_SM, Chip, ConfirmDialog, ErrorBar, INPUT, Modal } from '../components/CampaignsUi'
 import { errorText, fmtDateTime, fmtInt, fmtQty } from '../lib/campaignFormat'
+import { applyCheckboxRange } from '../lib/checkboxRange'
 import {
   INSPECTION_INTERVALS,
   XL_TYPE_GOODS,
@@ -38,6 +39,142 @@ const CATALOG_TYPES: { value: InspectionCatalogType; label: string }[] = [
   { value: 'service', label: 'tylko usługi' },
   { value: 'goods', label: 'tylko towary' },
 ]
+
+type SortDir = 'asc' | 'desc'
+type SortState<K extends string> = { key: K; dir: SortDir } | null
+
+/** Klik w nagłówek: ta sama kolumna odwraca kierunek, inna zaczyna od `firstDir`. */
+function nextSort<K extends string>(cur: SortState<K>, key: K, firstDir: SortDir): SortState<K> {
+  if (cur?.key === key) return { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' }
+  return { key, dir: firstDir }
+}
+
+/** Sortowanie z remisem po nazwie (zawsze rosnąco), żeby kolejność była stała. */
+function sortRows<T extends { name: string }, K extends string>(
+  rows: T[],
+  sort: SortState<K>,
+  compare: (a: T, b: T, key: K) => number,
+): T[] {
+  if (!sort) return rows
+  const sign = sort.dir === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => compare(a, b, sort.key) * sign || a.name.localeCompare(b.name, 'pl'))
+}
+
+const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, 'pl')
+// Number(): liczby z bazy mogą przyjść jako tekst
+const byUsage = (a: { customers_24m: number; quantity_24m: number }, b: { customers_24m: number; quantity_24m: number }) =>
+  Number(a.customers_24m) - Number(b.customers_24m) || Number(a.quantity_24m) - Number(b.quantity_24m)
+
+type DefinedSortKey = 'name' | 'interval' | 'due'
+
+function compareDefined(a: InspectionPositionRow, b: InspectionPositionRow, key: DefinedSortKey): number {
+  if (key === 'interval') return a.interval_months - b.interval_months
+  if (key === 'due') {
+    return Number(a.customers_due) - Number(b.customers_due) || Number(a.customers_overdue) - Number(b.customers_overdue)
+  }
+  return byName(a, b)
+}
+
+type CatalogSortKey = 'name' | 'type' | 'usage'
+
+function compareCatalog(a: InspectionCatalogItem, b: InspectionCatalogItem, key: CatalogSortKey): number {
+  if (key === 'type') return xlTypeLabel(a.xl_type).localeCompare(xlTypeLabel(b.xl_type), 'pl')
+  if (key === 'usage') return byUsage(a, b)
+  return byName(a, b)
+}
+
+function SortHeader<K extends string>({
+  label,
+  k,
+  sort,
+  onSort,
+  alignRight,
+}: {
+  label: string
+  k: K
+  sort: SortState<K>
+  onSort: (k: K) => void
+  alignRight?: boolean
+}) {
+  const active = sort?.key === k
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(k)}
+      className={`inline-flex items-center gap-0.5 hover:text-slate-900 ${alignRight ? 'text-right' : 'text-left'} ${
+        active ? 'text-slate-900' : ''
+      }`}
+      title="Sortuj — kliknij ponownie, żeby odwrócić kolejność"
+    >
+      {label}
+      <span className={active ? 'text-slate-700' : 'text-slate-300'} aria-hidden>
+        {active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * Klik w pole wyboru wiersza; z Shiftem zaznacza (albo odznacza — jak stan klikniętego wiersza) wszystkie wiersze
+ * między ostatnio klikniętym a bieżącym w kolejności, w jakiej są teraz pokazane. Kotwica to identyfikator wiersza,
+ * a nie numer, więc zmiana sortowania czy wyszukiwania jej nie przestawia (gdy zniknęła z listy — zwykły klik).
+ */
+function toggleInOrder<T extends number | string>(
+  orderedIds: T[],
+  selected: ReadonlySet<T>,
+  anchorId: T | null,
+  targetId: T,
+  shiftKey: boolean,
+): Set<T> {
+  const index = orderedIds.indexOf(targetId)
+  if (index < 0) return new Set(selected)
+  const anchorIndex = anchorId === null ? -1 : orderedIds.indexOf(anchorId)
+  const current = {} as Record<T, boolean>
+  for (const id of orderedIds) if (selected.has(id)) current[id] = true
+  const applied = applyCheckboxRange(orderedIds, current, anchorIndex >= 0 ? anchorIndex : null, index, shiftKey)
+  const next = new Set(selected)
+  for (const id of orderedIds) {
+    if (applied.selected[id]) next.add(id)
+    else next.delete(id)
+  }
+  return next
+}
+
+/** Shift przy kliknięciu pola wyboru (zdarzenie zmiany pola to w przeglądarce kliknięcie). */
+const shiftOf = (e: { nativeEvent: Event }) => (e.nativeEvent as MouseEvent).shiftKey === true
+
+/** Shift+klik nie zaznacza przy okazji tekstu w tabeli. */
+const noTextSelectOnShift = (e: ReactMouseEvent) => {
+  if (e.shiftKey) e.preventDefault()
+}
+
+/** Pole „zaznacz wszystkie” w nagłówku: zaznaczone, puste albo częściowe. */
+function SelectAllBox({
+  total,
+  selectedCount,
+  onToggle,
+  label,
+}: {
+  total: number
+  selectedCount: number
+  onToggle: () => void
+  label: string
+}) {
+  const all = total > 0 && selectedCount === total
+  return (
+    <input
+      type="checkbox"
+      checked={all}
+      disabled={total === 0}
+      ref={(el) => {
+        if (el) el.indeterminate = selectedCount > 0 && selectedCount < total
+      }}
+      onChange={onToggle}
+      title="Zaznacz / odznacz wszystkie widoczne. Na wierszu: Shift+klik zaznacza zakres."
+      aria-label={label}
+    />
+  )
+}
 
 function IntervalSelect({
   value,
@@ -131,6 +268,9 @@ export function InspectionPositions() {
   }
 
   const defined = new Set((rows ?? []).map((r) => r.xl_gid))
+  const [sort, setSort] = useState<SortState<DefinedSortKey>>(null)
+  const sortedRows = useMemo(() => sortRows(rows ?? [], sort, compareDefined), [rows, sort])
+  const onSort = (k: DefinedSortKey) => setSort((cur) => nextSort(cur, k, k === 'name' ? 'asc' : 'desc'))
 
   return (
     <div>
@@ -161,20 +301,26 @@ export function InspectionPositions() {
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50 text-slate-700">
-              <th className="p-2">Pozycja z ERP XL</th>
-              <th className="p-2">Interwał przeglądu</th>
+              <th className="p-2">
+                <SortHeader label="Pozycja z ERP XL" k="name" sort={sort} onSort={onSort} />
+              </th>
+              <th className="p-2">
+                <SortHeader label="Interwał przeglądu" k="interval" sort={sort} onSort={onSort} />
+              </th>
               <th className="p-2" title="Tylko dla towaru: sprzedaż tej usługi po zakupie urządzenia zamyka termin zakupu">
                 Usługa odnawiająca
               </th>
               <th className="p-2">Uwaga</th>
               <th className="p-2 text-center">Aktywna</th>
-              <th className="whitespace-nowrap p-2 text-right">Klienci z terminem</th>
+              <th className="whitespace-nowrap p-2 text-right">
+                <SortHeader label="Klienci z terminem" k="due" sort={sort} onSort={onSort} alignRight />
+              </th>
               <th className="p-2">Skąd i kto</th>
               <th className="p-2" />
             </tr>
           </thead>
           <tbody>
-            {(rows ?? []).map((r) => (
+            {sortedRows.map((r) => (
               <tr key={r.id} className={`border-b align-top ${r.active ? '' : 'text-slate-500'}`}>
                 <td className="min-w-[16rem] p-2">
                   <div className="font-medium text-slate-900">{r.name}</div>
@@ -456,14 +602,44 @@ function AddFromCatalogModal({
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [sort, setSort] = useState<SortState<CatalogSortKey>>(null)
+  /** Ostatnio kliknięty wiersz (identyfikator) — początek zakresu przy Shift+klik. */
+  const anchor = useRef<number | null>(null)
 
-  function toggle(item: InspectionCatalogItem) {
+  const isAlready = (item: InspectionCatalogItem) => item.position_id !== null || defined.has(item.xl_gid)
+  const sortedItems = useMemo(() => sortRows(search.items, sort, compareCatalog), [search.items, sort])
+  const selectable = sortedItems.filter((i) => !isAlready(i))
+  const selectableIds = selectable.map((i) => i.xl_gid)
+  const selectedVisible = selectableIds.filter((id) => picked.has(id)).length
+  const onSort = (k: CatalogSortKey) => setSort((cur) => nextSort(cur, k, k === 'usage' ? 'desc' : 'asc'))
+
+  /** Zdejmuje pozycję z zaznaczonych (lista „Zaznaczone” pod tabelą). */
+  function unpick(xlGid: number) {
     setPicked((cur) => {
       const next = new Map(cur)
-      if (next.has(item.xl_gid)) next.delete(item.xl_gid)
-      else next.set(item.xl_gid, item)
+      next.delete(xlGid)
       return next
     })
+  }
+
+  function toggleRow(item: InspectionCatalogItem, shiftKey: boolean) {
+    const ids = toggleInOrder(selectableIds, new Set(picked.keys()), anchor.current, item.xl_gid, shiftKey)
+    anchor.current = item.xl_gid
+    const next = new Map<number, InspectionCatalogItem>()
+    for (const [id, i] of picked) if (ids.has(id)) next.set(id, i)
+    for (const i of selectable) if (ids.has(i.xl_gid)) next.set(i.xl_gid, i)
+    setPicked(next)
+  }
+
+  function toggleAllVisible() {
+    const allOn = selectableIds.length > 0 && selectedVisible === selectableIds.length
+    const next = new Map(picked)
+    for (const i of selectable) {
+      if (allOn) next.delete(i.xl_gid)
+      else next.set(i.xl_gid, i)
+    }
+    anchor.current = allOn ? null : (selectableIds[selectableIds.length - 1] ?? null)
+    setPicked(next)
   }
 
   async function submit() {
@@ -558,21 +734,36 @@ function AddFromCatalogModal({
         <table className="w-full text-left">
           <thead>
             <tr className="border-b bg-slate-50 text-slate-700">
-              <th className="w-8 p-2" />
-              <th className="p-2">Pozycja z ERP XL</th>
-              <th className="p-2">Rodzaj</th>
-              <th className="whitespace-nowrap p-2 text-right">Ostatnie 24 miesiące</th>
+              <th className="w-8 p-2">
+                <SelectAllBox
+                  total={selectableIds.length}
+                  selectedCount={selectedVisible}
+                  onToggle={toggleAllVisible}
+                  label="Zaznacz wszystkie widoczne pozycje z ERP XL"
+                />
+              </th>
+              <th className="p-2">
+                <SortHeader label="Pozycja z ERP XL" k="name" sort={sort} onSort={onSort} />
+              </th>
+              <th className="p-2">
+                <SortHeader label="Rodzaj" k="type" sort={sort} onSort={onSort} />
+              </th>
+              <th className="whitespace-nowrap p-2 text-right">
+                <SortHeader label="Ostatnie 24 miesiące" k="usage" sort={sort} onSort={onSort} alignRight />
+              </th>
             </tr>
           </thead>
           <tbody>
-            {search.items.map((item) => {
-              const already = item.position_id !== null || defined.has(item.xl_gid)
+            {sortedItems.map((item) => {
+              const already = isAlready(item)
               return (
                 <tr
                   key={item.xl_gid}
                   className={`border-b align-top ${already ? 'text-slate-400' : 'cursor-pointer hover:bg-sky-50'}`}
-                  onClick={() => {
-                    if (!already) toggle(item)
+                  title={already ? undefined : 'Shift+klik zaznacza wszystkie od ostatnio klikniętej'}
+                  onMouseDown={noTextSelectOnShift}
+                  onClick={(e) => {
+                    if (!already) toggleRow(item, e.shiftKey)
                   }}
                 >
                   <td className="p-2">
@@ -582,7 +773,7 @@ function AddFromCatalogModal({
                       disabled={already}
                       aria-label={`Zaznacz ${item.code}`}
                       onClick={(e) => e.stopPropagation()}
-                      onChange={() => toggle(item)}
+                      onChange={(e) => toggleRow(item, shiftOf(e))}
                     />
                   </td>
                   <td className="p-2">
@@ -618,7 +809,7 @@ function AddFromCatalogModal({
                     type="button"
                     className={BTN_SM}
                     title="Kliknij, żeby odznaczyć"
-                    onClick={() => toggle(i)}
+                    onClick={() => unpick(i.xl_gid)}
                   >
                     {i.code} ×
                   </button>
@@ -768,13 +959,24 @@ function SuggestionsSection({ onAccepted }: { onAccepted: () => void }) {
     })
   }
 
-  function toggle(key: string) {
-    setChecked((cur) => {
-      const next = new Set(cur)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+  /** Ostatnio kliknięta propozycja — początek zakresu przy Shift+klik (zakres tylko w obrębie jednego wzoru). */
+  const anchor = useRef<string | null>(null)
+
+  function toggle(keys: string[], key: string, shiftKey: boolean) {
+    // klucze innego wzoru nie leżą w `keys` — wtedy kotwica nie działa i to zwykły klik
+    setChecked(toggleInOrder(keys, checked, anchor.current, key, shiftKey))
+    anchor.current = key
+  }
+
+  function toggleAll(keys: string[]) {
+    const allOn = keys.length > 0 && keys.every((k) => checked.has(k))
+    const next = new Set(checked)
+    for (const k of keys) {
+      if (allOn) next.delete(k)
+      else next.add(k)
+    }
+    anchor.current = allOn ? null : (keys[keys.length - 1] ?? null)
+    setChecked(next)
   }
 
   return (
@@ -795,7 +997,6 @@ function SuggestionsSection({ onAccepted }: { onAccepted: () => void }) {
           {groups.map((g) => {
             const keys = g.candidates.map((c) => candidateKey(g.pattern.id, c.xl_gid))
             const sel = g.candidates.filter((c) => checked.has(candidateKey(g.pattern.id, c.xl_gid)))
-            const allChecked = keys.length > 0 && keys.every((k) => checked.has(k))
             return (
               <section key={g.pattern.id} className="rounded border border-slate-200">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs">
@@ -817,20 +1018,11 @@ function SuggestionsSection({ onAccepted }: { onAccepted: () => void }) {
                   <thead>
                     <tr className="border-b text-slate-700">
                       <th className="w-8 p-2">
-                        <input
-                          type="checkbox"
-                          checked={allChecked}
-                          aria-label={`Zaznacz wszystkie propozycje wzoru ${g.pattern.name}`}
-                          onChange={() =>
-                            setChecked((cur) => {
-                              const next = new Set(cur)
-                              for (const k of keys) {
-                                if (allChecked) next.delete(k)
-                                else next.add(k)
-                              }
-                              return next
-                            })
-                          }
+                        <SelectAllBox
+                          total={keys.length}
+                          selectedCount={sel.length}
+                          onToggle={() => toggleAll(keys)}
+                          label={`Zaznacz wszystkie propozycje wzoru ${g.pattern.name}`}
                         />
                       </th>
                       <th className="p-2">Propozycja z ERP XL</th>
@@ -845,12 +1037,13 @@ function SuggestionsSection({ onAccepted }: { onAccepted: () => void }) {
                       const key = candidateKey(g.pattern.id, c.xl_gid)
                       return (
                         <tr key={key} className="border-b align-top last:border-b-0">
-                          <td className="p-2">
+                          <td className="p-2" onMouseDown={noTextSelectOnShift}>
                             <input
                               type="checkbox"
                               checked={checked.has(key)}
                               aria-label={`Zaznacz ${c.code}`}
-                              onChange={() => toggle(key)}
+                              title="Shift+klik zaznacza wszystkie od ostatnio klikniętej"
+                              onChange={(e) => toggle(keys, key, shiftOf(e))}
                             />
                           </td>
                           <td className="min-w-[16rem] p-2">

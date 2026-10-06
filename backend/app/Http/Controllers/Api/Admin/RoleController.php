@@ -11,6 +11,7 @@ use App\Http\Requests\Admin\UpdateRolePermissionsRequest;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\Auth\NetworkAccessPolicy;
+use App\Services\Offers\OfferVisibility;
 use App\Support\PermissionCatalog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -37,12 +38,16 @@ class RoleController extends Controller
                     'permissions' => $role->permissions->pluck('name')->values()->all(),
                     'users_count' => $role->users()->count(),
                     'network_access' => self::networkAccess($role),
+                    'offer_visible_user_ids' => OfferVisibility::roleUserIds($role),
                 ];
             })
             ->values();
 
         return response()->json([
             'roles' => $roles,
+            // do wyboru osób, których oferty widzi rola z „Oferty — podgląd ofert wybranych osób”
+            'users' => User::query()->orderBy('name')->get(['id', 'name'])
+                ->map(static fn (User $u): array => ['id' => (int) $u->id, 'name' => (string) $u->name])->values(),
             'all_permissions' => PermissionCatalog::ALL,
             'permission_definitions' => PermissionCatalog::definitionsList(),
         ]);
@@ -78,6 +83,7 @@ class RoleController extends Controller
             'permissions' => $role->permissions()->pluck('name')->values()->all(),
             'users_count' => 0,
             'network_access' => NetworkAccessPolicy::ANY,
+            'offer_visible_user_ids' => [],
         ], 201);
     }
 
@@ -147,7 +153,34 @@ class RoleController extends Controller
             'permissions' => $roleModel->permissions()->pluck('name')->values()->all(),
             'users_count' => $roleModel->users()->count(),
             'network_access' => self::networkAccess($roleModel),
+            'offer_visible_user_ids' => OfferVisibility::roleUserIds($roleModel),
         ]);
+    }
+
+    /** Osoby, których oferty widzi rola z offers.view_selected (lista bez uprawnienia nic nie daje). */
+    public function updateOfferViewers(Request $request, string $role): JsonResponse
+    {
+        $data = $request->validate([
+            'user_ids' => ['present', 'array', 'max:500'],
+            'user_ids.*' => ['integer', 'distinct', Rule::exists('users', 'id')],
+        ], [
+            'user_ids.*.exists' => 'Część wybranych osób już nie istnieje — odśwież stronę.',
+        ]);
+
+        $roleModel = Role::query()
+            ->where('guard_name', 'web')
+            ->where('name', $role)
+            ->first();
+
+        if ($roleModel === null) {
+            return response()->json(['message' => 'Nieznana rola.'], 404);
+        }
+
+        $ids = array_values(array_unique(array_map('intval', $data['user_ids'])));
+        sort($ids);
+        $roleModel->forceFill(['offer_visible_user_ids' => $ids])->save();
+
+        return $this->present($roleModel);
     }
 
     /**

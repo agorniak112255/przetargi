@@ -59,7 +59,8 @@ final class OfferApiTest extends TestCase
         $item = OfferItem::query()->create(['offer_id' => $offer->id, 'position' => 1, 'product_id' => $this->card('K1', 'Karta 1')->id]);
         $send = OfferSend::query()->create(['offer_id' => $offer->id, 'subject' => 'S', 'html' => '<p>x</p>', 'text' => 'x']);
 
-        $other = User::factory()->withRole('admin')->create();
+        // inna osoba bez podglądu cudzych ofert (administrator ma offers.view_all — widziałby ją, decyzja 06.10.2026)
+        $other = User::factory()->withRole('handlowiec')->create();
         $other->givePermissionTo('offers.use');
         Sanctum::actingAs($other);
 
@@ -143,7 +144,8 @@ final class OfferApiTest extends TestCase
         $list = $this->getJson('/api/offers')->assertOk()->json('data');
         $this->assertSame([[
             'id' => $offer->id, 'kind' => 'products', 'customer_name' => null,
-            'code' => $offer->code, 'subject' => '', 'items_count' => 3, 'recipients_count' => 0,
+            'code' => $offer->code, 'subject' => '', 'items_count' => 3, 'recipients_count' => 0, 'recipient_emails' => [],
+            'author' => ['id' => $user->id, 'name' => $user->name, 'email' => $user->email], 'can_edit' => true,
             'last_sent_at' => null, 'last_copied_at' => null, 'updated_at' => $offer->fresh()->updated_at->toIso8601String(),
         ]], $list);
     }
@@ -369,6 +371,8 @@ final class OfferApiTest extends TestCase
         // adresy z udaną wysyłką — ten sam adres (bez względu na wielkość liter) liczony raz
         $row = collect($this->getJson('/api/offers')->json('data'))->firstWhere('id', $offer->id);
         $this->assertSame(1, $row['recipients_count']);
+        // te adresy na liście — do wyszukiwania
+        $this->assertSame(['a@klient.pl'], array_map('strtolower', $row['recipient_emails']));
     }
 
     public function test_user_with_offers_cannot_be_deleted(): void

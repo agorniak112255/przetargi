@@ -687,6 +687,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::put('/roles/{role}', [AdminRoleController::class, 'update'])->middleware('permission:admin.roles.manage');
         Route::patch('/roles/{role}', [AdminRoleController::class, 'rename'])->middleware('permission:admin.roles.manage');
         Route::patch('/roles/{role}/network-access', [AdminRoleController::class, 'updateNetworkAccess'])->middleware('permission:admin.roles.manage');
+        Route::patch('/roles/{role}/offer-viewers', [AdminRoleController::class, 'updateOfferViewers'])->middleware('permission:admin.roles.manage');
         Route::delete('/roles/{role}', [AdminRoleController::class, 'destroy'])->middleware('permission:admin.roles.manage');
         // zespoły (kto komu podlega) — raport „Wynik kampanii”
         Route::get('/teams', [AdminTeamController::class, 'index'])->middleware('permission:admin.roles.manage');

@@ -162,7 +162,8 @@ final class OfferPdfTest extends TestCase
         $this->getJson("/api/offers/{$empty->id}/pdf")->assertStatus(422)
             ->assertJsonPath('errors.items.0', 'Dodaj do oferty co najmniej jeden produkt.');
 
-        $other = User::factory()->withRole('admin')->create();
+        // inna osoba bez podglądu cudzych ofert (administrator ma offers.view_all — widziałby ją, decyzja 06.10.2026)
+        $other = User::factory()->withRole('handlowiec')->create();
         $other->givePermissionTo('offers.use');
         Sanctum::actingAs($other);
         $this->getJson("/api/offers/{$empty->id}/pdf")->assertNotFound();
@@ -260,7 +261,8 @@ final class OfferPdfTest extends TestCase
 
         $this->get("/api/offers/{$second->id}/sends/{$send->id}/pdf")->assertNotFound();
 
-        $other = User::factory()->withRole('admin')->create();
+        // inna osoba bez podglądu cudzych ofert (administrator ma offers.view_all — widziałby ją, decyzja 06.10.2026)
+        $other = User::factory()->withRole('handlowiec')->create();
         $other->givePermissionTo('offers.use');
         Sanctum::actingAs($other);
         $this->get("/api/offers/{$this->offer->id}/sends/{$send->id}/pdf")->assertNotFound();

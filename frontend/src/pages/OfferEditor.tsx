@@ -339,12 +339,20 @@ function Editor({ initial }: { initial: Offer }) {
   const title = content.subject.trim() || 'Oferta bez tematu'
   const isInspection = offer.kind === 'inspection'
   const linesCount = isInspection ? offer.inspection_lines.length : offer.items.length
+  // Cudza oferta (uprawnienie podglądu ofert innych osób): bez pól edycji, wysyłki i usuwania — serwer i tak
+  // odrzuca te zmiany (403). Podgląd maila, PDF i historia wysyłek działają.
+  const readOnly = !offer.can_edit
 
   return (
     <div>
       <Link to="/oferty" className="app-back text-xs text-blue-600 hover:underline">
         ← Oferty
       </Link>
+      {readOnly && (
+        <p className="mb-2 mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+          Oferta <b>{offer.author?.name ?? 'innej osoby'}</b> — tylko podgląd. Zmienia i wysyła ją autor.
+        </p>
+      )}
       <div className="app-page-head mb-4 mt-1 flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h1 className="app-page-title truncate text-xl font-semibold">{title}</h1>
@@ -355,26 +363,36 @@ function Editor({ initial }: { initial: Offer }) {
               {linesCount} {plural(linesCount, 'pozycja', 'pozycje', 'pozycji')}
             </span>
             {offer.last_sent_at && <span>· ostatnia wysyłka {fmtDateTime(offer.last_sent_at)}</span>}
-            <span className="text-slate-500">
-              ·{' '}
-              {saving > 0
-                ? 'zapisuję…'
-                : savedAt
-                  ? `zapisano ${savedAt.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`
-                  : 'zapisuje się sama'}
-            </span>
+            {readOnly ? (
+              offer.author && (
+                <span className="text-slate-500">
+                  · autor {offer.author.name} ({offer.author.email})
+                </span>
+              )
+            ) : (
+              <span className="text-slate-500">
+                ·{' '}
+                {saving > 0
+                  ? 'zapisuję…'
+                  : savedAt
+                    ? `zapisano ${savedAt.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`
+                    : 'zapisuje się sama'}
+              </span>
+            )}
           </p>
         </div>
-        <button
-          type="button"
-          className={`${BTN} text-red-700`}
-          onClick={() => {
-            setDeleteErr('')
-            setDeleteOpen(true)
-          }}
-        >
-          Usuń ofertę
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            className={`${BTN} text-red-700`}
+            onClick={() => {
+              setDeleteErr('')
+              setDeleteOpen(true)
+            }}
+          >
+            Usuń ofertę
+          </button>
+        )}
       </div>
 
       <ErrorBar message={err} onClose={() => setErr('')} />
@@ -382,10 +400,10 @@ function Editor({ initial }: { initial: Offer }) {
       {isInspection ? (
         <div className="space-y-4">
           <CustomerSection offer={offer} />
-          <InspectionLinesSection offer={offer} mutate={mutate} onError={setErr} />
+          <InspectionLinesSection offer={offer} readOnly={readOnly} mutate={mutate} onError={setErr} />
         </div>
       ) : (
-        <ItemsSection offer={offer} layout={content.layout} mutate={mutate} onError={setErr} />
+        <ItemsSection offer={offer} layout={content.layout} readOnly={readOnly} mutate={mutate} onError={setErr} />
       )}
 
       <div className="mt-4 grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,700px)]">
@@ -393,11 +411,13 @@ function Editor({ initial }: { initial: Offer }) {
           <ContentSection
             content={content}
             inspection={isInspection}
+            readOnly={readOnly}
             onEdit={editContent}
             onBlur={() => void flush()}
           />
           <SendSection
             offer={offer}
+            readOnly={readOnly}
             subject={content.subject}
             delivery={deliveryDraft ?? offer.delivery}
             onDelivery={(d) => void changeDelivery(d)}
@@ -419,10 +439,11 @@ function Editor({ initial }: { initial: Offer }) {
           loading={previewLoading}
           error={previewErr}
           inspection={isInspection}
+          readOnly={readOnly}
           onRefresh={() => void refreshPreview()}
           missingPrices={
-            // oferta przeglądu jest bez cen — nie ma czego uzupełniać
-            isInspection ? null : (
+            // oferta przeglądu jest bez cen — nie ma czego uzupełniać; cudzej oferty nie uzupełniamy
+            isInspection || readOnly ? null : (
               <MissingPrices
                 items={offer.items}
                 onPatch={(item, price) =>
@@ -474,11 +495,14 @@ function lacksPrice(item: OfferItem): boolean {
 function ItemsSection({
   offer,
   layout,
+  readOnly,
   mutate,
   onError,
 }: {
   offer: Offer
   layout: CampaignLayout
+  /** Cudza oferta — bez dodawania, zmian, kolejności i usuwania pozycji. */
+  readOnly: boolean
   mutate: Mutate
   onError: (message: string) => void
 }) {
@@ -489,8 +513,8 @@ function ItemsSection({
   const items = offer.items
   const max = offer.limits.max_items
   const full = items.length >= max
-  const canSearch = can(user, 'products.view')
-  const canInventory = can(user, 'inventory.view') || can(user, 'campaigns.use')
+  const canSearch = !readOnly && can(user, 'products.view')
+  const canInventory = !readOnly && (can(user, 'inventory.view') || can(user, 'campaigns.use'))
   const margin = user?.default_margin_percent
   const layoutShowsDescription = LAYOUTS_WITH_DESCRIPTION.includes(layout)
 
@@ -561,7 +585,7 @@ function ItemsSection({
               )}
             </>
           )}
-          {!canSearch && (
+          {!readOnly && !canSearch && (
             <span className="text-slate-500">Wyszukiwanie kart wymaga uprawnienia „Produkty — podgląd”.</span>
           )}
         </div>
@@ -574,8 +598,12 @@ function ItemsSection({
               <th className="p-2 text-right">Stan</th>
               <th className="p-2 text-right">Koszt zakupu</th>
               <th className="p-2 text-right">Cena netto w ofercie</th>
-              <th className="p-2 text-center">Kolejność</th>
-              <th className="p-2" />
+              {!readOnly && (
+                <>
+                  <th className="p-2 text-center">Kolejność</th>
+                  <th className="p-2" />
+                </>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -583,6 +611,7 @@ function ItemsSection({
               <ItemRow
                 key={item.id}
                 item={item}
+                readOnly={readOnly}
                 margin={margin}
                 layoutShowsDescription={layoutShowsDescription}
                 onPatch={(p) => patchItem(item, p)}
@@ -598,7 +627,14 @@ function ItemsSection({
                 onInvalid={onError}
               />
             ))}
-            {items.length === 0 && (
+            {items.length === 0 && readOnly && (
+              <tr>
+                <td colSpan={4} className="p-6 text-center text-slate-500">
+                  Oferta nie ma produktów.
+                </td>
+              </tr>
+            )}
+            {items.length === 0 && !readOnly && (
               <tr>
                 <td colSpan={6} className="p-6">
                   <div className="mx-auto max-w-xl text-center">
@@ -688,6 +724,7 @@ function Thumb({ url }: { url: string | null }) {
 
 function ItemRow({
   item,
+  readOnly,
   margin,
   layoutShowsDescription,
   onPatch,
@@ -698,6 +735,8 @@ function ItemRow({
   onInvalid,
 }: {
   item: OfferItem
+  /** Cudza oferta — wartości jako tekst, bez pól, kolejności i usuwania. */
+  readOnly: boolean
   margin: number | undefined
   layoutShowsDescription: boolean
   onPatch: (patch: OfferItemPatch) => Promise<Offer | null>
@@ -748,6 +787,7 @@ function ItemRow({
               fallback={null}
               emptyText="brak"
               ariaName={item.name}
+              readOnly={readOnly}
               onCommit={(next) => onPatch({ note: next })}
             />
             <ItemTextLine
@@ -757,12 +797,13 @@ function ItemRow({
               fallback={item.card_excerpt}
               emptyText={item.card ? 'brak — karta nie ma opisu' : 'brak — pozycja nie ma karty'}
               ariaName={item.name}
+              readOnly={readOnly}
               onCommit={(next) => onPatch({ description: next })}
             />
             <ItemLinkField
               name={item.name}
               link={item.link}
-              editable
+              editable={!readOnly}
               brandColor={DEFAULT_BRAND_COLOR}
               askLabel={null}
               onSave={async (link) =>
@@ -789,17 +830,24 @@ function ItemRow({
         {item.unit_cost != null ? formatPln(item.unit_cost) : <span className="text-slate-400">—</span>}
       </td>
       <td className="whitespace-nowrap p-2 text-right">
-        <MoneyInput
-          value={item.price_net}
-          label={`Cena netto w ofercie: ${item.name}`}
-          onCommit={(v) => onPatch({ price_net: v }).then(Boolean)}
-          onInvalid={() => onInvalid('Cena netto: wpisz kwotę, np. 89,00.')}
-        />
+        {readOnly ? (
+          <span className="font-medium tabular-nums text-slate-800">
+            {item.price_net != null ? formatPln(item.price_net) : <span className="text-red-700">brak ceny</span>}
+          </span>
+        ) : (
+          <MoneyInput
+            value={item.price_net}
+            label={`Cena netto w ofercie: ${item.name}`}
+            onCommit={(v) => onPatch({ price_net: v }).then(Boolean)}
+            onInvalid={() => onInvalid('Cena netto: wpisz kwotę, np. 89,00.')}
+          />
+        )}
         {item.suggested_price != null ? (
           <div className="mt-0.5 text-[10px] text-slate-500">
             sugerowana {formatPln(item.suggested_price)}
-            {margin != null ? ` (koszt + ${margin.toLocaleString('pl-PL')}%)` : ''}
-            {item.price_net !== item.suggested_price && (
+            {/* marża z konta oglądającego — przy cudzej ofercie mogłaby być inna niż autora */}
+            {!readOnly && margin != null ? ` (koszt + ${margin.toLocaleString('pl-PL')}%)` : ''}
+            {!readOnly && item.price_net !== item.suggested_price && (
               <button
                 type="button"
                 className="ml-1 text-blue-600 hover:underline"
@@ -813,35 +861,45 @@ function ItemRow({
           <div className="mt-0.5 text-[10px] text-slate-500">brak kosztu — bez ceny sugerowanej</div>
         )}
       </td>
-      <td className="whitespace-nowrap p-2 text-center">
-        <span className="inline-flex gap-1">
-          <button
-            type="button"
-            className={BTN_SM}
-            disabled={!canUp}
-            aria-label={`W górę: ${item.name}`}
-            title="Przesuń w górę"
-            onClick={() => onMove(-1)}
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            className={BTN_SM}
-            disabled={!canDown}
-            aria-label={`W dół: ${item.name}`}
-            title="Przesuń w dół"
-            onClick={() => onMove(1)}
-          >
-            ↓
-          </button>
-        </span>
-      </td>
-      <td className="p-2 text-right">
-        <button type="button" className={BTN_SM} aria-label={`Usuń z oferty: ${item.name}`} title="Usuń z oferty" onClick={onRemove}>
-          ×
-        </button>
-      </td>
+      {!readOnly && (
+        <>
+          <td className="whitespace-nowrap p-2 text-center">
+            <span className="inline-flex gap-1">
+              <button
+                type="button"
+                className={BTN_SM}
+                disabled={!canUp}
+                aria-label={`W górę: ${item.name}`}
+                title="Przesuń w górę"
+                onClick={() => onMove(-1)}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className={BTN_SM}
+                disabled={!canDown}
+                aria-label={`W dół: ${item.name}`}
+                title="Przesuń w dół"
+                onClick={() => onMove(1)}
+              >
+                ↓
+              </button>
+            </span>
+          </td>
+          <td className="p-2 text-right">
+            <button
+              type="button"
+              className={BTN_SM}
+              aria-label={`Usuń z oferty: ${item.name}`}
+              title="Usuń z oferty"
+              onClick={onRemove}
+            >
+              ×
+            </button>
+          </td>
+        </>
+      )}
     </tr>
   )
 }
@@ -857,6 +915,7 @@ function ItemTextLine({
   fallback,
   emptyText,
   ariaName,
+  readOnly = false,
   onCommit,
 }: {
   label: string
@@ -866,6 +925,8 @@ function ItemTextLine({
   fallback: string | null
   emptyText: string
   ariaName: string
+  /** Cudza oferta — sam tekst, bez „wpisz/popraw”. */
+  readOnly?: boolean
   onCommit: (next: string | null) => Promise<Offer | null>
 }) {
   const [draft, setDraft] = useState(value ?? '')
@@ -896,20 +957,22 @@ function ItemTextLine({
               {inMail ?? emptyText}
               {value === null && fallback !== null && <span className="text-slate-400"> (z karty)</span>}
             </span>
-            <button
-              type="button"
-              className="text-blue-600 hover:underline"
-              onClick={() => {
-                setDraft(value ?? fallback ?? '')
-                setOpen(true)
-              }}
-            >
-              {inMail ? 'popraw' : 'wpisz'}
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                className="text-blue-600 hover:underline"
+                onClick={() => {
+                  setDraft(value ?? fallback ?? '')
+                  setOpen(true)
+                }}
+              >
+                {inMail ? 'popraw' : 'wpisz'}
+              </button>
+            )}
           </>
         )}
       </div>
-      {open && (
+      {open && !readOnly && (
         <>
           <textarea
             className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs"
@@ -1072,10 +1135,13 @@ function CustomerSection({ offer }: { offer: Offer }) {
  */
 function InspectionLinesSection({
   offer,
+  readOnly,
   mutate,
   onError,
 }: {
   offer: Offer
+  /** Cudza oferta — wartości jako tekst, bez pól, kolejności i usuwania wierszy. */
+  readOnly: boolean
   mutate: Mutate
   onError: (message: string) => void
 }) {
@@ -1101,7 +1167,10 @@ function InspectionLinesSection({
         </div>
         <p className="mt-0.5 text-xs text-slate-500">
           Urządzenia i usługi tego klienta z terminem przeglądu, wyliczonym z faktur i WZ w ERP XL (ostatni przegląd lub zakup
-          + interwał pozycji). Popraw ilość, termin albo uwagę, jeśli wiesz więcej — klient dostaje tę tabelę bez cen.
+          + interwał pozycji).{' '}
+          {readOnly
+            ? 'Klient dostaje tę tabelę bez cen.'
+            : 'Popraw ilość, termin albo uwagę, jeśli wiesz więcej — klient dostaje tę tabelę bez cen.'}
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -1112,8 +1181,12 @@ function InspectionLinesSection({
               <th className="p-2 text-right">Ilość</th>
               <th className="p-2">Ostatni przegląd lub zakup u nas</th>
               <th className="p-2">Proponowany termin przeglądu</th>
-              <th className="p-2 text-center">Kolejność</th>
-              <th className="p-2" />
+              {!readOnly && (
+                <>
+                  <th className="p-2 text-center">Kolejność</th>
+                  <th className="p-2" />
+                </>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -1128,16 +1201,21 @@ function InspectionLinesSection({
                     fallback={null}
                     emptyText="brak"
                     ariaName={line.name}
+                    readOnly={readOnly}
                     onCommit={(next) => patchLine(line, { note: next })}
                   />
                 </td>
                 <td className="whitespace-nowrap p-2 text-right">
-                  <QuantityInput
-                    value={line.quantity}
-                    label={`Ilość: ${line.name}`}
-                    onCommit={(v) => patchLine(line, { quantity: v }).then(Boolean)}
-                    onInvalid={() => onError('Ilość: wpisz liczbę, np. 10 albo 2,5.')}
-                  />
+                  {readOnly ? (
+                    <span className="tabular-nums text-slate-800">{line.quantity == null ? '—' : quantityInputValue(line.quantity)}</span>
+                  ) : (
+                    <QuantityInput
+                      value={line.quantity}
+                      label={`Ilość: ${line.name}`}
+                      onCommit={(v) => patchLine(line, { quantity: v }).then(Boolean)}
+                      onInvalid={() => onError('Ilość: wpisz liczbę, np. 10 albo 2,5.')}
+                    />
+                  )}
                   {line.unit && <span className="ml-1 text-slate-500">{line.unit}</span>}
                 </td>
                 <td className="whitespace-nowrap p-2">
@@ -1151,62 +1229,70 @@ function InspectionLinesSection({
                   )}
                 </td>
                 <td className="whitespace-nowrap p-2">
-                  <DueDateInput
-                    value={line.due_on}
-                    label={`Termin przeglądu: ${line.name}`}
-                    onCommit={(v) => patchLine(line, { due_on: v }).then(Boolean)}
-                  />
+                  {readOnly ? (
+                    <span className="tabular-nums text-slate-800">{fmtDate(line.due_on)}</span>
+                  ) : (
+                    <DueDateInput
+                      value={line.due_on}
+                      label={`Termin przeglądu: ${line.name}`}
+                      onCommit={(v) => patchLine(line, { due_on: v }).then(Boolean)}
+                    />
+                  )}
                   {line.due_on && line.due_on < today && (
                     <div className="mt-0.5">
                       <Chip tone="red">termin minął</Chip>
                     </div>
                   )}
                 </td>
-                <td className="whitespace-nowrap p-2 text-center">
-                  <span className="inline-flex gap-1">
-                    <button
-                      type="button"
-                      className={BTN_SM}
-                      disabled={idx === 0}
-                      aria-label={`W górę: ${line.name}`}
-                      title="Przesuń w górę"
-                      onClick={() => void patchLine(line, { position: idx })}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className={BTN_SM}
-                      disabled={idx === lines.length - 1}
-                      aria-label={`W dół: ${line.name}`}
-                      title="Przesuń w dół"
-                      onClick={() => void patchLine(line, { position: idx + 2 })}
-                    >
-                      ↓
-                    </button>
-                  </span>
-                </td>
-                <td className="p-2 text-right">
-                  <button
-                    type="button"
-                    className={BTN_SM}
-                    aria-label={`Usuń z oferty: ${line.name}`}
-                    title="Usuń wiersz z oferty"
-                    onClick={() =>
-                      void mutate(
-                        () => removeOfferInspectionLine(offer.id, line.id),
-                        'Nie udało się usunąć wiersza przeglądu.',
-                      )
-                    }
-                  >
-                    ×
-                  </button>
-                </td>
+                {!readOnly && (
+                  <>
+                    <td className="whitespace-nowrap p-2 text-center">
+                      <span className="inline-flex gap-1">
+                        <button
+                          type="button"
+                          className={BTN_SM}
+                          disabled={idx === 0}
+                          aria-label={`W górę: ${line.name}`}
+                          title="Przesuń w górę"
+                          onClick={() => void patchLine(line, { position: idx })}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className={BTN_SM}
+                          disabled={idx === lines.length - 1}
+                          aria-label={`W dół: ${line.name}`}
+                          title="Przesuń w dół"
+                          onClick={() => void patchLine(line, { position: idx + 2 })}
+                        >
+                          ↓
+                        </button>
+                      </span>
+                    </td>
+                    <td className="p-2 text-right">
+                      <button
+                        type="button"
+                        className={BTN_SM}
+                        aria-label={`Usuń z oferty: ${line.name}`}
+                        title="Usuń wiersz z oferty"
+                        onClick={() =>
+                          void mutate(
+                            () => removeOfferInspectionLine(offer.id, line.id),
+                            'Nie udało się usunąć wiersza przeglądu.',
+                          )
+                        }
+                      >
+                        ×
+                      </button>
+                    </td>
+                  </>
+                )}
               </tr>
             ))}
             {lines.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-slate-500">
+                <td colSpan={readOnly ? 4 : 6} className="p-6 text-center text-slate-500">
                   Oferta nie ma wierszy przeglądu. Przygotuj nową ofertę dla tego klienta w module Przeglądy — wiersze
                   dobiorą się z jego terminów.
                 </td>
@@ -1337,18 +1423,21 @@ function DueDateInput({
 function ContentSection({
   content,
   inspection,
+  readOnly,
   onEdit,
   onBlur,
 }: {
   content: Content
   /** Oferta przeglądu: bez wyboru układu produktów i bez dopisku o cenach netto. */
   inspection: boolean
+  /** Cudza oferta — pola wyłączone (fieldset disabled), więc autozapis nie ma czego zapisać. */
+  readOnly: boolean
   onEdit: (patch: Partial<Content>, immediate?: boolean) => void
   onBlur: () => void
 }) {
-  const field = `${INPUT} mt-1 block w-full text-sm`
+  const field = `${INPUT} mt-1 block w-full text-sm disabled:bg-slate-50 disabled:text-slate-800`
   return (
-    <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
+    <fieldset disabled={readOnly} className="m-0 min-w-0 space-y-3 rounded-xl border-0 bg-white p-4 text-xs shadow-sm">
       <h2 className="app-card-title text-sm font-semibold text-slate-900">Treść maila</h2>
       <label className="block font-medium text-slate-700">
         Temat wiadomości <span className="font-normal text-slate-500">— wymagany do wysyłki</span>
@@ -1425,7 +1514,7 @@ function ContentSection({
           )}
         </label>
       </div>
-    </div>
+    </fieldset>
   )
 }
 
@@ -1437,6 +1526,7 @@ function PreviewSection({
   loading,
   error,
   inspection,
+  readOnly,
   onRefresh,
   missingPrices,
 }: {
@@ -1446,6 +1536,8 @@ function PreviewSection({
   error: string
   /** Oferta przeglądu — w PDF jest tabela przeglądów, nie produkty z cenami. */
   inspection: boolean
+  /** Cudza oferta — bez ostrzeżeń o wysyłce (skrzynka, adres aplikacji), bo wysyła autor. */
+  readOnly: boolean
   onRefresh: () => void
   /** Pola cen pozycji bez ceny — przy podglądzie, bo tu widać, że w mailu brakuje ceny. */
   missingPrices: ReactNode
@@ -1464,10 +1556,11 @@ function PreviewSection({
       {error && <ErrorBar message={error} />}
       {missingPrices}
       <p className="mb-2 text-slate-500">
-        Podgląd jest bez podpisu — tak trafi do Thunderbirda, który doda Twój podpis. Przy wysyłce z aplikacji
-        pod treścią dojdzie podpis z Moje konto → Moja poczta.
+        {readOnly
+          ? 'Podgląd jest bez podpisu — przy wysyłce pod treścią dojdzie podpis autora oferty.'
+          : 'Podgląd jest bez podpisu — tak trafi do Thunderbirda, który doda Twój podpis. Przy wysyłce z aplikacji pod treścią dojdzie podpis z Moje konto → Moja poczta.'}
       </p>
-      {preview && (
+      {preview && !readOnly && (
         <div className="mb-2 space-y-1.5">
           {preview.from === '' && (
             <p className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-900">
@@ -1600,6 +1693,7 @@ function localToday(): string {
 
 function SendSection({
   offer,
+  readOnly,
   subject,
   delivery,
   onDelivery,
@@ -1611,6 +1705,8 @@ function SendSection({
   onSent,
 }: {
   offer: Offer
+  /** Cudza oferta — tylko forma (tekst) i pobranie PDF; bez adresów, wysyłki i Thunderbirda. */
+  readOnly: boolean
   subject: string
   /** Forma oferty na ekranie (wybór czekający na zapis albo zapisany na serwerze). */
   delivery: OfferDelivery
@@ -1745,6 +1841,40 @@ function SendSection({
 
   const sentCount = results?.filter((r) => r.status === 'sent').length ?? 0
 
+  const pdfRow = delivery !== 'body' && (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        className={BTN_SM}
+        disabled={pdfBusy || pdfBlock !== ''}
+        title={pdfBlock || 'Pobiera PDF z bieżącą ofertą — do obejrzenia przed wysyłką'}
+        onClick={() => void downloadPdf()}
+      >
+        {pdfBusy ? 'Przygotowuję PDF…' : 'Pobierz PDF'}
+      </button>
+      <span className="text-slate-500">
+        {pdfBlock
+          ? `PDF: ${pdfBlock}`
+          : `PDF wygląda jak oferta w treści maila${preview?.pdf_filename ? ` — plik ${preview.pdf_filename}` : ''}.`}
+      </span>
+    </div>
+  )
+
+  if (readOnly) {
+    return (
+      <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
+        <h2 className="app-card-title text-sm font-semibold text-slate-900">Wysyłka</h2>
+        <p className="text-slate-700">
+          <span className="font-medium">Forma oferty:</span> {DELIVERY_LABEL[delivery]}{' '}
+          <span className="text-slate-500">— {deliveryHint[delivery]}</span>
+        </p>
+        {pdfRow}
+        {pdfErr && <ErrorBar message={pdfErr} onClose={() => setPdfErr('')} />}
+        <p className="text-slate-500">Ofertę wysyła jej autor — z tego widoku nie można jej wysłać ani zmienić.</p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
       <h2 className="app-card-title text-sm font-semibold text-slate-900">Wysyłka</h2>
@@ -1776,24 +1906,7 @@ function SendSection({
             </label>
           ))}
         </div>
-        {delivery !== 'body' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className={BTN_SM}
-              disabled={pdfBusy || pdfBlock !== ''}
-              title={pdfBlock || 'Pobiera PDF z bieżącą ofertą — do obejrzenia przed wysyłką'}
-              onClick={() => void downloadPdf()}
-            >
-              {pdfBusy ? 'Przygotowuję PDF…' : 'Pobierz PDF'}
-            </button>
-            <span className="text-slate-500">
-              {pdfBlock
-                ? `PDF: ${pdfBlock}`
-                : `PDF wygląda jak oferta w treści maila${preview?.pdf_filename ? ` — plik ${preview.pdf_filename}` : ''}.`}
-            </span>
-          </div>
-        )}
+        {pdfRow}
         {pdfErr && <ErrorBar message={pdfErr} onClose={() => setPdfErr('')} />}
       </fieldset>
       <label className="block font-medium text-slate-700">
