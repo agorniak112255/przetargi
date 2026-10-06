@@ -10,6 +10,7 @@ use App\Models\ErpCustomer;
 use App\Models\InspectionDue;
 use App\Models\InspectionPosition;
 use App\Models\User;
+use App\Services\Campaigns\SmtpHostGuard;
 use App\Services\Inspections\CustomerEmailFinder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -31,8 +32,11 @@ final class CustomerEmailFinderTest extends TestCase
 
     private const NIP = '8133218073';
 
-    /** @var array<string, string> adres strony → treść z czytnika */
+    /** @var array<string, string> adres strony → treść (wprost i z czytnika) */
     private array $pages = [];
+
+    /** @var list<string> strony, które odmawiają pobrania wprost (403) — tylko czytnik */
+    private array $blocked = ['https://panoramafirm.pl/gokom'];
 
     protected function setUp(): void
     {
@@ -40,6 +44,10 @@ final class CustomerEmailFinderTest extends TestCase
         $this->seed(RolesAndPermissionsSeeder::class);
         config(['enrichment.reader_api_key' => 'jina_test_key', 'enrichment.reader_min_interval' => 0]);
         Cache::flush();
+        // DNS bez sieci: *.internal = adres wewnętrzny, reszta publiczny
+        $this->app->instance(SmtpHostGuard::class, new SmtpHostGuard(
+            static fn (string $host): array => str_ends_with($host, '.internal') ? ['10.0.0.5'] : ['93.184.216.34'],
+        ));
         $this->pages = [
             'https://go-kom.pl/' => 'GOKOM Boguchwała — gospodarka komunalna. Napisz: sekretariat@go-kom.pl albo prywatny.jan@gmail.com. Inspektor ochrony danych: iod@go-kom.pl, praca: rekrutacja@go-kom.pl',
             'https://go-kom.pl/kontakt' => 'Kontakt z nami. GOKOM Sp. z o.o. w Boguchwale, NIP 813-321-80-73, sekretariat i biuro: biuro@go-kom.pl, logo@2x.png',
@@ -57,6 +65,8 @@ final class CustomerEmailFinderTest extends TestCase
                     ['url' => 'https://panoramafirm.pl/gokom', 'title' => 'GOKOM — Panorama Firm', 'description' => ''],
                 ] : [
                     ['url' => 'https://go-kom.pl/', 'title' => 'GOKOM', 'description' => ''],
+                    // serwer w sieci wewnętrznej — nie pobierany ani wprost, ani czytnikiem
+                    ['url' => 'https://gokom.internal/', 'title' => 'GOKOM intranet', 'description' => ''],
                     ['url' => 'https://www.facebook.com/gokom', 'title' => 'GOKOM | Facebook', 'description' => 'kontakt@facebook.com'],
                     ['url' => 'https://aleo.com/pl/firma/inna', 'title' => 'Inna', 'description' => ''],
                 ]], 200);
@@ -66,8 +76,14 @@ final class CustomerEmailFinderTest extends TestCase
 
                 return isset($this->pages[$page]) ? Http::response($this->pages[$page], 200) : Http::response('Not found', 404);
             }
+            if (in_array($url, $this->blocked, true)) {
+                return Http::response('Forbidden', 403);
+            }
 
-            return Http::response('', 500);
+            // pobranie wprost: strona jako HTML z encjami i odnośnikiem mailto
+            return isset($this->pages[$url])
+                ? Http::response('<html><body><p>'.str_replace('@', '&#64;', htmlspecialchars($this->pages[$url])).'</p></body></html>', 200)
+                : Http::response('Not found', 404);
         });
     }
 
@@ -111,10 +127,13 @@ final class CustomerEmailFinderTest extends TestCase
         ], $this->suggestions());
         // bez: gmail na stronie bez NIP-u, adresy katalogu i jego operatora, obrazek, katalog innej firmy, Facebook
         $this->assertSame(3, $result['found']);
-        Http::assertNotSent(static fn (HttpRequest $r): bool => str_contains($r->url(), 'r.jina.ai/https://www.gowork.pl'));
-        // co sprawdzono: strona firmy, kontakt (z NIP-em), katalog z NIP-em, katalog innej firmy
+        Http::assertNotSent(static fn (HttpRequest $r): bool => str_contains($r->url(), 'gowork.pl') || str_contains($r->url(), 'gokom.internal'));
+        // strony firmy wprost, bez czytnika; czytnikiem tylko katalog, który odmówił (403)
+        Http::assertNotSent(static fn (HttpRequest $r): bool => str_starts_with($r->url(), 'https://r.jina.ai/https://go-kom.pl'));
+        Http::assertSent(static fn (HttpRequest $r): bool => $r->url() === 'https://r.jina.ai/https://panoramafirm.pl/gokom');
+        // co sprawdzono: strona firmy, kontakt (z NIP-em), serwer wewnętrzny (nie), katalog innej firmy, katalog z NIP-em
         $this->assertSame(
-            ['go-kom.pl' => [true, false], 'go-kom.pl/kontakt' => [true, true], 'aleo.com' => [true, false], 'panoramafirm.pl' => [true, true]],
+            ['go-kom.pl' => [true, false], 'go-kom.pl/kontakt' => [true, true], 'gokom.internal' => [false, false], 'gokom.internal/kontakt' => [false, false], 'aleo.com' => [true, false], 'panoramafirm.pl' => [true, true]],
             collect($result['pages'])->mapWithKeys(static fn (array $p): array => [
                 $p['host'].(str_ends_with($p['url'], '/kontakt') ? '/kontakt' : '') => [$p['read'], $p['nip']],
             ])->all(),
@@ -122,6 +141,16 @@ final class CustomerEmailFinderTest extends TestCase
         $lookup = CustomerEmailLookup::query()->where('customer_xl_gid', 3830)->firstOrFail();
         $this->assertSame(3, $lookup->found);
         $this->assertNull($lookup->error);
+    }
+
+    public function test_html_decoding_reveals_hidden_addresses(): void
+    {
+        // Cloudflare ukrywa adres jako szesnastkowy XOR z kluczem w pierwszym bajcie; encje i mailto z %40
+        $key = 0x2A;
+        $hex = sprintf('%02x', $key).implode('', array_map(static fn (string $ch): string => sprintf('%02x', ord($ch) ^ $key), str_split('biuro@firma.pl')));
+        $text = CustomerEmailFinder::decodeHtml('<a data-cfemail="'.$hex.'">[email protected]</a> <a href="mailto:handel%40firma.pl">napisz</a> sklep&#64;firma.pl <script>{"html":"\u003ebok@firma.pl\u003c/a\u003e"}</script>');
+
+        $this->assertSame(['biuro@firma.pl', 'handel@firma.pl', 'sklep@firma.pl', 'bok@firma.pl'], CustomerEmailFinder::emailsIn($text));
     }
 
     public function test_card_and_decided_addresses_do_not_come_back(): void

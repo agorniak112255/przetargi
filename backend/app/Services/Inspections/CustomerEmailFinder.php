@@ -6,11 +6,17 @@ namespace App\Services\Inspections;
 
 use App\Models\CustomerEmailLookup;
 use App\Models\CustomerEmailSuggestion;
+use App\Services\Campaigns\SmtpHostGuard;
 use App\Services\Enrichment\BlockedPageReader;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\JinaSearchClient;
 use Carbon\CarbonImmutable;
+use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Psr\Http\Message\UriInterface;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -81,10 +87,23 @@ final class CustomerEmailFinder
     /** Ogólne skrzynki firmowe — pokazywane przed imiennymi. */
     private const GENERIC_LOCAL = '/^(biuro|sekretariat|kontakt|info|office|firma|handel|zamowienia|zamówienia|sklep|recepcja|poczta|mail|administracja|zarzad|zarząd|bhp)\b/u';
 
+    /** Pobranie strony wprost: limit czasu (strony klienta pobierane naraz) i rozmiaru treści. */
+    private const DIRECT_TIMEOUT = 8;
+
+    private const DIRECT_MAX_BYTES = 2_000_000;
+
+    /**
+     * Czytnik Jiny tylko jako zapas dla stron, które odmówiły pobrania wprost (403, zapora) — najwyżej tyle na klienta.
+     * Czytnik idzie wspólną kolejką z opisami produktów (odstęp między stronami), więc był głównym kosztem czasu:
+     * pomiar 06.10.2026 — 3 strony czytnikiem 15–29 s, 6 stron wprost naraz 1–5 s.
+     */
+    private const READER_FALLBACK = 2;
+
     public function __construct(
         private readonly JinaSearchClient $jina,
         private readonly DuckDuckGoHtmlSearch $search,
         private readonly BlockedPageReader $reader,
+        private readonly SmtpHostGuard $guard,
     ) {}
 
     /**
@@ -269,8 +288,10 @@ final class CustomerEmailFinder
         }
 
         $out = [];
-        foreach (array_slice($pages, 0, self::MAX_PAGES) as [$url, $source]) {
-            $text = $this->reader->fetchMarkdown($url);
+        $pages = array_slice($pages, 0, self::MAX_PAGES);
+        $texts = $this->fetchPages(array_column($pages, 0));
+        foreach ($pages as [$url, $source]) {
+            $text = $texts[$url] ?? null;
             $host = strtolower((string) preg_replace('/^www\./', '', (string) parse_url($url, PHP_URL_HOST)));
             if ($text === null || $text === '') {
                 $this->checked[] = ['host' => $host, 'url' => $url, 'read' => false, 'nip' => false, 'emails' => 0];
@@ -317,6 +338,86 @@ final class CustomerEmailFinder
         });
 
         return $out;
+    }
+
+    /**
+     * Treść stron: wszystkie wprost i naraz (tylko serwery z adresem publicznym, także po przekierowaniu), a strony,
+     * które odmówiły, czytnikiem Jiny — najwyżej READER_FALLBACK, w kolejności listy (strona firmy przed katalogami).
+     *
+     * @param  list<string>  $urls
+     * @return array<string, string|null> adres → tekst (HTML po zdekodowaniu encji) albo null
+     */
+    private function fetchPages(array $urls): array
+    {
+        $urls = array_values(array_unique($urls));
+        $allowed = array_values(array_filter($urls, function (string $url): bool {
+            $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+
+            return in_array($scheme, ['http', 'https'], true) && $this->guard->problem((string) parse_url($url, PHP_URL_HOST)) === null;
+        }));
+        $guard = $this->guard;
+        $responses = $allowed === [] ? [] : Http::pool(fn (Pool $pool): array => array_map(
+            static fn (string $url) => $pool->as($url)
+                ->timeout(self::DIRECT_TIMEOUT)
+                ->connectTimeout(4)
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
+                    'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.5',
+                ])
+                ->withOptions(['allow_redirects' => [
+                    'max' => 3,
+                    // przekierowanie na serwer w sieci wewnętrznej — przerwane
+                    'on_redirect' => static function ($request, $response, UriInterface $uri) use ($guard): void {
+                        if ($guard->problem($uri->getHost()) !== null) {
+                            throw new RuntimeException('Przekierowanie poza sieć publiczną.');
+                        }
+                    },
+                ]])
+                ->get($url),
+            $allowed,
+        ));
+
+        $out = [];
+        $failed = [];
+        foreach ($urls as $url) {
+            $r = $responses[$url] ?? null;
+            $body = $r instanceof Response && $r->successful() ? substr($r->body(), 0, self::DIRECT_MAX_BYTES) : '';
+            if ($body !== '' && mb_strlen(strip_tags($body)) >= 80) {
+                $out[$url] = self::decodeHtml($body);
+            } else {
+                $out[$url] = null;
+                // serwer z adresem wewnętrznym nie idzie też do czytnika — tylko strony, które odmówiły pobrania
+                if (in_array($url, $allowed, true)) {
+                    $failed[] = $url;
+                }
+            }
+        }
+        foreach (array_slice($failed, 0, self::READER_FALLBACK) as $url) {
+            $out[$url] = $this->reader->fetchMarkdown($url);
+        }
+
+        return $out;
+    }
+
+    /** HTML → tekst do szukania adresów i NIP-u: encje (&#64;, &amp;), adresy Cloudflare (data-cfemail), mailto. */
+    public static function decodeHtml(string $html): string
+    {
+        $html = (string) preg_replace_callback('/data-cfemail="([0-9a-f]+)"/i', static function (array $m): string {
+            $hex = $m[1];
+            $key = hexdec(substr($hex, 0, 2));
+            $email = '';
+            for ($i = 2; $i < strlen($hex); $i += 2) {
+                $email .= chr(hexdec(substr($hex, $i, 2)) ^ $key);
+            }
+
+            return ' '.$email.' ';
+        }, $html);
+        $html = str_ireplace('mailto:', ' ', $html);
+        // ucieczki ze skryptów i JSON-a na stronie („>” = „>”, „@” = „@”) — inaczej „u003ebiuro@…”
+        $html = (string) preg_replace_callback('/\\\\u([0-9a-f]{4})/i', static fn (array $m): string => mb_chr((int) hexdec($m[1]), 'UTF-8') ?: ' ', $html);
+
+        return html_entity_decode(rawurldecode((string) preg_replace('/%(?![0-9a-f]{2})/i', '%25', $html)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
 
     /**
