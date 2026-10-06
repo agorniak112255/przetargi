@@ -37,8 +37,17 @@ final class CustomerEmailFinder
     public const DIRECTORY_HOSTS = [
         'panoramafirm.pl', 'aleo.com', 'krs-pobierz.pl', 'rejestr.io', 'gowork.pl', 'biznesfinder.pl', 'cylex-polska.pl',
         'krs-online.com.pl', 'firmy.net', 'pkt.pl', 'owg.pl', 'baza-firm.com.pl', 'okredo.com', 'targeo.pl', 'zumi.pl',
-        'imsig.pl', 'bizraport.pl', 'infoveriti.pl', 'ekrs.pl', 'firmy.info.pl',
+        'imsig.pl', 'bizraport.pl', 'infoveriti.pl', 'ekrs.pl', 'firmy.info.pl', 'oferteo.pl', 'cabb.pl', 'monitorfirm.pb.pl',
     ];
+
+    /**
+     * Katalogi, których czytnik nigdy nie oddaje (blokada) — nie zajmują miejsca w limicie czytanych stron
+     * (KOMFORT-MARKET 06.10.2026: z dwóch czytanych katalogów jeden był gowork.pl).
+     */
+    private const UNREADABLE_HOSTS = ['gowork.pl', 'monitorfirm.pb.pl'];
+
+    /** Najwyżej tyle katalogów (różnych serwisów) na klienta. */
+    private const MAX_DIRECTORIES = 3;
 
     /** Strony, które nie są stroną firmy ani katalogiem z jej danymi (pomijane). */
     private const IGNORED_HOSTS = [
@@ -62,7 +71,10 @@ final class CustomerEmailFinder
      */
     private const LEGAL_WORDS = '/(?<![\p{L}\d])(sp\s*z\s*o\s*o|z\s+o\s+o|sp|spółka|spolka|z\s+ograniczoną|ograniczoną|odpowiedzialnością|cywilna|akcyjna|komandytowa|jawna|s\s*a|sp\s*j|sp\s*k|przedsiębiorstwo|zakład|usługowo|usługowy|usługowe|handlowy|handlowe|handlowo|produkcyjno|wielobranżowe|firma|p\s*h\s*u|f\s*h\s*u|p\s*p\s*h\s*u|w|i|z|oddział|siedzibą)(?![\p{L}\d])/iu';
 
-    private const MAX_PAGES = 6;
+    private const MAX_PAGES = 7;
+
+    /** @var list<array{host: string, url: string, read: bool, nip: bool, emails: int}> strony sprawdzone w ostatnim find() */
+    private array $checked = [];
 
     private const MAX_SUGGESTIONS = 8;
 
@@ -79,10 +91,11 @@ final class CustomerEmailFinder
      * Szuka adresów klienta w sieci i zapisuje nowe propozycje (status pending).
      *
      * @param  object{xl_gid: int|string, name: ?string, acronym: ?string, nip: ?string, city: ?string, emails: mixed}  $customer  wiersz erp_customers
-     * @return array{found: int, error: string|null}
+     * @return array{found: int, error: string|null, pages: list<array{host: string, url: string, read: bool, nip: bool, emails: int}>}
      */
     public function find(object $customer): array
     {
+        $this->checked = [];
         $gid = (int) $customer->xl_gid;
         $nip = preg_replace('/\D+/', '', (string) ($customer->nip ?? '')) ?? '';
         $nip = strlen($nip) >= 10 ? substr($nip, -10) : '';
@@ -127,7 +140,7 @@ final class CustomerEmailFinder
             ['checked_at' => $now, 'found' => $saved, 'error' => $error],
         );
 
-        return ['found' => $saved, 'error' => $error];
+        return ['found' => $saved, 'error' => $error, 'pages' => $this->checked];
     }
 
     /** Nazwa do szukania: bez cudzysłowów, formy prawnej i słów ogólnych („PRZEDSIĘBIORSTWO WIELOBRANŻOWE „ZAWPOL” SP. Z O.O.” → „ZAWPOL”). */
@@ -222,7 +235,11 @@ final class CustomerEmailFinder
                 continue;
             }
             if (self::hostIn($host, self::DIRECTORY_HOSTS)) {
-                $directories[] = $url;
+                // jedna strona na serwis, bez serwisów, których czytnik nie oddaje
+                $site = (string) preg_replace('/^www\./', '', $host);
+                if (! self::hostIn($host, self::UNREADABLE_HOSTS) && ! isset($directories[$site])) {
+                    $directories[$site] = $url;
+                }
 
                 continue;
             }
@@ -244,18 +261,21 @@ final class CustomerEmailFinder
                 $pages[] = [$contact, CustomerEmailSuggestion::SOURCE_WEBSITE];
             }
         }
-        foreach (array_slice($directories, 0, 2) as $url) {
+        foreach (array_slice(array_values($directories), 0, self::MAX_DIRECTORIES) as $url) {
             $pages[] = [$url, CustomerEmailSuggestion::SOURCE_DIRECTORY];
         }
 
         $out = [];
         foreach (array_slice($pages, 0, self::MAX_PAGES) as [$url, $source]) {
             $text = $this->reader->fetchMarkdown($url);
+            $host = strtolower((string) preg_replace('/^www\./', '', (string) parse_url($url, PHP_URL_HOST)));
             if ($text === null || $text === '') {
+                $this->checked[] = ['host' => $host, 'url' => $url, 'read' => false, 'nip' => false, 'emails' => 0];
+
                 continue;
             }
-            $host = strtolower((string) preg_replace('/^www\./', '', (string) parse_url($url, PHP_URL_HOST)));
             $nipOnPage = $nip !== '' && str_contains((string) preg_replace('/\D+/', '', $text), $nip);
+            $before = count($out);
             foreach (self::emailsIn($text) as $email) {
                 $domain = substr($email, (int) strpos($email, '@') + 1);
                 if (in_array($email, self::NOISE_EMAILS, true) || self::hostIn($domain, self::DIRECTORY_HOSTS)
@@ -283,6 +303,8 @@ final class CustomerEmailFinder
                     $out[$email] = $candidate;
                 }
             }
+            // do komunikatu „co sprawdzono” — także strony z NIP-em, ale bez adresu
+            $this->checked[] = ['host' => $host, 'url' => $url, 'read' => true, 'nip' => $nipOnPage, 'emails' => count($out) - $before];
         }
 
         // NIP przed nazwą, ogólne skrzynki (biuro@, sekretariat@) przed imiennymi

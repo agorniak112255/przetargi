@@ -1286,12 +1286,22 @@ function EmailSuggestionsSection({
     try {
       const res = await searchCustomerEmails(xlGid)
       onSuggestions(res.suggestions, res.lookup)
+      const read = res.pages.filter((p) => p.read)
+      const withNip = read.filter((p) => p.nip).map((p) => p.host)
+      const checked =
+        res.pages.length === 0
+          ? ' Wyszukiwarka nie znalazła stron tej firmy.'
+          : ` Sprawdzono ${read.length} ${plural(read.length, 'stronę', 'strony', 'stron')}` +
+            (read.length > 0 ? ` (${read.map((p) => p.host).join(', ')})` : '') +
+            (withNip.length > 0 ? `; NIP klienta był na: ${withNip.join(', ')}` : '') +
+            (res.pages.length > read.length ? `; nie dało się przeczytać: ${res.pages.filter((p) => !p.read).map((p) => p.host).join(', ')}` : '') +
+            '.'
       setNote(
         res.error
           ? res.error
           : res.found > 0
-            ? `Znaleziono ${res.found} ${plural(res.found, 'nowy adres', 'nowe adresy', 'nowych adresów')} — sprawdź i wybierz.`
-            : 'Nie znaleziono nowych adresów.',
+            ? `Znaleziono ${res.found} ${plural(res.found, 'nowy adres', 'nowe adresy', 'nowych adresów')} — sprawdź i wybierz.${checked}`
+            : `Nie znaleziono nowych adresów — ta firma nie podaje adresu e-mail na stronach, które da się odczytać.${checked}`,
       )
     } catch (ex) {
       setErr(errorText(ex, 'Nie udało się przeszukać sieci.'))

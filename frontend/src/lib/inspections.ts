@@ -277,7 +277,14 @@ export function getInspectionCustomer(xlGid: number) {
 
 /** Szuka adresu e-mail klienta w sieci teraz (kilkanaście–kilkadziesiąt sekund); zwraca wszystkie propozycje klienta. */
 export function searchCustomerEmails(xlGid: number) {
-  return api<{ found: number; error: string | null; suggestions: CustomerEmailSuggestion[]; lookup: CustomerEmailLookup | null }>(
+  return api<{
+    found: number
+    error: string | null
+    suggestions: CustomerEmailSuggestion[]
+    lookup: CustomerEmailLookup | null
+    /** Sprawdzone strony: read = czytnik oddał stronę, nip = był na niej NIP klienta, emails = nowe adresy z niej. */
+    pages: { host: string; url: string; read: boolean; nip: boolean; emails: number }[]
+  }>(
     `/inspections/customers/${xlGid}/email-search`,
     { method: 'POST' },
   )

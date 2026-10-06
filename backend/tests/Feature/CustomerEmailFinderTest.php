@@ -52,6 +52,8 @@ final class CustomerEmailFinderTest extends TestCase
                 $query = urldecode(substr($url, strlen('https://s.jina.ai/')));
 
                 return Http::response(['data' => str_contains($query, self::NIP) ? [
+                    // gowork zawsze blokuje czytnik — nie zajmuje miejsca w limicie katalogów
+                    ['url' => 'https://www.gowork.pl/gokom/dane-kontaktowe', 'title' => 'GOKOM — GoWork', 'description' => ''],
                     ['url' => 'https://panoramafirm.pl/gokom', 'title' => 'GOKOM — Panorama Firm', 'description' => ''],
                 ] : [
                     ['url' => 'https://go-kom.pl/', 'title' => 'GOKOM', 'description' => ''],
@@ -109,6 +111,14 @@ final class CustomerEmailFinderTest extends TestCase
         ], $this->suggestions());
         // bez: gmail na stronie bez NIP-u, adresy katalogu i jego operatora, obrazek, katalog innej firmy, Facebook
         $this->assertSame(3, $result['found']);
+        Http::assertNotSent(static fn (HttpRequest $r): bool => str_contains($r->url(), 'r.jina.ai/https://www.gowork.pl'));
+        // co sprawdzono: strona firmy, kontakt (z NIP-em), katalog z NIP-em, katalog innej firmy
+        $this->assertSame(
+            ['go-kom.pl' => [true, false], 'go-kom.pl/kontakt' => [true, true], 'aleo.com' => [true, false], 'panoramafirm.pl' => [true, true]],
+            collect($result['pages'])->mapWithKeys(static fn (array $p): array => [
+                $p['host'].(str_ends_with($p['url'], '/kontakt') ? '/kontakt' : '') => [$p['read'], $p['nip']],
+            ])->all(),
+        );
         $lookup = CustomerEmailLookup::query()->where('customer_xl_gid', 3830)->firstOrFail();
         $this->assertSame(3, $lookup->found);
         $this->assertNull($lookup->error);
@@ -146,6 +156,7 @@ final class CustomerEmailFinderTest extends TestCase
         $this->assertSame(3, $res->json('found'));
         $this->assertSame('biuro@go-kom.pl', $res->json('suggestions.0.email'));
         $this->assertSame(3, $res->json('lookup.found'));
+        $this->assertContains('panoramafirm.pl', array_column($res->json('pages'), 'host'));
         $this->postJson('/api/inspections/customers/9999/email-search')->assertNotFound();
 
         // przed zatwierdzeniem: klient bez adresu, z propozycjami

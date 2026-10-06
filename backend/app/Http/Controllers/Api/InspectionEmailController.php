@@ -45,6 +45,10 @@ class InspectionEmailController extends Controller
         return response()->json([
             'found' => $result['found'],
             'error' => $result['error'] !== null ? 'Wyszukiwarka nie odpowiedziała — spróbuj później.' : null,
+            // sprawdzone strony: serwis, czy dało się przeczytać, czy był NIP klienta, ile nowych adresów
+            'pages' => array_map(static fn (array $p): array => [
+                'host' => $p['host'], 'url' => $p['url'], 'read' => $p['read'], 'nip' => $p['nip'], 'emails' => $p['emails'],
+            ], $result['pages']),
             'suggestions' => self::suggestions($xlGid),
             'lookup' => self::lookup($xlGid),
         ]);
