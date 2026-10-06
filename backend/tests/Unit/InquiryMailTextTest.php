@@ -429,6 +429,8 @@ final class InquiryMailTextTest extends TestCase
         $this->assertStringContainsString('5 szt. kasków ochronnych', $clean);
         $this->assertStringNotContainsString('okularów ochronnych', $clean);
         $this->assertStringNotContainsString('W załączeniu oferta', $clean);
+        // z adresem klientki wynik ten sam: pierwszy blok napisał handlowiec, więc to cytat naszej odpowiedzi
+        $this->assertSame($clean, InquiryMailText::forAnalysis($mail, 'RE: Okulary', 'anna.nowak@firma.pl'));
     }
 
     /** „Fwd:” w temacie należy do nagłówka Thunderbirda — cytat odpowiedzi Outlooka w przekazanym mailu dalej odpada. */
@@ -456,6 +458,133 @@ final class InquiryMailTextTest extends TestCase
 
         $this->assertStringContainsString('12 szt. kasków ochronnych', $clean);
         $this->assertStringNotContainsString('okularów ochronnych', $clean);
+    }
+
+    /**
+     * Układ maila z produkcji (zapytanie #93, 06.10.2026; dane osobowe zmienione): klientka ponagla
+     * („Czy otrzymam ofertę?”) nad własną odpowiedzią „ODP:” do własnego przekazania „PD:” z listą pozycji.
+     * Pierwszy blok Outlooka bez „PD:” był brany za cytat naszej odpowiedzi — model dostał samo ponaglenie
+     * i zapytanie miało zero pozycji. Blok od nadawcy maila w tym samym wątku to jego wcześniejsza wiadomość.
+     */
+    public function test_client_follow_up_over_own_thread_keeps_the_original_inquiry(): void
+    {
+        $mail = self::clientFollowUpMail();
+        $subject = 'Zapytanie ofertowe 056709365';
+        // adres z nagłówka From małymi literami, w bloku „Od:” z wielkimi — porównanie bez wielkości liter
+        $clean = InquiryMailText::forAnalysis($mail, $subject, 'anna.nowak@firma.pl');
+
+        $this->assertStringContainsString('Czy otrzymam ofertę?', $clean);
+        $this->assertStringContainsString('Proszę o ofertę.', $clean);
+        $this->assertStringContainsString('Bolle STKS 420 STK42N10E', $clean);
+        $this->assertStringContainsString('Bolle Cobra COBPSI', $clean);
+        $this->assertStringContainsString('Tryon TRYONN10E', $clean);
+        $this->assertStringContainsString('Rush+ 2.0 XP RUSXMN10E', $clean);
+        // nagłówki Outlooka (nasze adresy, daty) nie wchodzą do analizy
+        $this->assertStringNotContainsString('Wysłane:', $clean);
+        $this->assertStringNotContainsString('@supon.rzeszow.pl', $clean);
+        $this->assertStringNotContainsString('Pozdrawiam/Regards', $clean);
+
+        // temat nadany przez klientkę, nie „ODP: …” z bloku ponaglenia
+        $this->assertSame($subject, InquiryMailText::forwardedSubject($mail, $subject, 'anna.nowak@firma.pl'));
+        // stopka to podpis spod oryginału, a nie cała historia z adresami handlowców
+        $footer = InquiryMailText::footerOf($mail, $subject, 'anna.nowak@firma.pl');
+        $this->assertStringContainsString('Pozdrawiam/Regards', $footer);
+        $this->assertStringNotContainsString('@supon.rzeszow.pl', $footer);
+    }
+
+    /** Bez nadawcy, od innego adresu albo w innym wątku blok dalej jest cytatem — zachowanie jak dotąd. */
+    public function test_follow_up_rule_needs_the_same_sender_and_thread(): void
+    {
+        $mail = self::clientFollowUpMail();
+        $subject = 'Zapytanie ofertowe 056709365';
+
+        foreach ([
+            'brak nadawcy (nasza skrzynka, formularz)' => [$subject, null],
+            'kolega z tej samej firmy' => [$subject, 'jan.kowalski@firma.pl'],
+            'nowe zapytanie nad starym wątkiem' => ['Kaski', 'anna.nowak@firma.pl'],
+        ] as $case => [$mailSubject, $sender]) {
+            $clean = InquiryMailText::forAnalysis($mail, $mailSubject, $sender);
+
+            $this->assertStringContainsString('Czy otrzymam ofertę?', $clean, $case);
+            $this->assertStringNotContainsString('STK42N10E', $clean, $case);
+            $this->assertStringNotContainsString('Proszę o ofertę.', $clean, $case);
+        }
+    }
+
+    /**
+     * Ponaglenie nad własnym dopiskiem, a pod nim nasza oferta: dopisek klienta zostaje, a od naszego bloku
+     * (adres klienta stoi w nim w „Do:”, nie w „Od:”) to już historia — stara lista nie wraca do analizy.
+     */
+    public function test_follow_up_stops_at_our_reply_in_the_thread(): void
+    {
+        $mail = implode("\n", [
+            'Dzień dobry, czy oferta jest już gotowa?',
+            '',
+            'Pozdrawiam',
+            'Anna Nowak',
+            'tel. 600 100 200',
+            '________________________________',
+            'Od: Nowak, Anna <anna.nowak@firma.pl>',
+            'Wysłane: środa, 30 września 2026 09:00',
+            'Do: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Temat: RE: Okulary',
+            '',
+            'Proszę jeszcze dopisać 5 szt. kasków ochronnych białych.',
+            '',
+            '________________________________',
+            'Od: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Wysłane: wtorek, 29 września 2026 10:00',
+            'Do: Nowak, Anna <anna.nowak@firma.pl>',
+            'Temat: RE: Okulary',
+            '',
+            'W załączeniu oferta.',
+            '',
+            '________________________________',
+            'Od: Nowak, Anna <anna.nowak@firma.pl>',
+            'Wysłane: poniedziałek, 28 września 2026 08:00',
+            'Do: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Temat: Okulary',
+            '',
+            '20 szt. okularów ochronnych bezbarwnych.',
+        ]);
+
+        $clean = InquiryMailText::forAnalysis($mail, 'RE: Okulary', 'anna.nowak@firma.pl');
+
+        $this->assertStringContainsString('czy oferta jest już gotowa', $clean);
+        $this->assertStringContainsString('5 szt. kasków ochronnych', $clean);
+        $this->assertStringNotContainsString('W załączeniu oferta', $clean);
+        $this->assertStringNotContainsString('okularów ochronnych', $clean);
+        // podpis ponaglenia to ten sam klient — idzie do stopki (kontakt), nie do analizy
+        $this->assertStringNotContainsString('600 100 200', $clean);
+        $this->assertStringContainsString('tel. 600 100 200', InquiryMailText::footerOf($mail, 'RE: Okulary', 'anna.nowak@firma.pl'));
+    }
+
+    public static function clientFollowUpMail(): string
+    {
+        $forward = self::outlookForwardMail();
+        // pod „ODP:” stoi samo „Proszę o ofertę.”, bez podpisu — dalej przekazanie i oryginał jak w #91
+        $history = substr($forward, (int) strpos($forward, '________________________________'));
+
+        return implode("\n", [
+            'Dzień dobry,',
+            'Czy otrzymam ofertę? Proszę o informację.',
+            '',
+            'Anna ',
+            'Nowak',
+            'Buyer I - Integrated Supply',
+            'P:+48 (500) 100-200',
+            'A:ul Przykładowa 1, Rzeszow, Podkarpackie, 35-001',
+            'E:Anna.Nowak@firma.pl',
+            '________________________________',
+            'Od: Nowak, Anna <Anna.Nowak@firma.pl>',
+            'Wysłane: piątek, 2 października 2026 10:32',
+            'Do: Izabela - Supon <izabela@supon.rzeszow.pl>; Handel - Supon Rzeszów <handel@supon.rzeszow.pl>',
+            'Temat: ODP: Zapytanie ofertowe 056709365',
+            '',
+            'Dzień dobry,',
+            'Proszę o ofertę.',
+            $history,
+        ]);
     }
 
     public static function outlookForwardMail(): string

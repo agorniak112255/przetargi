@@ -348,6 +348,7 @@ class ClientInquiryController extends Controller
                 (string) $data['body'],
                 $data['source_channel'] ?? null,
                 isset($data['subject']) && trim((string) $data['subject']) !== '' ? trim((string) $data['subject']) : null,
+                ClientInquiryService::threadSender(isset($data['source_from']) ? (string) $data['source_from'] : null),
             )
         );
         $force = (bool) ($data['force'] ?? false);

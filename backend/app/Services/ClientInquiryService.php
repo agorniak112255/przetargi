@@ -262,15 +262,37 @@ final class ClientInquiryService
      * adres albo telefon z podpisu stają się pozycjami zamówienia. Tekst z pliku (pismo, tabela) idzie w całości:
      * cięcie stopki kończyło go na pierwszym wierszu z telefonem, czyli zwykle na nagłówku firmowym nad tabelą.
      * Temat maila („PD: …”) mówi, czy pod nagłówkiem Outlooka jest przekazane zapytanie, czy cytat odpowiedzi.
+     * Nadawca (threadSender) — czy blok Outlooka to wcześniejsza wiadomość tego samego klienta (ponaglenie).
      */
-    public static function analysisText(string $body, ?string $channel, ?string $subject = null): string
+    public static function analysisText(string $body, ?string $channel, ?string $subject = null, ?string $sender = null): string
     {
         if (! self::hasFilePart($body, $channel)) {
-            return InquiryMailText::forAnalysis($body, $subject);
+            return InquiryMailText::forAnalysis($body, $subject, $sender);
         }
         [$mail, $file] = self::splitAtFileMarker($body);
 
-        return $mail === '' ? $file : InquiryMailText::forAnalysis($mail, $subject)."\n\n".$file;
+        return $mail === '' ? $file : InquiryMailText::forAnalysis($mail, $subject, $sender)."\n\n".$file;
+    }
+
+    /**
+     * Adres nadawcy do cięcia maila albo null. Nasza skrzynka (handel@ przekazuje mail dalej) odpada: blok
+     * „Od: handel@” w historii to nasza oferta, a nie wcześniejsza wiadomość klienta.
+     */
+    public static function threadSender(?string $from): ?string
+    {
+        $email = InquirySignature::splitFrom($from)['email'];
+        if ($email === null) {
+            return null;
+        }
+        $domain = mb_strtolower(substr((string) strrchr($email, '@'), 1));
+        foreach ((array) config('inquiries.internal_email_domains', []) as $internal) {
+            $internal = mb_strtolower(trim((string) $internal));
+            if ($internal !== '' && ($domain === $internal || str_ends_with($domain, '.'.$internal))) {
+                return null;
+            }
+        }
+
+        return $email;
     }
 
     /**
@@ -321,13 +343,16 @@ final class ClientInquiryService
     ): ClientInquiry {
         $channel = $this->nullable($source['channel'] ?? null) ?? 'web';
         $fromFile = self::hasFilePart($body, $channel);
-        $fingerprints = $this->fingerprints(self::analysisText($body, $channel, $this->nullable($subject)));
+        $threadSender = self::threadSender($this->nullable($source['from'] ?? null));
+        $fingerprints = $this->fingerprints(self::analysisText($body, $channel, $this->nullable($subject), $threadSender));
         // Nadawca z nagłówka From i kontakt z odciętej stopki — obie rzeczy
         // pochodzą wprost z maila, nic tu nie jest domyślane.
         $sender = InquirySignature::splitFrom($this->nullable($source['from'] ?? null));
         // Plik nie ma stopki maila — „stopką” byłoby wszystko po nagłówku firmowym pisma.
         $mailPart = $fromFile ? self::splitAtFileMarker($body)[0] : $body;
-        $contact = $mailPart === '' ? null : InquirySignature::extract($mailPart, $sender['email'], $this->nullable($subject));
+        $contact = $mailPart === ''
+            ? null
+            : InquirySignature::extract($mailPart, $sender['email'], $this->nullable($subject), $threadSender);
         // Przed zapisem nowego wiersza: potem to on byłby „ostatnim zapytaniem” i warunki przepadłyby.
         $preferences = $this->lastPreferences($user);
 
@@ -509,12 +534,13 @@ final class ClientInquiryService
         $this->maxItems = $this->aiSettings->inquiryMaxItems();
         $progress = $this->progressWriter((int) $inquiry->id, $runId);
 
-        $analysisBody = self::analysisText($body, $channel, $subject);
+        $threadSender = self::threadSender($inquiry->source_from_email);
+        $analysisBody = self::analysisText($body, $channel, $subject, $threadSender);
         // Klient bywa pisze model w temacie („11-571”), a w treści tylko ilość i rozmiar.
         // Najpierw temat nadany przez klienta (z nagłówka przekazania), potem temat maila.
         // Z pliku: nagłówki przekazania czytamy tylko z maila wklejonego nad treścią pliku.
         $mailPart = $fromFile ? self::splitAtFileMarker($body)[0] : $body;
-        $forwardedSubject = $mailPart === '' ? null : InquiryMailText::forwardedSubject($mailPart, $subject);
+        $forwardedSubject = $mailPart === '' ? null : InquiryMailText::forwardedSubject($mailPart, $subject, $threadSender);
         $subjectHint = InquiryQueryText::subjectProductHint($forwardedSubject)
             ?? InquiryQueryText::subjectProductHint($subject);
         $extractStarted = hrtime(true);

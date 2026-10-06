@@ -12,6 +12,7 @@ use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
+use Tests\Unit\InquiryMailTextTest;
 
 /**
  * Ten sam mail od klienta trafia do kilku handlowców (wysyłka na kilka adresów
@@ -101,6 +102,37 @@ final class ClientInquiryDuplicateApiTest extends TestCase
             'tone' => 'formal',
             'source_message_id' => '<przekazane@poczta.example>',
         ])
+            ->assertStatus(409)
+            ->assertJsonPath('duplicate.id', $first->json('id'))
+            ->assertJsonPath('duplicate.match', 'fingerprint');
+
+        $this->assertSame(1, ClientInquiry::query()->count());
+    }
+
+    /**
+     * Ponaglenie klienta nad własnym wątkiem (zapytanie #93): odcisk sprawdzany przed analizą musi być liczony
+     * z tym samym nadawcą co odcisk zapisany przy zapytaniu — inaczej drugi handlowiec nie dostaje ostrzeżenia.
+     */
+    public function test_client_follow_up_is_recognised_by_its_content_with_the_sender(): void
+    {
+        $this->mockAnalysis();
+
+        $anna = User::factory()->withRole('handlowiec')->create(['name' => 'Anna Kowalska']);
+        $piotr = User::factory()->withRole('handlowiec')->create(['name' => 'Piotr Nowak']);
+        $payload = [
+            'body' => InquiryMailTextTest::clientFollowUpMail(),
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'subject' => 'Zapytanie ofertowe 056709365',
+            'source_from' => 'Nowak, Anna <anna.nowak@firma.pl>',
+        ];
+
+        Sanctum::actingAs($anna);
+        $first = $this->postJson('/api/inquiries', $payload + ['source_message_id' => '<do-anny@poczta.example>'])
+            ->assertCreated();
+
+        Sanctum::actingAs($piotr);
+        $this->postJson('/api/inquiries', ['body' => "zapytanie:\n\n".$payload['body']] + $payload + ['source_message_id' => '<przekazane@poczta.example>'])
             ->assertStatus(409)
             ->assertJsonPath('duplicate.id', $first->json('id'))
             ->assertJsonPath('duplicate.match', 'fingerprint');

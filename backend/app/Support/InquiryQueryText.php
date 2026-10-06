@@ -151,12 +151,7 @@ final class InquiryQueryText
      */
     public static function subjectProductHint(?string $subject): ?string
     {
-        $text = trim((string) $subject);
-        do {
-            $before = $text;
-            $text = preg_replace('/^\s*\[[^\]]{0,40}\]\s*/u', '', $text) ?? $text;
-            $text = preg_replace('/^\s*(?:re|fwd?|fw|odp|pd|wg|aw|tr|sv)\s*(?:\[\d+\]|\(\d+\))?\s*:\s*/iu', '', $text) ?? $text;
-        } while ($text !== $before);
+        $text = self::withoutReplyPrefixes((string) $subject);
 
         // numer sprawy i data to nie wyrób, a wyglądają jak kod
         $text = preg_replace('/(?<![\p{L}])(?:nr|numer)\.?\s*\S+/iu', ' ', $text) ?? $text;
@@ -171,6 +166,19 @@ final class InquiryQueryText
         }
 
         return mb_substr($text, 0, 80);
+    }
+
+    /** Temat bez przedrostków odpowiedzi i przekazania („RE:”, „ODP:”, „PD:”, „[EXT]”), także powtórzonych. */
+    public static function withoutReplyPrefixes(string $subject): string
+    {
+        $text = trim($subject);
+        do {
+            $before = $text;
+            $text = preg_replace('/^\s*\[[^\]]{0,40}\]\s*/u', '', $text) ?? $text;
+            $text = preg_replace('/^\s*(?:re|fwd?|fw|odp|pd|wg|aw|tr|sv)\s*(?:\[\d+\]|\(\d+\))?\s*:\s*/iu', '', $text) ?? $text;
+        } while ($text !== $before);
+
+        return $text;
     }
 
     /**

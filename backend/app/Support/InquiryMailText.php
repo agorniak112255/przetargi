@@ -47,6 +47,15 @@ final class InquiryMailText
 
     private const HEADER_LINE = '/^(od|from|do|to|dw|cc|udw|bcc|wysłano|wyslano|wysłane|wyslane|sent|data|date|temat|subject|nadawca|adresat|odbiorca|reply-to)\s*:/iu';
 
+    /** Linia autora w bloku nagłówków — adresy z „Do:/DW:” nie mówią, kto pisał. */
+    private const AUTHOR_LINE = '/^(?:od|from|nadawca)\s*:(.*)$/iu';
+
+    /** Granica przed wiadomością przekazaną dalej (nagłówek przekazania albo blok Outlooka z „PD:/FW:”). */
+    private const BOUNDARY_FORWARD = 'forward';
+
+    /** Granica przed wcześniejszą wiadomością tego samego nadawcy w tym samym wątku (ponaglenie klienta). */
+    private const BOUNDARY_CONTINUATION = 'continuation';
+
     /** Stopka wg RFC 3676. */
     private const SIGNATURE = '/^--\s*$/u';
 
@@ -94,10 +103,12 @@ final class InquiryMailText
     /**
      * @param  string|null  $subject  temat samego maila — „PD: …” znaczy, że pod pierwszym nagłówkiem Outlooka
      *                                stoi przekazane zapytanie, a nie cytat odpowiedzi
+     * @param  string|null  $sender  adres nadawcy maila (null dla naszych skrzynek) — blok Outlooka od tego
+     *                               adresu w tym samym wątku to jego wcześniejsza wiadomość, nie cytat
      */
-    public static function forAnalysis(string $raw, ?string $subject = null): string
+    public static function forAnalysis(string $raw, ?string $subject = null, ?string $sender = null): string
     {
-        $text = self::split($raw, $subject)['body'];
+        $text = self::split($raw, $subject, $sender)['body'];
         $text = preg_replace('/[ \t]+$/mu', '', $text) ?? $text;
         $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
         $text = trim($text);
@@ -109,14 +120,17 @@ final class InquiryMailText
     /**
      * Temat z nagłówka przekazanej wiadomości („Temat: 11-571”) — temat, który nadał
      * sam klient. Przy kilku przekazaniach bierzemy najgłębsze, bo tam stoi oryginał.
-     * Brak nagłówka przekazania z tematem = null.
+     * Brak nagłówka przekazania z tematem = null. Ponaglenie w tym samym wątku
+     * nie jest przekazaniem — jego „ODP: …” nie nadpisuje tematu.
      */
-    public static function forwardedSubject(string $raw, ?string $subject = null): ?string
+    public static function forwardedSubject(string $raw, ?string $subject = null, ?string $sender = null): ?string
     {
         $lines = explode("\n", str_replace(["\r\n", "\r"], "\n", self::stripQuotedLines($raw)));
         $found = null;
-        foreach (self::forwardHeaders($lines, $subject) as [$start, $end]) {
-            $found = self::headerSubject($lines, $start + 1, $end) ?? $found;
+        foreach (self::forwardHeaders($lines, $subject, $sender) as [$start, $end, $kind]) {
+            if ($kind === self::BOUNDARY_FORWARD) {
+                $found = self::headerSubject($lines, $start + 1, $end) ?? $found;
+            }
         }
 
         return $found;
@@ -130,9 +144,9 @@ final class InquiryMailText
      * stopki nie wchodzą dane z cudzej, wcześniejszej wiadomości.
      * Pusty wynik = w mailu nie było nic do odcięcia.
      */
-    public static function footerOf(string $raw, ?string $subject = null): string
+    public static function footerOf(string $raw, ?string $subject = null, ?string $sender = null): string
     {
-        return trim(self::split($raw, $subject)['footer']);
+        return trim(self::split($raw, $subject, $sender)['footer']);
     }
 
     /**
@@ -148,15 +162,22 @@ final class InquiryMailText
      *
      * @return array{body: string, footer: string}
      */
-    private static function split(string $raw, ?string $subject): array
+    private static function split(string $raw, ?string $subject, ?string $sender): array
     {
         $text = str_replace(["\r\n", "\r"], "\n", $raw);
-        $text = self::stripQuotedLines($text);
+        $lines = explode("\n", self::stripQuotedLines($text));
+        $headers = self::forwardHeaders($lines, $subject, $sender);
 
-        $segments = self::forwardSegments($text, $subject);
+        $segments = self::forwardSegments($lines, $headers);
+        $top = $segments[0];
         $last = array_pop($segments);
 
         [$body, $footer] = self::cutWithFooter($last);
+        // Ponaglenie nad własnym mailem: podpis na górze należy do tego samego klienta (ten sam adres w „Od:”),
+        // a pod oryginałem bywa samo „Pozdrawiam”. Przy przekazaniu górny podpis to osoba przekazująca — pomijamy.
+        if ($headers !== [] && $headers[0][2] === self::BOUNDARY_CONTINUATION) {
+            $footer = trim(self::cutWithFooter($top)[1]."\n\n".$footer);
+        }
 
         // Notatki osób przekazujących zostają (bywa w nich polecenie dla handlowca),
         // ale bez ich podpisów; same „Pozdrawiam” pomijamy.
@@ -172,7 +193,7 @@ final class InquiryMailText
 
         // Nadgorliwe cięcie jest gorsze niż brak cięcia: gdy z długiego maila
         // zostały strzępy, wracamy do wersji bez wycinania podpisów.
-        $plain = trim(implode("\n\n", array_map('trim', self::forwardSegments($text, $subject))));
+        $plain = trim(implode("\n\n", array_map('trim', self::forwardSegments($lines, $headers))));
         if (mb_strlen($full) < 60 && mb_strlen($plain) > 200) {
             return ['body' => $plain, 'footer' => ''];
         }
@@ -184,13 +205,12 @@ final class InquiryMailText
      * Mail pocięty nagłówkami przekazania: [notatka, …, właściwe zapytanie].
      * Same nagłówki („Temat:/Data:/Nadawca:/Adresat:”) wypadają.
      *
+     * @param  list<string>  $lines
+     * @param  list<array{0: int, 1: int, 2: string}>  $headers  wynik forwardHeaders()
      * @return list<string>
      */
-    private static function forwardSegments(string $text, ?string $subject): array
+    private static function forwardSegments(array $lines, array $headers): array
     {
-        $lines = explode("\n", $text);
-        $headers = self::forwardHeaders($lines, $subject);
-
         if ($headers === []) {
             // Brak przekazania — zostaje przypadek nagłówka na samej górze maila.
             return [self::dropLeadingHeaderBlock($lines)];
@@ -217,10 +237,15 @@ final class InquiryMailText
      * pierwszego bloku. Blok bez przekazania to cytat odpowiedzi: tnie go separatorIndex(), a bloków Outlooka
      * pod nim już nie czytamy — byłyby historią sprzed odpowiedzi.
      *
+     * Wyjątek: blok, którego autorem („Od:”) jest sam nadawca maila, w tym samym wątku (temat bez „RE:/ODP:”
+     * równy tematowi maila), to jego wcześniejsza wiadomość — klient ponagla nad własnym zapytaniem (zapytanie
+     * #93: „Czy otrzymam ofertę?” nad „ODP:” i „PD:” z listą pozycji). Czytamy dalej jak przy przekazaniu.
+     * Nadawca null (nasza skrzynka, formularz) — wyjątku nie ma.
+     *
      * @param  list<string>  $lines
-     * @return list<array{0: int, 1: int}>
+     * @return list<array{0: int, 1: int, 2: string}> [pierwsza linia nagłówka, pierwsza linia pod nim, rodzaj]
      */
-    private static function forwardHeaders(array $lines, ?string $subject): array
+    private static function forwardHeaders(array $lines, ?string $subject, ?string $sender): array
     {
         $headers = [];
         $forwardedNext = self::isForwardSubject($subject);
@@ -230,7 +255,7 @@ final class InquiryMailText
             $line = trim($lines[$i]);
             if (self::matchesAny($line, self::FORWARD_MARKERS)) {
                 $end = self::skipHeaderBlock($lines, $i + 1);
-                $headers[] = [$i, $end];
+                $headers[] = [$i, $end, self::BOUNDARY_FORWARD];
                 $i = $end - 1;
                 // „Fwd:” w temacie maila dotyczyło tego przekazania — blok Outlooka niżej to już cytat
                 $forwardedNext = false;
@@ -245,17 +270,66 @@ final class InquiryMailText
                 continue;
             }
             $headerSubject = self::headerSubject($lines, $i + 1, $end);
-            if (! $forwardedNext && ! self::isForwardSubject($headerSubject)) {
+            if ($forwardedNext || self::isForwardSubject($headerSubject)) {
+                $kind = self::BOUNDARY_FORWARD;
+            } elseif (self::isSendersEarlierMessage($lines, $i + 1, $end, $headerSubject, $subject, $sender)) {
+                $kind = self::BOUNDARY_CONTINUATION;
+            } else {
                 $replyQuoted = true;
 
                 continue;
             }
-            $headers[] = [$i, $end];
+            $headers[] = [$i, $end, $kind];
             $forwardedNext = self::isForwardSubject($headerSubject);
             $i = $end - 1;
         }
 
         return $headers;
+    }
+
+    /**
+     * Czy blok nagłówków (linie od $from do $end) opisuje wcześniejszą wiadomość nadawcy maila w tym samym
+     * wątku: jego adres w linii autora i ten sam temat po zdjęciu „RE:/ODP:”. Adres w „Do:” się nie liczy —
+     * nasza odpowiedź klientowi ma go właśnie tam.
+     *
+     * @param  list<string>  $lines
+     */
+    private static function isSendersEarlierMessage(
+        array $lines,
+        int $from,
+        int $end,
+        ?string $headerSubject,
+        ?string $subject,
+        ?string $sender,
+    ): bool {
+        $sender = mb_strtolower(trim((string) $sender));
+        if ($sender === '' || ! self::sameThread($headerSubject, $subject)) {
+            return false;
+        }
+
+        for ($j = $from; $j < $end; $j++) {
+            if (preg_match(self::AUTHOR_LINE, trim($lines[$j]), $m) !== 1) {
+                continue;
+            }
+            preg_match_all('/[\w.%+\-]+@[\w\-]+(?:\.[\w\-]+)+/u', $m[1], $addresses);
+            foreach ($addresses[0] as $address) {
+                if (mb_strtolower($address) === $sender) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static function sameThread(?string $headerSubject, ?string $subject): bool
+    {
+        $normalize = static fn (?string $value): string => mb_strtolower(
+            preg_replace('/\s+/u', ' ', InquiryQueryText::withoutReplyPrefixes((string) $value)) ?? '',
+        );
+        $a = $normalize($headerSubject);
+
+        return $a !== '' && $a === $normalize($subject);
     }
 
     /**

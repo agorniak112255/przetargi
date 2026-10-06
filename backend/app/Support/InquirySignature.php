@@ -52,11 +52,15 @@ final class InquirySignature
      * Nigdy nie jest do niej dopisywany: w `contact` ma być tylko to, co widać
      * w `raw`.
      *
+     * `$threadSender` (ClientInquiryService::threadSender) wpływa na cięcie: przy ponagleniu nad własnym
+     * mailem stopka to podpis ponaglenia i stopka najgłębszej wiadomości klienta, a nie wszystko od pierwszego
+     * bloku Outlooka w dół (tam stały adresy handlowców z „Do:” i numer zapytania z tematu).
+     *
      * @return array{person: string|null, company: string|null, emails: list<string>, phones: list<string>, address: string|null, website: string|null, raw: string}|null
      */
-    public static function extract(string $rawBody, ?string $fromEmail = null, ?string $subject = null): ?array
+    public static function extract(string $rawBody, ?string $fromEmail = null, ?string $subject = null, ?string $threadSender = null): ?array
     {
-        $footer = InquiryMailText::footerOf($rawBody, $subject);
+        $footer = InquiryMailText::footerOf($rawBody, $subject, $threadSender);
         if ($footer === '') {
             return null;
         }
