@@ -23,6 +23,7 @@ use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\B2b\B2bDescriptionSource;
 use App\Services\B2b\B2bDescriptionSupplement;
+use App\Services\Catalog\CardSourceModels;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\Erp\ErpCardStock;
 use App\Services\Erp\ErpCodeSearch;
@@ -319,7 +320,9 @@ class ProductController extends Controller
         $cheaper = $this->comparison->cheaperSources(collect(array_values($models)), $mask);
         // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — stała liczba zapytań na stronę
         $orderQuantities = $this->comparison->orderQuantities(collect(array_values($models)), $mask);
-        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities, $erpCodes, $numberHits, $mask): array {
+        // modele połączone w karcie (ELTEN red + black) — trzy zapytania na stronę
+        $sourceModels = app(CardSourceModels::class)->forProducts($pageIds);
+        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities, $erpCodes, $numberHits, $sourceModels, $mask): array {
             $id = (int) $row['id'];
             $row['cheaper_source'] = $cheaper[$id] ?? null;
             $row['order_quantity'] = $orderQuantities[$id] ?? null;
@@ -342,6 +345,7 @@ class ProductController extends Controller
             $row['erp_codes'] = $erpCodes[(int) $row['id']] ?? [];
             // numery ze źródła ceny, po których wyszukiwarka znalazła kartę (bez numeru równego SKU karty)
             $row['matched_codes'] = $numberHits[(int) $row['id']]['codes'] ?? [];
+            $row['source_models'] = $sourceModels[(int) $row['id']] ?? [];
 
             // na końcu: ocena wyżej szuka slotu w prawdziwej cenie karty; maska podmienia ceny i ocenę na standardowe
             return $mask->productRow($row);
@@ -492,6 +496,7 @@ class ProductController extends Controller
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload['last_price_change'] = $lastChange;
         $payload['variants'] = $this->variants->forProduct((int) $product->id, $mask);
+        $payload['source_models'] = app(CardSourceModels::class)->forProducts([(int) $product->id])[(int) $product->id] ?? [];
         $slots = ProductSourcePrice::query()
             ->with(['account:id,connector,sites', 'priceList:id,manufacturer,version,suggested_prices'])
             ->where('product_id', $product->id)

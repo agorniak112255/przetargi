@@ -612,6 +612,9 @@ export type ProductVariantPriceHistoryRow = {
   prices_hidden?: boolean
 }
 
+/** Model dostawcy w karcie łączonej: numer artykułu, nazwa u dostawcy (bez rozmiaru) i jego rozmiary. */
+export type ProductSourceModel = { number: string; name: string | null; sizes: string[] }
+
 export type Product = {
   id: number
   sku: string
@@ -674,6 +677,8 @@ export type Product = {
   /** Lista produktów z wyszukiwaniem: numery ze źródła ceny (np. drugi kolor karty łączonej, „0723381-0 (black)”),
    *  po których karta się znalazła; bez numeru równego SKU karty. */
   matched_codes?: string[]
+  /** Modele dostawcy połączone w karcie (co najmniej dwa) — lista produktów i karta produktu. */
+  source_models?: ProductSourceModel[]
   /** Karta pozycji przetargu: aktywne warianty (kolor, rozmiar, kod) do wyboru w ofercie. */
   active_variants?: ProductActiveVariant[]
   enrichment_payload?: {

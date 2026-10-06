@@ -22,6 +22,7 @@ import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
 import { variantsFromLabel } from '../lib/priceChange'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
+import { SourceModelsList } from '../components/SourceModelsList'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import {
   api,
@@ -1426,6 +1427,7 @@ export function Products() {
                         {p.name}
                       </span>
                     )}
+                    {p.source_models && <SourceModelsList models={p.source_models} className="mt-1" />}
                   </td>
                   <td className="p-2">{p.manufacturer}</td>
                   <td className="p-2 whitespace-nowrap">

@@ -17,6 +17,7 @@ import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
 import { SupplierSpecialPanel } from '../components/SupplierSpecialPanel'
 import { cartonPriceLabel, sizePriceMax, sizePriceTitle } from '../lib/orderQuantity'
 import { sortSourcePrices } from '../lib/sourcePrices'
+import { SourceModelsList } from '../components/SourceModelsList'
 import { SUPPLIER_SPECIAL_INFERENCE_NOTE, supplierSpecialSummary } from '../lib/supplierSpecial'
 import {
   api,
@@ -987,6 +988,12 @@ export function ProductDetail() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+      {p.source_models && p.source_models.length > 1 && (
+        <div className="mt-2 text-xs text-slate-600">
+          Modele w tej karcie ({p.source_models.length}):
+          <SourceModelsList models={p.source_models} className="mt-0.5" />
         </div>
       )}
       {variants === null && p.variant_summary && (
