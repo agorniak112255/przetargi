@@ -64,7 +64,7 @@ final class ErpXlClient implements ErpXlGateway
      * Skróty numerów dokumentów sprzedaży klienta. FSK i PAK (korekty FS i PA) — oznaczenia przyjęte w aplikacji,
      * do potwierdzenia z numeracją w XL (TraNag nie przechowuje symbolu dokumentu).
      */
-    private const CLIENT_DOCUMENT_PREFIXES = [2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK', 2045 => 'FSEK'];
+    private const CLIENT_DOCUMENT_PREFIXES = [2001 => 'WZ', 2009 => 'WZK', 2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK', 2045 => 'FSEK'];
 
     /**
      * Data sprzedaży dokumentu (Clarion) do „ostatniej sprzedaży” (decyzja właściciela 01.10.2026, wariant B): dokument
@@ -77,14 +77,23 @@ final class ErpXlClient implements ErpXlGateway
     /** Usługa w katalogu XL (Twr_Typ; towar = 1). 399 aktywnych usług przeglądów, legalizacji i dojazdów (06.10.2026). */
     private const SERVICE_ITEM_TYPE = 4;
 
-    /** Przeglądy: FS i FSE. Paragony (2034, 2042) pomijamy — mają jednego kontrahenta detalicznego (plan 06.10.2026). */
+    /**
+     * Przeglądy: FS i FSE (+ WZ — INSPECTION_WZ_SQL). Paragony (2034, 2042) pomijamy — mają jednego kontrahenta
+     * detalicznego (plan 06.10.2026).
+     */
     private const INSPECTION_SALE_TYPES = [2033, 2037];
 
+    /** WZ i faktura w jej spinaczu (TrN_SpiTyp / TrN_SpiNumer). */
+    private const WZ_TYPE = 2001;
+
+    private const INVOICE_TYPE = 2033;
+
     /**
-     * Przeglądy: korekty FS (2041) i FSE (2045, sonda 06.10.2026: 4 od 2019) — ilość i wartość ze znakiem, dokument
-     * korygowany w nagłówku (TrN_ZwrTyp / TrN_ZwrNumer).
+     * Przeglądy: korekty FS (2041), FSE (2045, sonda 06.10.2026: 4 od 2019) i WZ (2009 — korekta sprzedaży przez WZ
+     * wskazuje WZ; korekty faktur do WZ są bez pozycji) — ilość i wartość ze znakiem, dokument korygowany w nagłówku
+     * (TrN_ZwrTyp / TrN_ZwrNumer).
      */
-    private const INSPECTION_CORRECTION_TYPES = [2041, 2045];
+    private const INSPECTION_CORRECTION_TYPES = [2041, 2045, 2009];
 
     /** Skróty dokumentów, którymi partia weszła na magazyn (CDN.Dostawy.Dst_TrnTyp). */
     private const DOCUMENT_PREFIXES = [1489 => 'PZ', 1617 => 'PW', 1521 => 'FZ', 1616 => 'RW'];
@@ -893,21 +902,34 @@ final class ErpXlClient implements ErpXlGateway
         $service = self::SERVICE_ITEM_TYPE;
         // FS/FSE z dodatnią ilością; korekty z każdą niezerową ilością albo wartością (ilość 0 = korekta ceny);
         // bez kontrahenta jednorazowego (numer 0)
+        $wz = self::WZ_TYPE;
+        $invoice = self::INVOICE_TYPE;
+        // WZ tylko z fakturą w spinaczu TrN_SpiTyp = 2033 (zatwierdzoną): taka faktura nie ma w XL własnych pozycji — towar
+        // jest tylko na WZ (sonda 06.10.2026: 9 923 FS w 2025, żadna z pozycjami). WZ ze spinaczem -2033 (od 04.2026,
+        // 118 szt.) mają faktury z WŁASNYMI pozycjami — liczone z faktury, WZ pominięte, inaczej podwójnie; WZ bez faktury
+        // (spinacz 0) pominięte, bo jej przyszła faktura może dostać pozycje.
+        $wzWhere = "(n.TrN_GIDTyp = $wz AND n.TrN_SpiTyp = $invoice AND f.TrN_Stan IN ($states) AND e.TrE_Ilosc > 0)";
         $where = "n.TrN_KntTyp = $customer AND n.TrN_KntNumer > 0 AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ?"
             ." AND ((n.TrN_GIDTyp IN ($sales) AND e.TrE_Ilosc > 0)"
+            ." OR $wzWhere"
             ." OR (n.TrN_GIDTyp IN ($corrections) AND (e.TrE_Ilosc <> 0 OR e.TrE_KsiegowaNetto <> 0)))";
-        // magazyn nagłówka (FS do WZ bywa bez magazynu — LEFT JOIN), operator wystawiający jak w customerOperators
+        // magazyn nagłówka (FS do WZ bywa bez magazynu — LEFT JOIN), operator wystawiający jak w customerOperators,
+        // numer faktury ze spinacza WZ (do wyświetlenia przy WZ)
         $select = <<<SQL
             SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, e.TrE_GIDLp AS line, n.TrN_TrNSeria AS series,
                    n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month,
                    n.TrN_Data2 AS issued, n.TrN_Data3 AS sold, n.TrN_KntNumer AS customer_gid, n.TrN_KnDNumer AS recipient_gid,
                    e.TrE_TwrNumer AS item_gid, t.Twr_Typ AS item_type, e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value,
-                   m.MAG_Kod AS warehouse_code, o.Ope_Ident AS operator, n.TrN_ZwrTyp AS corrects_type, n.TrN_ZwrNumer AS corrects_id
+                   m.MAG_Kod AS warehouse_code, o.Ope_Ident AS operator, n.TrN_ZwrTyp AS corrects_type, n.TrN_ZwrNumer AS corrects_id,
+                   f.TrN_GIDNumer AS invoice_id, f.TrN_TrNSeria AS invoice_series, f.TrN_TrNNumer AS invoice_number,
+                   f.TrN_TrNRok AS invoice_year, f.TrN_TrNMiesiac AS invoice_month
             FROM CDN.TraElem e
             JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
             JOIN CDN.TwrKarty t ON t.Twr_GIDNumer = e.TrE_TwrNumer
             LEFT JOIN CDN.Magazyny m ON m.MAG_GIDNumer = n.TrN_MagZNumer AND m.MAG_GIDTyp = n.TrN_MagZTyp
             LEFT JOIN CDN.OpeKarty o ON o.Ope_GIDNumer = n.TrN_OpeNumerW AND o.Ope_GIDTyp = n.TrN_OpeTypW
+            LEFT JOIN CDN.TraNag f ON n.TrN_GIDTyp = $wz AND n.TrN_SpiTyp = $invoice
+                AND f.TrN_GIDTyp = $invoice AND f.TrN_GIDNumer = n.TrN_SpiNumer
             WHERE $where
             SQL;
 
@@ -949,6 +971,10 @@ final class ErpXlClient implements ErpXlGateway
                     'operator' => $operator !== '' ? $operator : null,
                     'corrects_type' => $correctsType !== null && $correctsId !== null ? $correctsType : null,
                     'corrects_id' => $correctsType !== null && $correctsId !== null ? $correctsId : null,
+                    // faktura ze spinacza WZ (null dla faktur, korekt i WZ bez faktury)
+                    'invoice_number' => (int) ($r->invoice_id ?? 0) > 0
+                        ? $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$invoice], $r->invoice_series, $r->invoice_number, $r->invoice_year, $r->invoice_month)
+                        : null,
                 ];
             }
         }

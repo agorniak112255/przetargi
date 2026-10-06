@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\InspectionDismissal;
 use App\Models\InspectionPosition;
 use App\Models\User;
+use App\Services\Inspections\InspectionCustomerDetails;
 use App\Services\Inspections\InspectionQuery;
 use App\Services\Inspections\InspectionReportPdf;
 use App\Support\PolishTime;
@@ -15,6 +16,7 @@ use App\Support\XlsxStreamWriter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -116,6 +118,9 @@ class InspectionController extends Controller
                 ->map(fn (object $row): array => $this->query->presentOffer($row))
                 ->all(),
             'dismissals' => $allDismissals,
+            // pola kartoteki XL, do których login aplikacji nie ma prawa (np. phone, street, contact_phone) — ekran pisze
+            // „brak dostępu w ERP XL” zamiast „brak w kartotece”
+            'details_unavailable' => array_values(array_map('strval', (array) Cache::get(InspectionCustomerDetails::UNAVAILABLE_KEY, []))),
         ]);
     }
 
@@ -285,7 +290,7 @@ class InspectionController extends Controller
     }
 
     /**
-     * Sprzedaż klienta z faktur XL: pozycje z listy przeglądów i usługi, które je odnawiają — od najnowszych.
+     * Sprzedaż klienta z faktur i WZ z XL: pozycje z listy przeglądów i usługi, które je odnawiają — od najnowszych.
      *
      * @return list<array<string, mixed>>
      */
@@ -320,12 +325,14 @@ class InspectionController extends Controller
                 'issued_on' => substr((string) $r->issued_on, 0, 10),
                 'sold_on' => $r->sold_on !== null ? substr((string) $r->sold_on, 0, 10) : null,
                 'document_number' => (string) $r->document_number,
+                // faktura ze spinacza WZ (null: dokument sam jest fakturą albo WZ bez faktury)
+                'invoice_number' => $r->invoice_number !== null && $r->invoice_number !== '' ? (string) $r->invoice_number : null,
                 'xl_gid' => (int) $r->xl_item_gid,
                 'code' => $names[(int) $r->xl_item_gid]['code'] ?? null,
                 'name' => $names[(int) $r->xl_item_gid]['name'] ?? null,
                 'quantity' => (float) $r->quantity,
                 'net_value' => (float) $r->net_value,
-                'is_correction' => $r->corrects_document_type !== null || in_array((int) $r->document_type, [2041, 2045], true),
+                'is_correction' => $r->corrects_document_type !== null || in_array((int) $r->document_type, [2041, 2045, 2009], true),
                 'location' => $r->location !== null ? (string) $r->location : null,
                 'operator_ident' => $r->operator_ident !== null ? (string) $r->operator_ident : null,
             ])

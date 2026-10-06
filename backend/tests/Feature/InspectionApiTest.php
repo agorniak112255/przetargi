@@ -8,8 +8,10 @@ use App\Models\InspectionDismissal;
 use App\Models\InspectionPosition;
 use App\Models\Offer;
 use App\Models\User;
+use App\Services\Inspections\InspectionCustomerDetails;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -133,6 +135,8 @@ final class InspectionApiTest extends TestCase
         $this->assertSame([
             'xl_gid' => $firma, 'acronym' => 'FIRMA', 'name' => 'Firma Sp. z o.o.', 'nip' => '123-456-78-90', 'city' => 'Rzeszów',
             'emails' => ['a@b.pl'], 'archived' => false, 'known' => true,
+            'street' => null, 'address_line2' => null, 'postal_code' => null, 'voivodeship' => null, 'phones' => [], 'contacts' => [],
+            'account_manager' => null, 'main_operator' => null, 'last_sale_on' => null, 'client_id' => null, 'details_synced_at' => null,
         ], $row['customer']);
         // termin klienta = najwcześniejszy termin pozycji
         $this->assertSame('2026-10-10', $row['due_on']);
@@ -179,9 +183,39 @@ final class InspectionApiTest extends TestCase
             ->assertJsonPath('data.0.customer', [
                 'xl_gid' => 777, 'acronym' => 'Klient XL 777', 'name' => null, 'nip' => null, 'city' => null,
                 'emails' => [], 'archived' => false, 'known' => false,
+                'street' => null, 'address_line2' => null, 'postal_code' => null, 'voivodeship' => null, 'phones' => [], 'contacts' => [],
+                'account_manager' => null, 'main_operator' => null, 'last_sale_on' => null, 'client_id' => null, 'details_synced_at' => null,
             ]);
         $this->getJson('/api/inspections/customers/777')->assertOk()->assertJsonPath('customer.known', false);
         $this->getJson('/api/inspections/customers/778')->assertNotFound();
+    }
+
+    public function test_customer_details_show_card_contacts_manager_client_link_and_unreadable_columns(): void
+    {
+        $position = $this->position('PRZEGLĄD GAŚNICY', 12);
+        $gid = $this->customer('ALFA', 'Alfa Sp. z o.o.', city: 'Rybnik', emails: ['biuro@alfa.pl']);
+        DB::table('erp_customers')->where('xl_gid', $gid)->update([
+            'street' => 'ul. Krótka 2', 'postal_code' => '44-200', 'voivodeship' => 'śląskie', 'phone' => '32 422 00 00',
+            'contacts' => json_encode([['name' => 'Jan Nowak', 'position' => 'kierownik BHP', 'email' => 'jan@alfa.pl']]),
+            'account_manager' => 'Anna Kowal', 'account_manager_email' => 'anna@supon.pl', 'last_sale_at' => '2026-09-01',
+            'main_operator' => 'KOKR', 'details_synced_at' => now(),
+        ]);
+        $clientId = DB::table('clients')->insertGetId(['name' => 'Alfa', 'xl_gid' => $gid, 'source' => 'erp_xl', 'created_at' => now(), 'updated_at' => now()]);
+        $this->due($gid, $position, '2026-10-10');
+        Cache::forever(InspectionCustomerDetails::UNAVAILABLE_KEY, ['contact_phone']);
+
+        Sanctum::actingAs($this->user(['inspections.view']));
+        $res = $this->getJson('/api/inspections/customers/'.$gid)->assertOk();
+
+        $res->assertJsonPath('customer.street', 'ul. Krótka 2')
+            ->assertJsonPath('customer.postal_code', '44-200')
+            ->assertJsonPath('customer.phones', ['32 422 00 00'])
+            ->assertJsonPath('customer.contacts', [['name' => 'Jan Nowak', 'position' => 'kierownik BHP', 'email' => 'jan@alfa.pl', 'phone' => null, 'mobile' => null]])
+            ->assertJsonPath('customer.account_manager', ['name' => 'Anna Kowal', 'email' => 'anna@supon.pl'])
+            ->assertJsonPath('customer.main_operator', 'KOKR')
+            ->assertJsonPath('customer.last_sale_on', '2026-09-01')
+            ->assertJsonPath('customer.client_id', $clientId)
+            ->assertJsonPath('details_unavailable', ['contact_phone']);
     }
 
     public function test_filters_location_position_query_email_and_mine(): void

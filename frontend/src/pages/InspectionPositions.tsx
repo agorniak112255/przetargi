@@ -429,7 +429,7 @@ function UsageCell({ item }: { item: { xl_type: number; customers_24m: number; q
       title={
         item.xl_type === XL_TYPE_GOODS
           ? 'Towar: klienci z zakupem w ostatnich 24 miesiącach i suma sztuk z ich kartoteki zakupów w ERP XL'
-          : 'Usługa: klienci i sztuki z faktur ERP XL z ostatnich 24 miesięcy'
+          : 'Usługa: klienci i sztuki z faktur i WZ w ERP XL z ostatnich 24 miesięcy'
       }
     >
       <div className="text-slate-800">

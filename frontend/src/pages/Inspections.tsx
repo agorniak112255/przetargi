@@ -33,7 +33,7 @@ import { plural } from '../lib/plural'
 
 /**
  * Przeglądy (/przeglady): klienci, którym zbliża się albo minął termin przeglądu (gaśnice, hydranty, legalizacje…).
- * Termin liczy serwer z faktur ERP XL: ostatnia sprzedaż pozycji + interwał wpisany przez człowieka w „Pozycjach
+ * Termin liczy serwer z faktur i WZ w ERP XL: ostatnia sprzedaż pozycji + interwał wpisany przez człowieka w „Pozycjach
  * przeglądów”. Strona tylko wyświetla i filtruje; stan filtrów w adresie (link odtwarza widok). Z zaznaczonych
  * klientów: raport PDF, plik Excela i szkice ofert przeglądu (moduł Oferty, bez cen).
  */
@@ -433,7 +433,7 @@ function InspectionsList() {
             )}
           </p>
           <p className="mt-0.5 max-w-3xl text-xs text-slate-600">
-            Klienci, którym zbliża się albo minął termin przeglądu. Termin wylicza system z faktur ERP XL: ostatni przegląd
+            Klienci, którym zbliża się albo minął termin przeglądu. Termin wylicza system z faktur i WZ w ERP XL: ostatni przegląd
             (usługa) albo zakup urządzenia (towar) plus interwał pozycji ustawiony w „Pozycjach przeglądów”. Zaznacz
             klientów, żeby zrobić raport, plik Excela albo przygotować oferty przeglądu.
           </p>
@@ -651,11 +651,11 @@ function InspectionsList() {
               <th className="p-2">Ostatni przegląd lub zakup</th>
               <th
                 className="p-2 text-right"
-                title="Wartość netto ostatnich przeglądów i zakupów z faktur ERP XL — tylko do Twojej wiadomości, nie trafia do oferty"
+                title="Wartość netto ostatnich przeglądów i zakupów z faktur i WZ w ERP XL — tylko do Twojej wiadomości, nie trafia do oferty"
               >
                 Wartość ostatnich
               </th>
-              <th className="p-2">Adres e-mail</th>
+              <th className="p-2">Adres e-mail, telefon</th>
               <th className="p-2">Ostatnia oferta przeglądu</th>
               <th className="p-2" />
             </tr>
@@ -738,7 +738,7 @@ function InspectionsList() {
           </div>
         )}
         <p className="mt-2 text-[11px] text-slate-500">
-          Daty, ilości, numery faktur i wartości pochodzą z faktur ERP XL (bez paragonów). Termin jest wyliczony: ostatni
+          Daty, ilości, numery faktur i wartości pochodzą z faktur i WZ w ERP XL (bez paragonów). Termin jest wyliczony: ostatni
           przegląd lub zakup plus interwał pozycji — system nie wymyśla przepisów ani terminów. Kilka wizyt w roku (np. kilka
           obiektów) daje kilka terminów; lista pokazuje najwcześniejszy.
         </p>
@@ -895,7 +895,7 @@ function CustomerRow({
         {lastOn ? (
           <>
             <div className="tabular-nums text-slate-800">{fmtDate(lastOn)}</div>
-            <div className="text-[11px] text-slate-500">z faktur ERP XL</div>
+            <div className="text-[11px] text-slate-500">z faktur i WZ w ERP XL</div>
           </>
         ) : (
           <span className="text-slate-400">brak danych</span>
@@ -911,7 +911,7 @@ function CustomerRow({
             title={
               netMissing > 0
                 ? `Suma bez ${netMissing} ${plural(netMissing, 'pozycji', 'pozycji', 'pozycji')} bez wartości na fakturze`
-                : 'Wartość netto ostatnich przeglądów i zakupów z faktur ERP XL — tylko do Twojej wiadomości'
+                : 'Wartość netto ostatnich przeglądów i zakupów z faktur i WZ w ERP XL — tylko do Twojej wiadomości'
             }
           >
             {formatPln(netSum)}
@@ -929,6 +929,11 @@ function CustomerRow({
           <Chip tone="amber" title="Karta klienta w ERP XL nie ma adresu e-mail">
             brak adresu e-mail
           </Chip>
+        )}
+        {c.phones.length > 0 && (
+          <span className="mt-0.5 block font-mono text-[11px] text-slate-700" title="Telefon z karty klienta w ERP XL">
+            tel. {c.phones[0]}
+          </span>
         )}
       </td>
       <td className="whitespace-nowrap p-2">
@@ -1035,7 +1040,7 @@ function PositionsTable({
                       {fmtDate(p.last_on)}
                       {p.last_quantity != null && <span className="text-slate-500"> · {fmtQty(p.last_quantity, p.unit)}</span>}
                     </div>
-                    <div className="text-[11px] text-slate-500">{lastEventLabel(p.xl_type)}, z faktur ERP XL</div>
+                    <div className="text-[11px] text-slate-500">{lastEventLabel(p.xl_type)}, z faktur i WZ w ERP XL</div>
                     {p.last_documents.length > 0 && (
                       <div
                         className="text-[11px] text-slate-500"
@@ -1092,6 +1097,148 @@ function PositionsTable({
 
 /* ---------- Szczegóły klienta ---------- */
 
+/** Nazwy pól kartoteki z details_unavailable — „brak dostępu w ERP XL” zamiast „brak w kartotece”. */
+const DETAIL_FIELDS: Record<string, string> = {
+  street: 'ulica',
+  address_line2: 'adres',
+  postal_code: 'kod pocztowy',
+  phone: 'telefon',
+  phone2: 'drugi telefon',
+  contact_phone: 'telefony osób kontaktowych',
+  contact_mobile: 'telefony komórkowe osób kontaktowych',
+}
+
+/**
+ * Dane klienta z kartoteki ERP XL (dosłownie, odczyt nocny): adres, telefony, e-maile, osoby kontaktowe, opiekun,
+ * ostatni zakup i link do karty klienta. Pole puste z powodu braku prawa odczytu jest opisane jako brak dostępu.
+ */
+function CustomerCardSection({ customer: c, unavailable }: { customer: InspectionCustomer; unavailable: string[] }) {
+  const blocked = (field: string) => unavailable.includes(field)
+  const address = [c.street, c.address_line2, [c.postal_code, c.city].filter(Boolean).join(' '), c.voivodeship]
+    .filter((part): part is string => part != null && part.trim() !== '')
+    .join(', ')
+  const addressBlocked = blocked('street') || blocked('postal_code')
+  const missing = (text: string) => <span className="text-slate-400">{text}</span>
+  const blockedNote = Object.keys(DETAIL_FIELDS)
+    .filter(blocked)
+    .map((f) => DETAIL_FIELDS[f])
+
+  return (
+    <section>
+      <h3 className="text-sm font-semibold text-slate-900">Dane klienta</h3>
+      <p className="mb-1.5 text-slate-500">
+        Z kartoteki ERP XL, dosłownie (odczyt co noc{c.details_synced_at ? `, ostatni ${fmtDateTime(c.details_synced_at)}` : ''}).
+        {c.client_id != null && (
+          <>
+            {' '}
+            <Link to={`/clients/${c.client_id}`} className="text-blue-600 hover:underline">
+              Karta klienta w zakładce Klienci →
+            </Link>
+          </>
+        )}
+      </p>
+      {!c.known ? (
+        <p className="text-amber-800">
+          Klienta nie ma w kartotece ERP XL odczytanej przez aplikację — numer klienta w ERP XL {c.xl_gid}.
+        </p>
+      ) : (
+        <>
+          <div className="grid gap-x-6 gap-y-1 rounded border border-slate-200 p-3 sm:grid-cols-[max-content_1fr]">
+            <span className="text-slate-500">Numer w ERP XL, NIP</span>
+            <span className="text-slate-800">
+              {c.xl_gid}
+              {c.nip ? ` · NIP ${c.nip}` : ''}
+            </span>
+            <span className="text-slate-500">Adres</span>
+            <span className="text-slate-800">
+              {address !== ''
+                ? address
+                : missing(addressBlocked ? 'aplikacja nie ma dostępu do adresu w ERP XL' : 'brak w kartotece')}
+              {address !== '' && addressBlocked && !c.street && (
+                <span className="ml-1 text-slate-400">(ulicy i kodu aplikacja nie może odczytać z ERP XL)</span>
+              )}
+            </span>
+            <span className="text-slate-500">Telefon</span>
+            <span className="text-slate-800">
+              {c.phones.length > 0
+                ? c.phones.map((p) => (
+                    <a key={p} href={`tel:${p.replace(/[^\d+]/g, '')}`} className="mr-3 font-mono text-blue-600 hover:underline">
+                      {p}
+                    </a>
+                  ))
+                : missing(
+                    blocked('phone')
+                      ? 'aplikacja nie ma dostępu do telefonów w ERP XL — potrzebne uprawnienie od administratora ERP XL'
+                      : 'brak w kartotece',
+                  )}
+            </span>
+            <span className="text-slate-500">Adresy e-mail</span>
+            <span>
+              {c.emails.length > 0 ? (
+                <span className="font-mono text-slate-800">{c.emails.join(', ')}</span>
+              ) : (
+                <span className="text-amber-800">brak adresu e-mail w ERP XL</span>
+              )}
+            </span>
+            <span className="text-slate-500">Opiekun klienta w ERP XL</span>
+            <span className="text-slate-800">
+              {c.account_manager ? (
+                <>
+                  {c.account_manager.name}
+                  {c.account_manager.email && <span className="ml-2 font-mono text-slate-600">{c.account_manager.email}</span>}
+                </>
+              ) : (
+                missing('nie przypisano')
+              )}
+            </span>
+            <span className="text-slate-500">Najczęściej wystawia dokumenty</span>
+            <span className="text-slate-800">{c.main_operator ?? missing('brak danych')}</span>
+            <span className="text-slate-500">Ostatni zakup (dowolny towar)</span>
+            <span className="text-slate-800">{c.last_sale_on ? fmtDate(c.last_sale_on) : missing('brak danych')}</span>
+          </div>
+
+          <div className="mt-2">
+            <div className="mb-1 font-medium text-slate-800">Osoby kontaktowe</div>
+            {c.contacts.length === 0 ? (
+              <p className="text-slate-400">Karta klienta w ERP XL nie ma osób kontaktowych.</p>
+            ) : (
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b bg-slate-50 text-slate-700">
+                    <th className="p-2">Osoba</th>
+                    <th className="p-2">Stanowisko</th>
+                    <th className="p-2">Adres e-mail</th>
+                    <th className="p-2">Telefon</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {c.contacts.map((p, i) => (
+                    <tr key={`${p.name ?? ''}-${i}`} className="border-b last:border-b-0">
+                      <td className="p-2 text-slate-800">{p.name ?? '—'}</td>
+                      <td className="p-2 text-slate-600">{p.position ?? '—'}</td>
+                      <td className="p-2 font-mono text-slate-700">{p.email ?? '—'}</td>
+                      <td className="p-2 font-mono text-slate-700">
+                        {[p.phone, p.mobile].filter(Boolean).join(', ') ||
+                          (blocked('contact_phone') ? <span className="font-sans text-slate-400">brak dostępu w ERP XL</span> : '—')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+      {blockedNote.length > 0 && (
+        <p className="mt-1.5 text-[11px] text-slate-500">
+          Aplikacja nie ma jeszcze prawa odczytu w ERP XL: {blockedNote.join(', ')}. Po nadaniu uprawnienia przez administratora
+          ERP XL dane pojawią się po najbliższym odczycie nocnym.
+        </p>
+      )}
+    </section>
+  )
+}
+
 function CustomerDetailModal({
   xlGid,
   canDismiss,
@@ -1132,21 +1279,7 @@ function CustomerDetailModal({
         !err && <p className="text-xs text-slate-500">Wczytuję…</p>
       ) : (
         <div className="space-y-4 text-xs">
-          <section>
-            <p className="text-slate-600">
-              Dane klienta z kartoteki ERP XL: {[c?.city, c?.nip ? `NIP ${c.nip}` : null].filter(Boolean).join(' · ') || 'bez miejscowości i NIP-u'}{' '}
-              · numer klienta w ERP XL {c?.xl_gid}
-              {c && !c.known && ' · klienta nie ma w kartotece odczytanej przez aplikację'}
-            </p>
-            <p className="mt-0.5 text-slate-600">
-              Adresy e-mail:{' '}
-              {c && c.emails.length > 0 ? (
-                <span className="font-mono text-slate-800">{c.emails.join(', ')}</span>
-              ) : (
-                <span className="text-amber-800">brak adresu e-mail w ERP XL</span>
-              )}
-            </p>
-          </section>
+          {c && <CustomerCardSection customer={c} unavailable={data.details_unavailable} />}
 
           <section>
             <h3 className="text-sm font-semibold text-slate-900">Terminy przeglądów</h3>
@@ -1162,10 +1295,11 @@ function CustomerDetailModal({
           </section>
 
           <section>
-            <h3 className="text-sm font-semibold text-slate-900">Historia faktur z ERP XL</h3>
+            <h3 className="text-sm font-semibold text-slate-900">Historia faktur i wydań (WZ) z ERP XL</h3>
             <p className="mb-1.5 text-slate-500">
-              Faktury i korekty tego klienta z pozycjami przeglądów i usługami, które je odnawiają — najnowsze u góry
-              (najwyżej 300). Z nich system liczy terminy.
+              Faktury, wydania zewnętrzne (WZ) i korekty tego klienta z pozycjami przeglądów i usługami, które je odnawiają —
+              najnowsze u góry (najwyżej 300). Z nich system liczy terminy. Towar wydany przez WZ ma pozycje na WZ, a faktura
+              do tego WZ jest podana pod numerem WZ.
             </p>
             {data.history.length === 0 ? (
               <p className="text-slate-500">Brak faktur.</p>
@@ -1174,9 +1308,9 @@ function CustomerDetailModal({
                 <table className="w-full text-left">
                   <thead className="sticky top-0 bg-slate-50">
                     <tr className="border-b text-slate-700">
-                      <th className="p-2">Data faktury</th>
+                      <th className="p-2">Data dokumentu</th>
                       <th className="p-2">Data sprzedaży</th>
-                      <th className="p-2">Faktura</th>
+                      <th className="p-2">Dokument</th>
                       <th className="p-2">Pozycja</th>
                       <th className="p-2 text-right">Ilość</th>
                       <th className="p-2 text-right">Wartość netto</th>
@@ -1192,6 +1326,11 @@ function CustomerDetailModal({
                         </td>
                         <td className="whitespace-nowrap p-2">
                           <span className="font-mono">{h.document_number}</span>
+                          {h.invoice_number && (
+                            <div className="text-[11px] text-slate-500">
+                              faktura <span className="font-mono">{h.invoice_number}</span>
+                            </div>
+                          )}
                           {h.is_correction && (
                             <span className="ml-1">
                               <Chip tone="amber">korekta</Chip>

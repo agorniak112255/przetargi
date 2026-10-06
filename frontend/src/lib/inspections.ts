@@ -47,6 +47,30 @@ export type InspectionCustomer = {
   archived: boolean
   /** false = klienta nie ma w kartotece ERP XL odczytanej przez aplikację (acronym = „Klient XL {numer}”). */
   known: boolean
+  /** Z kartoteki ERP XL dosłownie (odczyt nocny); null = brak w kartotece albo brak prawa odczytu (details_unavailable). */
+  street: string | null
+  address_line2: string | null
+  postal_code: string | null
+  voivodeship: string | null
+  phones: string[]
+  contacts: InspectionContact[]
+  account_manager: { name: string; email: string | null } | null
+  /** Operator ERP XL, który najczęściej wystawiał klientowi dokumenty (24 miesiące). */
+  main_operator: string | null
+  /** Ostatnia sprzedaż klientowi (dowolny towar), RRRR-MM-DD. */
+  last_sale_on: string | null
+  /** Karta w zakładce Klienci (tylko klienci powyżej progu sprzedaży); null = brak karty. */
+  client_id: number | null
+  details_synced_at: string | null
+}
+
+/** Osoba kontaktowa z karty klienta w ERP XL (bez archiwalnych). */
+export type InspectionContact = {
+  name: string | null
+  position: string | null
+  email: string | null
+  phone: string | null
+  mobile: string | null
 }
 
 export type InspectionDocument = { number: string; issued_on: string; quantity: number }
@@ -113,6 +137,8 @@ export type InspectionHistoryLine = {
   issued_on: string
   sold_on: string | null
   document_number: string
+  /** Faktura ze spinacza WZ (towar wydany przez WZ — faktura do WZ nie ma w ERP XL własnych pozycji). */
+  invoice_number: string | null
   xl_gid: number
   code: string
   name: string
@@ -130,6 +156,11 @@ export type InspectionCustomerDetail = {
   /** Oferty przeglądu do klienta; sent_at null = szkic jeszcze niewysłany. */
   offers: (Omit<InspectionLastOffer, 'sent_at'> & { sent_at: string | null })[]
   dismissals: InspectionDismissal[]
+  /**
+   * Pola kartoteki, do których aplikacja nie ma prawa odczytu w ERP XL: street, address_line2, postal_code, phone,
+   * phone2, contact_phone, contact_mobile itd. — ekran pisze „brak dostępu”, a nie „brak w kartotece”.
+   */
+  details_unavailable: string[]
 }
 
 export type InspectionPositionSource = 'manual' | 'suggestion'

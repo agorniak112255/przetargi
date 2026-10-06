@@ -358,13 +358,13 @@ final class FakeErpXlGateway implements ErpXlGateway
     public static function inspectionLine(int $documentId, int $issued, int $customerGid, int $itemGid, float $quantity, float $netValue, int $itemType = 4, array $overrides = []): array
     {
         $type = (int) ($overrides['doc_type'] ?? 2033);
-        $prefix = [2033 => 'FS', 2037 => 'FSE', 2041 => 'FSK'][$type] ?? 'dok. '.$type;
+        $prefix = [2001 => 'WZ', 2009 => 'WZK', 2033 => 'FS', 2037 => 'FSE', 2041 => 'FSK'][$type] ?? 'dok. '.$type;
 
         return [
             'doc_type' => $type, 'document_id' => $documentId, 'line' => 1, 'document_number' => $prefix.'-01G/'.$documentId.'/26/09',
             'issued' => $issued, 'sold' => 0, 'customer_gid' => $customerGid, 'recipient_gid' => 0, 'item_gid' => $itemGid,
             'item_type' => $itemType, 'quantity' => $quantity, 'net_value' => $netValue, 'warehouse_code' => '01G', 'operator' => 'NOMA',
-            'corrects_type' => null, 'corrects_id' => null, ...$overrides,
+            'corrects_type' => null, 'corrects_id' => null, 'invoice_number' => null, ...$overrides,
         ];
     }
 

@@ -216,18 +216,19 @@ interface ErpXlGateway
     public function services(int $afterGid, int $limit): array;
 
     /**
-     * Pozycje faktur sprzedaży do modułu Przeglądy od daty (TrN_Data2): FS 2033 i FSE 2037 (ilość > 0) oraz korekty FS
-     * 2041 (ilość albo wartość ≠ 0, ze znakiem), zatwierdzone (TrN_Stan 3–5), do kontrahenta (TrN_KntTyp 32, numer > 0).
+     * Pozycje faktur sprzedaży i WZ do modułu Przeglądy od daty (TrN_Data2): FS 2033, FSE 2037 i WZ 2001 (ilość > 0;
+     * faktura do WZ nie ma własnych pozycji) oraz korekty 2041, 2045 i WZK 2009 (ilość albo wartość ≠ 0, ze znakiem), zatwierdzone (TrN_Stan 3–5), do kontrahenta (TrN_KntTyp 32, numer > 0).
      * Paragonów (2034, 2042) nie ma — jeden kontrahent detaliczny. Towary z listy $itemGids i — gdy $allServices — każda
      * pozycja z usługą (Twr_Typ 4); pozycja usługi z listy nie wraca dwa razy.
      *
      * issued = TrN_Data2, sold = TrN_Data3 (0 = XL nie podał), recipient_gid = TrN_KnDNumer (0 = brak), warehouse_code =
      * MAG_Kod magazynu nagłówka (null = dokument bez magazynu), operator = Ope_Ident wystawiającego (wielkie litery, null =
      * nieznany), corrects_type / corrects_id = dokument korygowany z nagłówka korekty (null dla FS/FSE i gdy XL go nie
-     * podał), net_value = TrE_KsiegowaNetto (PLN netto). Strumień (kursor), towary paczkami po 500.
+     * podał), net_value = TrE_KsiegowaNetto (PLN netto), invoice_number = numer faktury ze spinacza WZ (null dla faktur,
+     * korekt i WZ bez faktury). Strumień (kursor), towary paczkami po 500.
      *
      * @param  list<int>  $itemGids
-     * @return iterable<array{doc_type: int, document_id: int, line: int, document_number: string, issued: int, sold: int, customer_gid: int, recipient_gid: int, item_gid: int, item_type: int, quantity: float, net_value: float, warehouse_code: string|null, operator: string|null, corrects_type: int|null, corrects_id: int|null}>
+     * @return iterable<array{doc_type: int, document_id: int, line: int, document_number: string, issued: int, sold: int, customer_gid: int, recipient_gid: int, item_gid: int, item_type: int, quantity: float, net_value: float, warehouse_code: string|null, operator: string|null, corrects_type: int|null, corrects_id: int|null, invoice_number: string|null}>
      */
     public function inspectionSaleLines(array $itemGids, bool $allServices, int $fromClarionDate): iterable;
 }

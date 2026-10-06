@@ -290,8 +290,20 @@ final class InspectionQuery
         $gids = array_values(array_unique($gids));
         $out = [];
         foreach (array_chunk($gids, 500) as $chunk) {
-            foreach (DB::table('erp_customers')->whereIn('xl_gid', $chunk)->get(['xl_gid', 'acronym', 'name', 'nip', 'city', 'emails', 'archived']) as $c) {
+            $columns = [
+                'xl_gid', 'acronym', 'name', 'nip', 'city', 'emails', 'archived', 'street', 'address_line2', 'postal_code',
+                'voivodeship', 'phone', 'phone2', 'contacts', 'account_manager', 'account_manager_email', 'last_sale_at',
+                'main_operator', 'details_synced_at',
+            ];
+            foreach (DB::table('erp_customers')->whereIn('xl_gid', $chunk)->get($columns) as $c) {
+                $c->client_id = null;
                 $out[(int) $c->xl_gid] = $c;
+            }
+            // karta klienta w zakładce Klienci (klienci powyżej progu sprzedaży) — link ze szczegółów
+            foreach (DB::table('clients')->whereIn('xl_gid', $chunk)->get(['id', 'xl_gid']) as $client) {
+                if (isset($out[(int) $client->xl_gid])) {
+                    $out[(int) $client->xl_gid]->client_id = (int) $client->id;
+                }
             }
         }
 
@@ -304,9 +316,11 @@ final class InspectionQuery
         if ($c === null) {
             // klient spoza kopii erp_customers — tylko numer XL, niczego nie zgadujemy
             return ['xl_gid' => $gid, 'acronym' => self::unknownName($gid), 'name' => null, 'nip' => null, 'city' => null,
-                'emails' => [], 'archived' => false, 'known' => false];
+                'emails' => [], 'archived' => false, 'known' => false, ...self::emptyDetails()];
         }
         $emails = $c->emails !== null ? json_decode((string) $c->emails, true) : [];
+        $contacts = $c->contacts !== null ? json_decode((string) $c->contacts, true) : [];
+        $text = static fn (mixed $v): ?string => $v !== null && trim((string) $v) !== '' ? trim((string) $v) : null;
 
         return [
             'xl_gid' => $gid,
@@ -317,6 +331,35 @@ final class InspectionQuery
             'emails' => is_array($emails) ? array_values(array_map('strval', $emails)) : [],
             'archived' => (bool) $c->archived,
             'known' => true,
+            // z kartoteki XL dosłownie (InspectionCustomerDetails, co noc); null = brak w kartotece albo brak prawa odczytu
+            'street' => $text($c->street),
+            'address_line2' => $text($c->address_line2),
+            'postal_code' => $text($c->postal_code),
+            'voivodeship' => $text($c->voivodeship),
+            'phones' => array_values(array_filter([$text($c->phone), $text($c->phone2)])),
+            'contacts' => is_array($contacts) ? array_values(array_map(static fn (array $p): array => [
+                'name' => $text($p['name'] ?? null),
+                'position' => $text($p['position'] ?? null),
+                'email' => $text($p['email'] ?? null),
+                'phone' => $text($p['phone'] ?? null),
+                'mobile' => $text($p['mobile'] ?? null),
+            ], array_filter($contacts, 'is_array'))) : [],
+            'account_manager' => $text($c->account_manager) !== null
+                ? ['name' => (string) $text($c->account_manager), 'email' => $text($c->account_manager_email)]
+                : null,
+            'main_operator' => $text($c->main_operator),
+            'last_sale_on' => $c->last_sale_at !== null ? substr((string) $c->last_sale_at, 0, 10) : null,
+            'client_id' => $c->client_id ?? null,
+            'details_synced_at' => $c->details_synced_at !== null ? CarbonImmutable::parse((string) $c->details_synced_at)->toIso8601String() : null,
+        ];
+    }
+
+    /** @return array<string, mixed> pola kartoteki klienta spoza kopii erp_customers */
+    private static function emptyDetails(): array
+    {
+        return [
+            'street' => null, 'address_line2' => null, 'postal_code' => null, 'voivodeship' => null, 'phones' => [], 'contacts' => [],
+            'account_manager' => null, 'main_operator' => null, 'last_sale_on' => null, 'client_id' => null, 'details_synced_at' => null,
         ];
     }
 

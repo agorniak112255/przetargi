@@ -19,7 +19,7 @@ use RuntimeException;
  *
  * 1. katalog usług (Twr_Typ 4) → erp_services; usługa, której XL już nie zwrócił, dostaje removed_at; kod, nazwa
  *    i jednostka pozycji inspection_positions odświeżane z erp_services (usługi) i erp_items (towary);
- * 2. okno (domyślnie WINDOW_DAYS dni wstecz albo od --since): pozycje faktur ze wszystkimi usługami i z towarami
+ * 2. okno (domyślnie WINDOW_DAYS dni wstecz albo od --since): pozycje faktur i WZ ze wszystkimi usługami i z towarami
  *    pozycji, których historia jest już doczytana — w oknie zostaje dokładnie to, co XL zwrócił tym razem (dokument
  *    anulowany albo cofnięty do bufora znika);
  * 3. towary pozycji bez historii (history_loaded_at = null, np. dodane w dzień) — pozycje faktur od HISTORY_FROM, potem
@@ -226,6 +226,7 @@ final class InspectionSaleSync
                 'document_id' => $row['document_id'],
                 'line' => $row['line'],
                 'document_number' => mb_substr($row['document_number'], 0, 40),
+                'invoice_number' => $row['invoice_number'] !== null ? mb_substr($row['invoice_number'], 0, 40) : null,
                 'issued_on' => $issued->toDateString(),
                 'sold_on' => $sold?->toDateString(),
                 'customer_xl_gid' => $row['customer_gid'],
@@ -261,7 +262,7 @@ final class InspectionSaleSync
             return 0;
         }
         DB::table('inspection_sale_lines')->upsert($rows, ['document_type', 'document_id', 'line'], [
-            'document_number', 'issued_on', 'sold_on', 'customer_xl_gid', 'recipient_xl_gid', 'xl_item_gid', 'xl_item_type',
+            'document_number', 'invoice_number', 'issued_on', 'sold_on', 'customer_xl_gid', 'recipient_xl_gid', 'xl_item_gid', 'xl_item_type',
             'quantity', 'net_value', 'warehouse_code', 'location', 'operator_ident', 'corrects_document_type',
             'corrects_document_id', 'synced_at', 'updated_at',
         ]);

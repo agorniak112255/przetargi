@@ -55,7 +55,7 @@ function ListMock({ markOffer }: { markOffer?: boolean }) {
             </td>
             <td className="p-2">
               14.09.2025
-              <Small>z faktur ERP XL</Small>
+              <Small>z faktur i WZ w ERP XL</Small>
             </td>
             <td className="p-2 font-mono">biuro@piekarnia.pl</td>
             <td className="p-2 text-slate-400">nie wysyłano</td>
@@ -72,7 +72,7 @@ function ListMock({ markOffer }: { markOffer?: boolean }) {
             <td className="p-2">PRZEGLĄD GAŚNICY PROSZKOWEJ GP-4 · 12 szt</td>
             <td className="p-2">
               20.10.2025
-              <Small>z faktur ERP XL</Small>
+              <Small>z faktur i WZ w ERP XL</Small>
             </td>
             <td className="p-2">
               <Chip tone="amber">brak adresu e-mail</Chip>
@@ -102,7 +102,7 @@ export function PrzegladyHelp() {
       slides={[
         {
           action: 'Lista klientów z terminem przeglądu',
-          does: 'Przeglądy pokazują klientów, którym zbliża się albo minął termin przeglądu gaśnic, hydrantów, legalizacji i innych urządzeń. Termin wylicza system z faktur ERP XL: data ostatniego przeglądu (usługa) albo zakupu urządzenia (towar) plus interwał ustawiony w „Pozycjach przeglądów”. System nie wymyśla terminów ani przepisów. Zaległe terminy są na czerwono. Domyślnie widać terminy w ciągu 30 dni i zaległe.',
+          does: 'Przeglądy pokazują klientów, którym zbliża się albo minął termin przeglądu gaśnic, hydrantów, legalizacji i innych urządzeń. Termin wylicza system z faktur i WZ w ERP XL: data ostatniego przeglądu (usługa) albo zakupu urządzenia (towar) plus interwał ustawiony w „Pozycjach przeglądów”. System nie wymyśla terminów ani przepisów. Zaległe terminy są na czerwono. Domyślnie widać terminy w ciągu 30 dni i zaległe.',
           click: 'Menu „Przeglądy”. Kliknij akronim klienta albo „Szczegóły”, żeby zobaczyć wszystkie jego terminy, historię faktur i wysłane oferty.',
           tone: 'blue',
           screen: (
@@ -115,7 +115,7 @@ export function PrzegladyHelp() {
                 <AppFrame nav="Przeglądy">
                   <h1 className="mb-1 text-xl font-semibold">Przeglądy</h1>
                   <p className="mb-3 text-[11px] text-slate-600">
-                    Klienci, którym zbliża się albo minął termin przeglądu. Termin wylicza system z faktur ERP XL.
+                    Klienci, którym zbliża się albo minął termin przeglądu. Termin wylicza system z faktur i WZ w ERP XL.
                   </p>
                   <ListMock />
                 </AppFrame>
@@ -155,7 +155,7 @@ export function PrzegladyHelp() {
         },
         {
           action: 'Skąd są daty i ilości',
-          does: '„Pokaż szczegóły pozycji” rozwija klienta. Data ostatniego przeglądu, numer faktury i ilość pochodzą z faktur ERP XL. Termin jest wyliczony — pod nim widać, z czego. Kilka wizyt bez przeglądu (np. kilka obiektów) daje kilka terminów; lista pokazuje najwcześniejszy. Ostrzeżenie „inna karta klienta z tym samym NIP-em…” znaczy, że przegląd mógł być zafakturowany na inną kartę tej firmy — sprawdź przed ofertą.',
+          does: '„Pokaż szczegóły pozycji” rozwija klienta. Data ostatniego przeglądu, numer faktury i ilość pochodzą z faktur i WZ w ERP XL. Termin jest wyliczony — pod nim widać, z czego. Kilka wizyt bez przeglądu (np. kilka obiektów) daje kilka terminów; lista pokazuje najwcześniejszy. Ostrzeżenie „inna karta klienta z tym samym NIP-em…” znaczy, że przegląd mógł być zafakturowany na inną kartę tej firmy — sprawdź przed ofertą.',
           click: 'Link „Pokaż szczegóły pozycji” w kolumnie „Co wymaga przeglądu”.',
           tone: 'amber',
           screen: (
@@ -181,7 +181,7 @@ export function PrzegladyHelp() {
                       <td className="p-2">8 szt</td>
                       <td className="p-2">
                         14.09.2025 · 8 szt
-                        <Small>ostatni przegląd, z faktur ERP XL</Small>
+                        <Small>ostatni przegląd, z faktur i WZ w ERP XL</Small>
                         <Small>FS-123/25/01G</Small>
                       </td>
                       <td className="p-2">

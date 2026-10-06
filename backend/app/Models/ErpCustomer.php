@@ -9,7 +9,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Kontrahent z Comarch ERP XL, który kupował (FS/PA) — adresy e-mail i operator, który najczęściej wystawiał mu
- * dokumenty. Zapis: App\Services\Erp\ErpCustomerSync (co noc); XL tylko czytany.
+ * dokumenty. Zapis: App\Services\Erp\ErpCustomerSync (co noc); XL tylko czytany. Adres, telefony, osoby kontaktowe
+ * i opiekun — tylko klienci z terminami przeglądów (App\Services\Inspections\InspectionCustomerDetails).
  */
 class ErpCustomer extends Model
 {
@@ -24,6 +25,16 @@ class ErpCustomer extends Model
         'last_sale_at',
         'sale_documents_24m',
         'main_operator',
+        'street',
+        'address_line2',
+        'postal_code',
+        'voivodeship',
+        'phone',
+        'phone2',
+        'contacts',
+        'account_manager',
+        'account_manager_email',
+        'details_synced_at',
         'synced_at',
         'removed_at',
     ];
@@ -36,6 +47,8 @@ class ErpCustomer extends Model
             'archived' => 'boolean',
             'last_sale_at' => 'date',
             'sale_documents_24m' => 'integer',
+            'contacts' => 'array',
+            'details_synced_at' => 'datetime',
             'synced_at' => 'datetime',
             'removed_at' => 'datetime',
         ];

@@ -1100,7 +1100,7 @@ function InspectionLinesSection({
           </span>
         </div>
         <p className="mt-0.5 text-xs text-slate-500">
-          Urządzenia i usługi tego klienta z terminem przeglądu, wyliczonym z faktur ERP XL (ostatni przegląd lub zakup
+          Urządzenia i usługi tego klienta z terminem przeglądu, wyliczonym z faktur i WZ w ERP XL (ostatni przegląd lub zakup
           + interwał pozycji). Popraw ilość, termin albo uwagę, jeśli wiesz więcej — klient dostaje tę tabelę bez cen.
         </p>
       </div>
@@ -1144,7 +1144,7 @@ function InspectionLinesSection({
                   {line.last_on ? (
                     <>
                       <div className="tabular-nums text-slate-800">{fmtDate(line.last_on)}</div>
-                      <div className="text-[11px] text-slate-500">z faktur ERP XL</div>
+                      <div className="text-[11px] text-slate-500">z faktur i WZ w ERP XL</div>
                     </>
                   ) : (
                     <span className="text-slate-400">brak danych</span>

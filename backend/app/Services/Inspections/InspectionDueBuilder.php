@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\DB;
  * (inspection_sale_lines). Woła ją erp:inspections po nocnym odczycie i API pozycji po każdej zmianie pozycji.
  *
  * Reguły (kontrakt modułu, 06.10.2026):
- * - zdarzenie = dokument (FS/FSE) z pozycją; data = data sprzedaży, a gdy XL jej nie podał — data wystawienia; korekta
+ * - zdarzenie = dokument (FS/FSE albo WZ — faktura do WZ nie ma własnych pozycji) z pozycją; data = data sprzedaży, a gdy XL jej nie podał — data wystawienia; korekta
  *   doliczana do dokumentu, który koryguje (ten sam klient i pozycja; także korekta korekty); korekta bez znalezionego
  *   oryginału (np. oryginał sprzed początku historii) — pomijana; dokument skorygowany do zera albo poniżej nie jest
  *   zdarzeniem (anulowana faktura nie przesuwa początku wizyty);
@@ -46,8 +46,8 @@ final class InspectionDueBuilder
     /** Najwyżej tyle dokumentów ostatniej wizyty w last_documents. */
     private const LAST_DOCUMENTS = 10;
 
-    /** Korekty FS (2041) i FSE (2045) — ilość i wartość ze znakiem. */
-    private const CORRECTION_TYPES = [2041, 2045];
+    /** Korekty FS (2041), FSE (2045) i WZ (2009) — ilość i wartość ze znakiem. */
+    private const CORRECTION_TYPES = [2041, 2045, 2009];
 
     /** Minimalna liczba cyfr NIP-u do porównania kart (krótszy to nie NIP). */
     private const NIP_MIN_DIGITS = 10;
@@ -306,7 +306,7 @@ final class InspectionDueBuilder
             ->orderBy('issued_on')
             ->orderBy('id')
             ->select([
-                'id', 'document_type', 'document_id', 'line', 'document_number', 'issued_on', 'sold_on', 'customer_xl_gid',
+                'id', 'document_type', 'document_id', 'line', 'document_number', 'invoice_number', 'issued_on', 'sold_on', 'customer_xl_gid',
                 'recipient_xl_gid', 'quantity', 'net_value', 'location', 'operator_ident', 'corrects_document_type',
                 'corrects_document_id',
             ])
@@ -356,7 +356,10 @@ final class InspectionDueBuilder
                     'document_id' => (int) $l->document_id,
                     'quantity' => 0.0,
                     'net' => 0.0,
-                    'number' => (string) $l->document_number,
+                    // WZ z fakturą w spinaczu: „WZ-… (faktura FS-…)” — handlowiec szuka po numerze faktury
+                    'number' => $l->invoice_number !== null && $l->invoice_number !== ''
+                        ? $l->document_number.' (faktura '.$l->invoice_number.')'
+                        : (string) $l->document_number,
                     'issued_on' => $issued,
                     'line' => -1,
                     'recipient' => null,

@@ -4,16 +4,20 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\ErpCustomer;
 use App\Models\ErpItem;
 use App\Models\ErpService;
 use App\Models\InspectionDue;
 use App\Models\InspectionPosition;
 use App\Models\InspectionSaleLine;
 use App\Services\Erp\ErpXlGateway;
+use App\Services\Inspections\InspectionCustomerDetails;
+use App\Services\Inspections\InspectionDueBuilder;
 use App\Services\Inspections\InspectionSaleSync;
 use App\Support\ClarionDate;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Tests\Support\FakeErpXlGateway;
 use Tests\TestCase;
@@ -182,6 +186,58 @@ final class InspectionSaleSyncTest extends TestCase
         $again = app(InspectionSaleSync::class)->run();
         $this->assertSame(0, $again['history_positions']);
         $this->assertSame([['items' => [200], 'all_services' => true, 'from' => $this->d('2026-08-07')]], $this->xl->inspectionLineCalls);
+    }
+
+    public function test_wz_with_invoice_number_and_wz_correction_are_stored_and_count_in_due(): void
+    {
+        // faktura do WZ nie ma w XL pozycji — gaśnice są na WZ, faktura w spinaczu WZ; korekta WZK wskazuje WZ
+        $position = $this->position(200, InspectionPosition::TYPE_GOODS, ['interval_months' => 12, 'history_loaded_at' => now()]);
+        $this->xl->inspectionLineRows = [
+            FakeErpXlGateway::inspectionLine(50, $this->d('2026-09-01'), 30, 200, 3, 400.5, 1, ['doc_type' => 2001, 'invoice_number' => 'FS-01H/137/26/09']),
+            FakeErpXlGateway::inspectionLine(51, $this->d('2026-09-10'), 30, 200, -1, -133.5, 1, ['doc_type' => 2009, 'corrects_type' => 2001, 'corrects_id' => 50]),
+        ];
+
+        app(InspectionSaleSync::class)->run();
+
+        $wz = InspectionSaleLine::query()->where('document_id', 50)->firstOrFail();
+        $this->assertSame(2001, $wz->document_type);
+        $this->assertSame('WZ-01G/50/26/09', $wz->document_number);
+        $this->assertSame('FS-01H/137/26/09', $wz->invoice_number);
+        $this->assertNull(InspectionSaleLine::query()->where('document_id', 51)->firstOrFail()->invoice_number);
+
+        app(InspectionDueBuilder::class)->rebuild();
+        $due = InspectionDue::query()->where('inspection_position_id', $position->id)->firstOrFail();
+        $this->assertSame('2.000', $due->last_quantity);
+        $this->assertSame('2027-09-01', $due->due_on->format('Y-m-d'));
+        $this->assertSame([['number' => 'WZ-01G/50/26/09 (faktura FS-01H/137/26/09)', 'issued_on' => '2026-09-01', 'quantity' => 2]], $due->last_documents);
+    }
+
+    public function test_command_stores_customer_card_details_and_unreadable_columns(): void
+    {
+        $this->position(4737, InspectionPosition::TYPE_SERVICE, ['interval_months' => 12]);
+        $this->xl->inspectionLineRows = [FakeErpXlGateway::inspectionLine(30, $this->d('2026-09-01'), 40, 4737, 3, 27, 4)];
+        ErpCustomer::query()->create(['xl_gid' => 40, 'acronym' => 'ALFA', 'name' => 'Alfa']);
+        $this->xl->cardRows = [FakeErpXlGateway::card(40, 'ALFA', ['phone' => null, 'street' => 'ul. Krótka 2'])];
+        $this->xl->cardUnavailable = ['phone', 'phone2'];
+        $this->xl->contactRows = [
+            ['customer_gid' => 40, 'name' => 'Jan Nowak', 'position' => 'kierownik BHP', 'email' => 'jan@alfa.pl', 'phone' => null, 'mobile' => null],
+        ];
+        $this->xl->contactUnavailable = ['phone', 'mobile'];
+        $this->xl->managerRows = [['customer_gid' => 40, 'first_name' => 'Anna', 'last_name' => 'Kowal', 'acronym' => 'AKOW', 'email' => 'anna@supon.pl']];
+
+        $this->artisan('erp:inspections')
+            ->expectsOutputToContain('Kartoteka klientów: 1 klientów, 1 osób kontaktowych; bez prawa odczytu w XL: phone, phone2, contact_phone, contact_mobile.')
+            ->assertSuccessful();
+
+        $c = ErpCustomer::query()->where('xl_gid', 40)->firstOrFail();
+        $this->assertSame('ul. Krótka 2', $c->street);
+        $this->assertSame('35-001', $c->postal_code);
+        $this->assertNull($c->phone);
+        $this->assertSame([['name' => 'Jan Nowak', 'position' => 'kierownik BHP', 'email' => 'jan@alfa.pl']], $c->contacts);
+        $this->assertSame('Anna Kowal', $c->account_manager);
+        $this->assertSame('anna@supon.pl', $c->account_manager_email);
+        $this->assertNotNull($c->details_synced_at);
+        $this->assertSame(['phone', 'phone2', 'contact_phone', 'contact_mobile'], Cache::get(InspectionCustomerDetails::UNAVAILABLE_KEY));
     }
 
     public function test_command_reads_xl_and_rebuilds_due_rows(): void

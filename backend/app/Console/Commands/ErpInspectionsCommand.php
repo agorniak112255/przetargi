@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Services\Erp\ErpXlGateway;
+use App\Services\Inspections\InspectionCustomerDetails;
 use App\Services\Inspections\InspectionDueBuilder;
 use App\Services\Inspections\InspectionSaleSync;
 use App\Support\PolishTime;
@@ -13,8 +14,8 @@ use Illuminate\Console\Command;
 use Throwable;
 
 /**
- * Moduł Przeglądy: katalog usług i pozycje faktur z usługami i towarami pozycji z ERP XL (okno 60 dni), potem
- * przebudowa terminów — co noc 05:10 czasu polskiego (tylko przy ERPXL_ENABLED). Pierwszy pełny odczyt ręcznie:
+ * Moduł Przeglądy: katalog usług i pozycje faktur i WZ z usługami i towarami pozycji z ERP XL (okno 60 dni), potem
+ * przebudowa terminów i dane z kartoteki klientów z terminami (adres, telefony, osoby kontaktowe, opiekun) — co noc 05:10 czasu polskiego (tylko przy ERPXL_ENABLED). Pierwszy pełny odczyt ręcznie:
  * `erp:inspections --since=2019-01-01`. Reguły w InspectionSaleSync i InspectionDueBuilder; XL tylko czytany.
  */
 final class ErpInspectionsCommand extends Command
@@ -25,7 +26,7 @@ final class ErpInspectionsCommand extends Command
 
     protected $description = 'Kopiuje z ERP XL usługi i faktury do modułu Przeglądy i przelicza terminy przeglądów';
 
-    public function handle(ErpXlGateway $gateway, InspectionSaleSync $sync, InspectionDueBuilder $builder): int
+    public function handle(ErpXlGateway $gateway, InspectionSaleSync $sync, InspectionDueBuilder $builder, InspectionCustomerDetails $details): int
     {
         if ((bool) $this->option('no-xl')) {
             return $this->rebuild($builder);
@@ -67,7 +68,28 @@ final class ErpInspectionsCommand extends Command
             $stats['history_positions'],
         ));
 
-        return $this->rebuild($builder);
+        $result = $this->rebuild($builder);
+        if ($result !== self::SUCCESS) {
+            return $result;
+        }
+
+        try {
+            $info = $details->sync();
+        } catch (Throwable $e) {
+            // terminy już przeliczone — brak danych kartoteki nie psuje listy, zostają dane z poprzedniej nocy
+            $this->error('Odczyt kartoteki klientów do Przeglądów przerwany: '.$e->getMessage());
+            report($e);
+
+            return self::FAILURE;
+        }
+        $this->info(sprintf(
+            'Kartoteka klientów: %d klientów, %d osób kontaktowych%s.',
+            $info['customers'],
+            $info['contacts'],
+            $info['unavailable'] !== [] ? '; bez prawa odczytu w XL: '.implode(', ', $info['unavailable']) : '',
+        ));
+
+        return self::SUCCESS;
     }
 
     private function rebuild(InspectionDueBuilder $builder): int
