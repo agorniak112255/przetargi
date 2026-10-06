@@ -305,6 +305,81 @@ final class AnsellGloveIdentityTest extends TestCase
         );
     }
 
+    public function test_renamed_line_card_with_our_model_and_brand_is_confirmed(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $glove = $this->glove('32105100', 'ActivArmr 32105');
+
+        // HyNit 32-105 to dziś ActivArmr 32-105 — sklepy mają starą nazwę linii
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://bhp-sklep.com.pl/produkt/ansell-32-105-hynit-rekawice/',
+            'Ansell 32-105 HYNIT rękawice - KAMEX',
+            'Rękawice Ansell HyNit 32-105 z pełną powłoką nitrylową. EN 388.',
+            $glove
+        ));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://kams.com.pl/p10835,hynit-32-105-rekawice-mechaniczne-do-ciezkich-prac-7-5-10.html',
+            'HYNIT 32-105 - rękawice mechaniczne do ciężkich prac - 7,5-10 | Kams BHP',
+            'Rękawice Ansell HyNit 32-105 do ciężkich prac mechanicznych.',
+            $glove
+        ));
+        $this->assertTrue($identity->isConfirmedProductCard(
+            'https://cas-technik.eu/handschutz/universalhandschuhe/ansell-hynit-32-105-nitrile-protective-gloves-fully-coated/ih-32105-9',
+            'Ansell HyNit 32-105',
+            'Rękawice Ansell HyNit, powłoka nitrylowa.',
+            $this->glove('32105100', 'ActivArmr 32105 Size 9,0')
+        ));
+    }
+
+    public function test_renamed_line_route_needs_brand_model_in_url_or_title_and_plain_name(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $glove = $this->glove('32105100', 'ActivArmr 32105');
+
+        // bez marki Ansell na stronie
+        $this->assertFalse($identity->isConfirmedProductCard(
+            'https://shop.example.com/hynit-32-105',
+            'HyNit 32-105',
+            'Rękawice nitrylowe do ciężkich prac.',
+            $glove
+        ));
+        // model tylko w treści (np. „podobne produkty”), adres i tytuł o czymś innym
+        $this->assertFalse($identity->isConfirmedProductCard(
+            'https://shop.example.com/rekawice-robocze',
+            'Rękawice robocze',
+            'Ansell HyFlex 11-800. Podobne: Ansell HyNit 32-105.',
+            $glove
+        ));
+        // drugi model NN-NNN w adresie: porównanie albo zestaw
+        $this->assertFalse($identity->isConfirmedProductCard(
+            'https://shop.example.com/hynit-32-105-vs-32-125',
+            'Ansell HyNit 32-105 czy 32-125',
+            'Ansell HyNit 32-105 i 32-125.',
+            $glove
+        ));
+        // sklejone cyfry w adresie to numer karty sklepu, nie model — marka z menu sklepu niczego nie zmienia
+        $this->assertFalse($identity->isConfirmedProductCard(
+            'https://www.bhp-gabi.pl/p32105,koszulka-polo-portofino-08189-issaline.html',
+            'Koszulka polo Portofino',
+            'Koszulka polo. Marki: Ansell, Uvex, 3M.',
+            $glove
+        ));
+        // numer z separatorem bez „Ansell” ani linii w adresie lub tytule (np. numer CAS odczynnika)
+        $this->assertFalse($identity->isConfirmedProductCard(
+            'https://pol-aura.pl/oksym-cykloheksanonu-97-100-64-1-p-13092.html',
+            'Oksym cykloheksanonu 97-100',
+            'Odczynnik. Ansell w menu producentów.',
+            $this->glove('97100110', 'ActivArmr 97100')
+        ));
+        // nazwa niesie więcej niż linię i model — numer NN-NNN nie wystarcza
+        $this->assertFalse($identity->isConfirmedProductCard(
+            'https://shop.example.com/ansell-66-300-model-122',
+            'Ansell 66-300 model 122',
+            'Kombinezon Ansell 66-300 model 122.',
+            $this->glove('210000047', 'AlphaTec 66-300 model 111-G09, 3XL')
+        ));
+    }
+
     private function glove(string $sku, string $name): Product
     {
         return new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Ansell']);

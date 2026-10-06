@@ -1304,6 +1304,38 @@ final class ProductSearchIdentity
         return $out;
     }
 
+    /**
+     * Karta modelu Ansella pod inną nazwą linii (HyNit → ActivArmr). Tylko dla nazw „linia + model (+ rozmiar)” z cennika:
+     * gdy nazwa niesie coś jeszcze („AlphaTec 66-300 model 111”), numer NN-NNN nie wystarcza do rozróżnienia kart.
+     * Nasz model musi stać w adresie albo tytule z separatorem („32-105”) obok „Ansell” albo nazwy linii Ansella, a żaden
+     * inny model NN-NNN obok niego (porównania, zestawy). Sklejone pięć cyfr to zwykle numer karty sklepu albo CAS
+     * („bhp-gabi.pl/p32105,koszulka-polo”, „pol-aura.pl/…-p-32105”) — symulacja na 266 kartach Ansella, 06.10.2026.
+     */
+    private function ansellModelCardUnderOtherLineName(string $url, string $title, string $model, Product $product): bool
+    {
+        if (preg_match(
+            '/^\p{L}[\p{L}\-]{1,19}(?:\s+\p{L}[\p{L}\-]{1,19})?\s+\d{2}[\s\-]?\d{3}(?:\s+(?:size\s+)?\d{1,2}(?:[.,]\d)?)?$/iu',
+            trim((string) $product->name)
+        ) !== 1) {
+            return false;
+        }
+        $hay = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')).' '.$title);
+        [$head, $tail] = explode('-', $model);
+        if (preg_match('/(?<!\d)'.$head.'[\s\-]'.$tail.'(?!\d)/u', $hay) !== 1
+            || preg_match('/ansell|hynit|hyflex|hycron|alphatec|activarmr|sol-?vex|microflex|touchntuff|versatouch/u', $hay) !== 1) {
+            return false;
+        }
+        // obcy model liczymy tylko z separatorem — sklejone pięć cyfr bywa numerem strony sklepu („p10835”)
+        preg_match_all('/(?<!\d)(\d{2})[\s\-](\d{3})(?!\d)/u', $hay, $hits, PREG_SET_ORDER);
+        foreach ($hits as $hit) {
+            if ($model !== $hit[1].'-'.$hit[2]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /** Numer modelu rękawicy Ansell na stronie: 11-919, 11 919 albo 11919. */
     private function hayHasAnsellGloveModel(string $hay, string $model): bool
     {
@@ -2620,6 +2652,14 @@ final class ProductSearchIdentity
         $gloveModel = $this->ansellGloveModel($product);
         if ($gloveModel !== null && ! $this->hayHasAnsellGloveModel($hay, $gloveModel)) {
             return false;
+        }
+        // Ansell zmienia nazwy linii, numer modelu zostaje: „HYNIT 32-105” z marką Ansell w sklepie to nasze
+        // „ActivArmr 32105” z cennika (batch #493, 06.10.2026: bhp-sklep, kams i cas-technik szły do kosza).
+        if ($gloveModel !== null
+            && $this->ansellModelCardUnderOtherLineName($url, $title, $gloveModel, $product)
+            && $this->hayHasBrand($hay, $product)
+            && $this->hayHasRequiredTypeFromName($hay, $product)) {
+            return true;
         }
         // 0100 ≠ art.1006: krótki numer magazynowy musi być na karcie, nie sama „kangurka”.
         if (preg_match('/^\d{3,4}$/u', trim((string) $product->sku)) === 1
