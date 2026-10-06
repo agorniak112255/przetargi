@@ -51,6 +51,12 @@ final class CustomerEmailFinder
     private const NOISE_EMAILS = ['kontakt@wenet.pl'];
 
     /**
+     * Skrzynki, które nie służą do ofert: inspektor ochrony danych i RODO, rekrutacja, newsletter, adresy techniczne
+     * (pierwsze produkcyjne szukanie 06.10.2026: iod@ gminy jako propozycja).
+     */
+    private const ROLE_LOCAL = '/^(iod|rodo|dpo|abi|gdpr|privacy|ochrona\.?danych|ochronadanych|dane\.?osobowe|daneosobowe|rekrutacj[ae]|praca|kariera|cv|hr|newsletter|no-?reply|abuse|postmaster|webmaster|hostmaster)([._-]|\d|$)/u';
+
+    /**
      * Forma prawna i słowa ogólne — poza nimi nazwa klienta do szukania i porównań. Działa na nazwie bez kropek
      * i myślników („SP. Z O.O.” → „SP Z O O”), więc skróty jako litery rozdzielone spacjami.
      */
@@ -252,7 +258,8 @@ final class CustomerEmailFinder
             $nipOnPage = $nip !== '' && str_contains((string) preg_replace('/\D+/', '', $text), $nip);
             foreach (self::emailsIn($text) as $email) {
                 $domain = substr($email, (int) strpos($email, '@') + 1);
-                if (in_array($email, self::NOISE_EMAILS, true) || self::hostIn($domain, self::DIRECTORY_HOSTS)) {
+                if (in_array($email, self::NOISE_EMAILS, true) || self::hostIn($domain, self::DIRECTORY_HOSTS)
+                    || preg_match(self::ROLE_LOCAL, substr($email, 0, (int) strpos($email, '@'))) === 1) {
                     continue;
                 }
                 if ($source === CustomerEmailSuggestion::SOURCE_DIRECTORY) {

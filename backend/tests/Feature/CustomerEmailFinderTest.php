@@ -41,7 +41,7 @@ final class CustomerEmailFinderTest extends TestCase
         config(['enrichment.reader_api_key' => 'jina_test_key', 'enrichment.reader_min_interval' => 0]);
         Cache::flush();
         $this->pages = [
-            'https://go-kom.pl/' => 'GOKOM Boguchwała — gospodarka komunalna. Napisz: sekretariat@go-kom.pl albo prywatny.jan@gmail.com',
+            'https://go-kom.pl/' => 'GOKOM Boguchwała — gospodarka komunalna. Napisz: sekretariat@go-kom.pl albo prywatny.jan@gmail.com. Inspektor ochrony danych: iod@go-kom.pl, praca: rekrutacja@go-kom.pl',
             'https://go-kom.pl/kontakt' => 'Kontakt z nami. GOKOM Sp. z o.o. w Boguchwale, NIP 813-321-80-73, sekretariat i biuro: biuro@go-kom.pl, logo@2x.png',
             'https://panoramafirm.pl/gokom' => 'GOKOM Sp. z o.o. NIP 8133218073 e-mail: gokom.biuro@wp.pl. Operator: kontakt@wenet.pl, reklama@panoramafirm.pl',
             'https://aleo.com/pl/firma/inna' => 'Inna firma z tego samego katalogu, inny NIP 1234567890, adres: inna@firma.pl — nie nasz klient.',
