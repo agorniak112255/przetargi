@@ -52,6 +52,7 @@ use App\Http\Controllers\Api\GlobalSearchController;
 use App\Http\Controllers\Api\ImportExclusionController;
 use App\Http\Controllers\Api\InquiryOutcomeController;
 use App\Http\Controllers\Api\InspectionController;
+use App\Http\Controllers\Api\InspectionEmailController;
 use App\Http\Controllers\Api\InspectionOfferController;
 use App\Http\Controllers\Api\InspectionPositionController;
 use App\Http\Controllers\Api\InventoryBoardController;
@@ -655,6 +656,10 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     // pomijanie klientów na liście terminów — kto przygotowuje oferty albo prowadzi listę pozycji
     Route::middleware('permission:inspections.offer|inspections.manage')->group(function (): void {
         Route::post('/inspections/dismissals', [InspectionController::class, 'storeDismissal']);
+        // adresy e-mail klienta z sieci: szukanie na żądanie i decyzja „użyj / odrzuć”
+        Route::post('/inspections/customers/{xlGid}/email-search', [InspectionEmailController::class, 'search'])
+            ->whereNumber('xlGid')->middleware('throttle:10,1');
+        Route::patch('/inspections/email-suggestions/{suggestion}', [InspectionEmailController::class, 'decide'])->whereNumber('suggestion');
         Route::delete('/inspections/dismissals/{id}', [InspectionController::class, 'destroyDismissal'])->whereNumber('id');
     });
     // lista pozycji przeglądów (usługi i towary XL z interwałem) i podpowiedzi z wzorca

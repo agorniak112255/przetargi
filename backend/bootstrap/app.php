@@ -113,6 +113,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // XL tylko w nocy, przed erp:client-documents
         $schedule->command('erp:inspections')->dailyAt('05:10')->timezone('Europe/Warsaw')->withoutOverlapping(60)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // Przeglądy: adresy e-mail klientów bez adresu ze stron WWW (propozycje do zatwierdzenia) — w nocy, z limitem;
+        // strony czyta wspólna kolejka czytnika, więc po opisach produktów, przed porannym odczytem XL
+        $schedule->command('inspections:find-emails')->dailyAt('01:30')->timezone('Europe/Warsaw')->withoutOverlapping(180);
         // powiązania zapytań z klientami (zawsze) i podpowiedzi „możliwe zamówienie z oferty” (pozycje z XL tylko przy
         // ERPXL_ENABLED — sprawdza samo polecenie) — po erp:client-documents
         $schedule->command('inquiries:order-hints')->dailyAt('05:55')->timezone('Europe/Warsaw')->withoutOverlapping(30);

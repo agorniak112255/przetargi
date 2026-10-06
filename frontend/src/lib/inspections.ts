@@ -62,7 +62,30 @@ export type InspectionCustomer = {
   /** Karta w zakładce Klienci (tylko klienci powyżej progu sprzedaży); null = brak karty. */
   client_id: number | null
   details_synced_at: string | null
+  /** Zatwierdzone adresy z sieci (są też w emails — adresy z karty XL i z sieci razem). */
+  web_emails: string[]
+  /** Propozycje adresów z sieci czekające na decyzję („Użyj” / „Odrzuć”). */
+  pending_email_suggestions: number
 }
+
+/**
+ * Adres e-mail klienta znaleziony w sieci — propozycja z dowodem; do ofert trafia dopiero po „Użyj”.
+ * evidence: nip — na stronie źródłowej jest NIP klienta; name — strona firmy o podobnej nazwie, bez NIP-u (sprawdź).
+ */
+export type CustomerEmailSuggestion = {
+  id: number
+  email: string
+  source: 'website' | 'directory' | 'regon' | 'ceidg'
+  source_url: string | null
+  source_host: string | null
+  evidence: 'nip' | 'name'
+  status: 'pending' | 'accepted' | 'rejected'
+  decided_by_name: string | null
+  decided_at: string | null
+  found_at: string | null
+}
+
+export type CustomerEmailLookup = { checked_at: string | null; found: number; error: boolean }
 
 /** Osoba kontaktowa z karty klienta w ERP XL (bez archiwalnych). */
 export type InspectionContact = {
@@ -161,6 +184,9 @@ export type InspectionCustomerDetail = {
    * phone2, contact_phone, contact_mobile itd. — ekran pisze „brak dostępu”, a nie „brak w kartotece”.
    */
   details_unavailable: string[]
+  email_suggestions: CustomerEmailSuggestion[]
+  /** Ostatnie szukanie adresu w sieci; null = jeszcze nie szukano. */
+  email_lookup: CustomerEmailLookup | null
 }
 
 export type InspectionPositionSource = 'manual' | 'suggestion'
@@ -247,6 +273,22 @@ export function listInspections(query: string) {
 
 export function getInspectionCustomer(xlGid: number) {
   return api<InspectionCustomerDetail>(`/inspections/customers/${xlGid}`)
+}
+
+/** Szuka adresu e-mail klienta w sieci teraz (kilkanaście–kilkadziesiąt sekund); zwraca wszystkie propozycje klienta. */
+export function searchCustomerEmails(xlGid: number) {
+  return api<{ found: number; error: string | null; suggestions: CustomerEmailSuggestion[]; lookup: CustomerEmailLookup | null }>(
+    `/inspections/customers/${xlGid}/email-search`,
+    { method: 'POST' },
+  )
+}
+
+/** „Użyj” (accepted), „Odrzuć” (rejected) albo cofnięcie decyzji (pending). */
+export function decideEmailSuggestion(id: number, status: CustomerEmailSuggestion['status']) {
+  return api<{ suggestions: CustomerEmailSuggestion[] }>(`/inspections/email-suggestions/${id}`, {
+    method: 'PATCH',
+    ...json({ status }),
+  })
 }
 
 function gidsQuery(gids: number[]): string {

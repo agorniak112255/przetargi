@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\CustomerEmailSuggestion;
 use App\Models\ErpCustomer;
 use App\Models\InspectionDismissal;
 use App\Models\InspectionDue;
 use App\Models\Offer;
 use App\Models\User;
+use App\Services\Inspections\InspectionQuery;
 use App\Support\PolishTime;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -211,11 +213,19 @@ class InspectionOfferController extends Controller
         return $acronym !== '' ? $acronym : 'Klient XL '.$gid;
     }
 
-    /** @return list<string> adresy z karty klienta XL (do wstawienia przy wysyłce) */
+    /** @return list<string> adresy z karty klienta XL i zatwierdzone adresy z sieci (do wstawienia przy wysyłce) */
     public static function customerEmails(?ErpCustomer $customer): array
     {
-        $emails = $customer !== null && is_array($customer->emails) ? $customer->emails : [];
+        if ($customer === null) {
+            return [];
+        }
+        $emails = is_array($customer->emails) ? $customer->emails : [];
+        $web = CustomerEmailSuggestion::query()
+            ->where('customer_xl_gid', (int) $customer->xl_gid)
+            ->where('status', CustomerEmailSuggestion::STATUS_ACCEPTED)
+            ->orderBy('id')
+            ->pluck('email')->map(static fn ($e): string => (string) $e)->all();
 
-        return array_values(array_filter($emails, static fn ($e): bool => is_string($e) && $e !== ''));
+        return InspectionQuery::mergeEmails(array_values(array_filter($emails, static fn ($e): bool => is_string($e) && $e !== '')), $web);
     }
 }

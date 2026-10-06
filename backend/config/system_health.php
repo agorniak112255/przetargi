@@ -33,6 +33,7 @@ return [
         'products:match-candidates' => ['label' => 'Propozycje łączenia kart', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
         'bzp:fetch' => ['label' => 'Ogłoszenia i wyniki przetargów z Biuletynu', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
         'erp:client-documents' => ['label' => 'Faktury i paragony klientów z ERP XL', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
+        'inspections:find-emails' => ['label' => 'Przeglądy: adresy e-mail klientów ze stron WWW', 'schedule' => 'codziennie w nocy', 'nightly' => true, 'only_failures' => false],
         'erp:inspections' => ['label' => 'Przeglądy: usługi i faktury z ERP XL', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
         'inquiries:order-hints' => ['label' => 'Powiązania zapytań z klientami i podpowiedzi zamówień', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
         'storage:prune' => ['label' => 'Czyszczenie plików tymczasowych', 'schedule' => 'co godzinę', 'nightly' => false, 'only_failures' => false],

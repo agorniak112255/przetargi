@@ -134,7 +134,7 @@ final class InspectionApiTest extends TestCase
         $row = $res->json('data.0');
         $this->assertSame([
             'xl_gid' => $firma, 'acronym' => 'FIRMA', 'name' => 'Firma Sp. z o.o.', 'nip' => '123-456-78-90', 'city' => 'Rzeszów',
-            'emails' => ['a@b.pl'], 'archived' => false, 'known' => true,
+            'emails' => ['a@b.pl'], 'web_emails' => [], 'pending_email_suggestions' => 0, 'archived' => false, 'known' => true,
             'street' => null, 'address_line2' => null, 'postal_code' => null, 'voivodeship' => null, 'phones' => [], 'contacts' => [],
             'account_manager' => null, 'main_operator' => null, 'last_sale_on' => null, 'client_id' => null, 'details_synced_at' => null,
         ], $row['customer']);
@@ -182,7 +182,7 @@ final class InspectionApiTest extends TestCase
         $this->getJson('/api/inspections')->assertOk()
             ->assertJsonPath('data.0.customer', [
                 'xl_gid' => 777, 'acronym' => 'Klient XL 777', 'name' => null, 'nip' => null, 'city' => null,
-                'emails' => [], 'archived' => false, 'known' => false,
+                'emails' => [], 'web_emails' => [], 'pending_email_suggestions' => 0, 'archived' => false, 'known' => false,
                 'street' => null, 'address_line2' => null, 'postal_code' => null, 'voivodeship' => null, 'phones' => [], 'contacts' => [],
                 'account_manager' => null, 'main_operator' => null, 'last_sale_on' => null, 'client_id' => null, 'details_synced_at' => null,
             ]);

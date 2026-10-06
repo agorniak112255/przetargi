@@ -20,6 +20,10 @@ import {
   monthsLabel,
   xlTypeLabel,
   type InspectionCustomer,
+  type CustomerEmailLookup,
+  type CustomerEmailSuggestion,
+  searchCustomerEmails,
+  decideEmailSuggestion,
   type InspectionCustomerDetail,
   type InspectionDismissal,
   type InspectionDismissalReason,
@@ -750,6 +754,7 @@ function InspectionsList() {
           canDismiss={canDismiss}
           onClose={() => setDetailGid(null)}
           onDismiss={(target) => setDismissTarget(target)}
+          onChanged={() => void load()}
           reloadKey={result}
         />
       )}
@@ -924,11 +929,22 @@ function CustomerRow({
           <span className="block text-[11px] text-slate-700" title={c.emails.join('\n')}>
             <span className="block truncate font-mono">{c.emails[0]}</span>
             {c.emails.length > 1 && <span className="text-slate-500">i {c.emails.length - 1} inne</span>}
+            {c.web_emails.length > 0 && (
+              <span className="ml-1 text-emerald-700" title="Adres znaleziony w sieci i zatwierdzony — nie ma go na karcie ERP XL">
+                z sieci
+              </span>
+            )}
           </span>
         ) : (
           <Chip tone="amber" title="Karta klienta w ERP XL nie ma adresu e-mail">
             brak adresu e-mail
           </Chip>
+        )}
+        {c.emails.length === 0 && c.pending_email_suggestions > 0 && (
+          <button type="button" onClick={onOpen} className="mt-0.5 block text-left text-[11px] text-blue-600 hover:underline">
+            {c.pending_email_suggestions}{' '}
+            {plural(c.pending_email_suggestions, 'propozycja', 'propozycje', 'propozycji')} z sieci — sprawdź
+          </button>
         )}
         {c.phones.length > 0 && (
           <span className="mt-0.5 block font-mono text-[11px] text-slate-700" title="Telefon z karty klienta w ERP XL">
@@ -1239,17 +1255,172 @@ function CustomerCardSection({ customer: c, unavailable }: { customer: Inspectio
   )
 }
 
+/**
+ * Adresy e-mail klienta znalezione w sieci (strona firmy, katalog firm) — propozycje z dowodem. „Użyj” dodaje adres do
+ * ofert (jak adres z karty ERP XL), „Odrzuć” — adres nie wróci. Decyzja człowieka; system nie dopisuje adresu sam.
+ */
+function EmailSuggestionsSection({
+  xlGid,
+  suggestions,
+  lookup,
+  canDecide,
+  onSuggestions,
+  onChanged,
+}: {
+  xlGid: number
+  suggestions: CustomerEmailSuggestion[]
+  lookup: CustomerEmailLookup | null
+  canDecide: boolean
+  onSuggestions: (suggestions: CustomerEmailSuggestion[], lookup?: CustomerEmailLookup | null) => void
+  /** Zmieniły się adresy używane w ofertach — lista przeglądów odświeża się. */
+  onChanged: () => void
+}) {
+  const [busy, setBusy] = useState<'' | 'search' | number>('')
+  const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
+
+  async function search() {
+    setBusy('search')
+    setErr('')
+    setNote('')
+    try {
+      const res = await searchCustomerEmails(xlGid)
+      onSuggestions(res.suggestions, res.lookup)
+      setNote(
+        res.error
+          ? res.error
+          : res.found > 0
+            ? `Znaleziono ${res.found} ${plural(res.found, 'nowy adres', 'nowe adresy', 'nowych adresów')} — sprawdź i wybierz.`
+            : 'Nie znaleziono nowych adresów.',
+      )
+    } catch (ex) {
+      setErr(errorText(ex, 'Nie udało się przeszukać sieci.'))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function decide(s: CustomerEmailSuggestion, status: CustomerEmailSuggestion['status']) {
+    setBusy(s.id)
+    setErr('')
+    try {
+      const res = await decideEmailSuggestion(s.id, status)
+      onSuggestions(res.suggestions)
+      if (status === 'accepted' || s.status === 'accepted') onChanged()
+    } catch (ex) {
+      setErr(errorText(ex, 'Nie udało się zapisać decyzji.'))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <section>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">Adresy e-mail z sieci</h3>
+          <p className="text-slate-500">
+            Adresy znalezione na stronie firmy albo w katalogu firm — to propozycje. „Użyj” dodaje adres do ofert tego klienta
+            (tak jak adres z karty ERP XL), „Odrzuć” — adres już nie wróci. Zatwierdzony adres dopisz też w karcie klienta w ERP XL.
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            {lookup?.checked_at
+              ? `Ostatnio szukano ${fmtDateTime(lookup.checked_at)}${lookup.error ? ' — wyszukiwarka nie odpowiedziała' : ''}.`
+              : 'Jeszcze nie szukano — noc sprawdza po kolei klientów bez adresu, najbliższe terminy najpierw.'}
+          </p>
+        </div>
+        {canDecide && (
+          <button type="button" className={BTN_SM} disabled={busy !== ''} onClick={() => void search()}>
+            {busy === 'search' ? 'Szukam… (do minuty)' : 'Szukaj adresu w sieci'}
+          </button>
+        )}
+      </div>
+      <ErrorBar message={err} />
+      {note && <p className="mt-1 text-slate-700">{note}</p>}
+      {suggestions.length > 0 && (
+        <table className="mt-1.5 w-full text-left">
+          <thead>
+            <tr className="border-b bg-slate-50 text-slate-700">
+              <th className="p-2">Adres e-mail</th>
+              <th className="p-2">Skąd</th>
+              <th className="p-2">Dowód</th>
+              <th className="p-2">Decyzja</th>
+            </tr>
+          </thead>
+          <tbody>
+            {suggestions.map((s) => (
+              <tr key={s.id} className={`border-b align-top last:border-b-0 ${s.status === 'rejected' ? 'text-slate-400' : ''}`}>
+                <td className={`p-2 font-mono ${s.status === 'rejected' ? 'line-through' : 'text-slate-800'}`}>{s.email}</td>
+                <td className="p-2">
+                  <div>{s.source === 'directory' ? 'katalog firm' : s.source === 'website' ? 'strona firmy' : 'rejestr'}</div>
+                  {s.source_url && (
+                    <a href={s.source_url} target="_blank" rel="noreferrer noopener" className="break-all text-[11px] text-blue-600 hover:underline">
+                      {s.source_host ?? s.source_url}
+                    </a>
+                  )}
+                </td>
+                <td className="p-2">
+                  {s.evidence === 'nip' ? (
+                    <Chip tone="green" title="Na stronie, z której pochodzi adres, jest NIP tego klienta">
+                      na stronie jest NIP klienta
+                    </Chip>
+                  ) : (
+                    <Chip tone="amber" title="Strona firmy o podobnej nazwie, bez NIP-u — może to być inna firma albo osoba o tym samym nazwisku">
+                      podobna nazwa, bez NIP-u — sprawdź
+                    </Chip>
+                  )}
+                </td>
+                <td className="whitespace-nowrap p-2">
+                  {s.status === 'pending' ? (
+                    canDecide ? (
+                      <span className="inline-flex gap-1">
+                        <button type="button" className={BTN_SM} disabled={busy !== ''} onClick={() => void decide(s, 'accepted')}>
+                          Użyj
+                        </button>
+                        <button type="button" className={BTN_SM} disabled={busy !== ''} onClick={() => void decide(s, 'rejected')}>
+                          Odrzuć
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">czeka na decyzję</span>
+                    )
+                  ) : (
+                    <span className="inline-flex items-center gap-2">
+                      <span className={s.status === 'accepted' ? 'text-emerald-700' : ''}>
+                        {s.status === 'accepted' ? 'używany w ofertach' : 'odrzucony'}
+                        {s.decided_by_name ? ` · ${s.decided_by_name}` : ''}
+                      </span>
+                      {canDecide && (
+                        <button type="button" className={BTN_SM} disabled={busy !== ''} onClick={() => void decide(s, 'pending')}>
+                          Cofnij
+                        </button>
+                      )}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  )
+}
+
 function CustomerDetailModal({
   xlGid,
   canDismiss,
   onClose,
   onDismiss,
+  onChanged,
   reloadKey,
 }: {
   xlGid: number
   canDismiss: boolean
   onClose: () => void
   onDismiss: (target: DismissTarget) => void
+  /** Zmienił się adres używany w ofertach (adres z sieci) — lista odświeża się. */
+  onChanged: () => void
   /** Nowa odpowiedź listy (np. po pominięciu) — szczegóły wczytują się od nowa. */
   reloadKey: unknown
 }) {
@@ -1280,6 +1451,18 @@ function CustomerDetailModal({
       ) : (
         <div className="space-y-4 text-xs">
           {c && <CustomerCardSection customer={c} unavailable={data.details_unavailable} />}
+          {c?.known && (
+            <EmailSuggestionsSection
+              xlGid={xlGid}
+              suggestions={data.email_suggestions}
+              lookup={data.email_lookup}
+              canDecide={canDismiss}
+              onSuggestions={(suggestions, lookup) =>
+                setData((d) => (d ? { ...d, email_suggestions: suggestions, email_lookup: lookup === undefined ? d.email_lookup : lookup } : d))
+              }
+              onChanged={onChanged}
+            />
+          )}
 
           <section>
             <h3 className="text-sm font-semibold text-slate-900">Terminy przeglądów</h3>

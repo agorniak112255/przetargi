@@ -121,6 +121,9 @@ class InspectionController extends Controller
             // pola kartoteki XL, do których login aplikacji nie ma prawa (np. phone, street, contact_phone) — ekran pisze
             // „brak dostępu w ERP XL” zamiast „brak w kartotece”
             'details_unavailable' => array_values(array_map('strval', (array) Cache::get(InspectionCustomerDetails::UNAVAILABLE_KEY, []))),
+            // adresy e-mail z sieci (propozycje do zatwierdzenia) i ostatnie szukanie
+            'email_suggestions' => InspectionEmailController::suggestions($xlGid),
+            'email_lookup' => InspectionEmailController::lookup($xlGid),
         ]);
     }
 

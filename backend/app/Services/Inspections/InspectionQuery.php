@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Inspections;
 
+use App\Models\CustomerEmailSuggestion;
 use App\Models\InspectionPosition;
 use App\Models\Offer;
 use App\Services\Erp\WarehouseLocations;
@@ -84,7 +85,15 @@ final class InspectionQuery
             $q->where('d.operator_ident', (string) $f['ident']);
         }
         if ($f['with_email'] ?? false) {
-            $q->whereNotNull('c.emails');
+            // adres z karty XL albo zatwierdzony adres z sieci
+            $q->where(function (Builder $w): void {
+                $w->whereNotNull('c.emails')->orWhereExists(function (Builder $x): void {
+                    $x->selectRaw('1')
+                        ->from('customer_email_suggestions as es')
+                        ->whereColumn('es.customer_xl_gid', 'd.customer_xl_gid')
+                        ->where('es.status', CustomerEmailSuggestion::STATUS_ACCEPTED);
+                });
+            });
         }
         if (! ($f['dismissed'] ?? false)) {
             $q->whereNotExists(function (Builder $x) use ($today): void {
@@ -297,7 +306,23 @@ final class InspectionQuery
             ];
             foreach (DB::table('erp_customers')->whereIn('xl_gid', $chunk)->get($columns) as $c) {
                 $c->client_id = null;
+                $c->web_emails = [];
+                $c->pending_suggestions = 0;
                 $out[(int) $c->xl_gid] = $c;
+            }
+            // adresy z sieci: zatwierdzone (używane jak adresy z karty) i liczba oczekujących propozycji
+            foreach (DB::table('customer_email_suggestions')->whereIn('customer_xl_gid', $chunk)
+                ->whereIn('status', [CustomerEmailSuggestion::STATUS_ACCEPTED, CustomerEmailSuggestion::STATUS_PENDING])
+                ->orderBy('id')->get(['customer_xl_gid', 'email', 'status']) as $s) {
+                $c = $out[(int) $s->customer_xl_gid] ?? null;
+                if ($c === null) {
+                    continue;
+                }
+                if ($s->status === CustomerEmailSuggestion::STATUS_ACCEPTED) {
+                    $c->web_emails[] = (string) $s->email;
+                } else {
+                    $c->pending_suggestions++;
+                }
             }
             // karta klienta w zakładce Klienci (klienci powyżej progu sprzedaży) — link ze szczegółów
             foreach (DB::table('clients')->whereIn('xl_gid', $chunk)->get(['id', 'xl_gid']) as $client) {
@@ -316,7 +341,8 @@ final class InspectionQuery
         if ($c === null) {
             // klient spoza kopii erp_customers — tylko numer XL, niczego nie zgadujemy
             return ['xl_gid' => $gid, 'acronym' => self::unknownName($gid), 'name' => null, 'nip' => null, 'city' => null,
-                'emails' => [], 'archived' => false, 'known' => false, ...self::emptyDetails()];
+                'emails' => [], 'web_emails' => [], 'pending_email_suggestions' => 0, 'archived' => false, 'known' => false,
+                ...self::emptyDetails()];
         }
         $emails = $c->emails !== null ? json_decode((string) $c->emails, true) : [];
         $contacts = $c->contacts !== null ? json_decode((string) $c->contacts, true) : [];
@@ -328,7 +354,10 @@ final class InspectionQuery
             'name' => $c->name !== null ? (string) $c->name : null,
             'nip' => $c->nip !== null ? (string) $c->nip : null,
             'city' => $c->city !== null ? (string) $c->city : null,
-            'emails' => is_array($emails) ? array_values(array_map('strval', $emails)) : [],
+            // adresy z karty XL i zatwierdzone adresy z sieci (bez powtórzeń); web_emails — które są z sieci
+            'emails' => self::mergeEmails(is_array($emails) ? array_map('strval', $emails) : [], $c->web_emails ?? []),
+            'web_emails' => array_values($c->web_emails ?? []),
+            'pending_email_suggestions' => (int) ($c->pending_suggestions ?? 0),
             'archived' => (bool) $c->archived,
             'known' => true,
             // z kartoteki XL dosłownie (InspectionCustomerDetails, co noc); null = brak w kartotece albo brak prawa odczytu
@@ -361,6 +390,21 @@ final class InspectionQuery
             'street' => null, 'address_line2' => null, 'postal_code' => null, 'voivodeship' => null, 'phones' => [], 'contacts' => [],
             'account_manager' => null, 'main_operator' => null, 'last_sale_on' => null, 'client_id' => null, 'details_synced_at' => null,
         ];
+    }
+
+    /**
+     * @param  list<string>  $card
+     * @param  list<string>  $web
+     * @return list<string>
+     */
+    public static function mergeEmails(array $card, array $web): array
+    {
+        $out = [];
+        foreach ([...$card, ...$web] as $email) {
+            $out[mb_strtolower(trim($email))] ??= trim($email);
+        }
+
+        return array_values(array_filter($out, static fn (string $e): bool => $e !== ''));
     }
 
     public static function unknownName(int $gid): string
