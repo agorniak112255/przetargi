@@ -94,6 +94,24 @@ class OfferSender
     }
 
     /**
+     * Warunki wysyłki i PDF dla całej oferty: oferta z produktami — pozycje w mailu z ceną (assertItemsReady); oferta
+     * przeglądu — co najmniej jeden wiersz przeglądu (cen nie ma). Inaczej 422.
+     *
+     * @param  string  $when  koniec komunikatu, np. „przed wysyłką”
+     */
+    public static function assertReady(Offer $offer, string $when): void
+    {
+        if ($offer->isInspection()) {
+            if (! $offer->inspectionLines()->exists()) {
+                throw ValidationException::withMessages(['items' => ['Dodaj do oferty co najmniej jeden wiersz przeglądu.']]);
+            }
+
+            return;
+        }
+        self::assertItemsReady($offer->items()->get(), $when);
+    }
+
+    /**
      * @param  list<string>  $emails
      * @return array{send: OfferSend, results: list<array{email: string, status: string, error: string|null}>}
      */
@@ -123,7 +141,7 @@ class OfferSender
         }
         $emails = $this->validEmails($emails);
 
-        self::assertItemsReady($offer->items()->get(), 'przed wysyłką');
+        self::assertReady($offer, 'przed wysyłką');
         if (trim((string) $offer->subject) === '') {
             throw ValidationException::withMessages(['subject' => ['Wpisz temat maila.']]);
         }

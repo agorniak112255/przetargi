@@ -109,6 +109,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // XL tylko w nocy, po erp:clients
         $schedule->command('erp:client-documents')->dailyAt('05:40')->timezone('Europe/Warsaw')->withoutOverlapping(30)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // Przeglądy: katalog usług XL i pozycje faktur z usługami i towarami pozycji (okno 60 dni), potem terminy —
+        // XL tylko w nocy, przed erp:client-documents
+        $schedule->command('erp:inspections')->dailyAt('05:10')->timezone('Europe/Warsaw')->withoutOverlapping(60)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
         // powiązania zapytań z klientami (zawsze) i podpowiedzi „możliwe zamówienie z oferty” (pozycje z XL tylko przy
         // ERPXL_ENABLED — sprawdza samo polecenie) — po erp:client-documents
         $schedule->command('inquiries:order-hints')->dailyAt('05:55')->timezone('Europe/Warsaw')->withoutOverlapping(30);

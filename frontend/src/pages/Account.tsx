@@ -713,7 +713,7 @@ export function Account() {
 
       <MarginForm />
 
-      {canAny(user, ['campaigns.use', 'offers.use']) && <MailAccountForm />}
+      {canAny(user, ['campaigns.use', 'offers.use', 'inspections.offer']) && <MailAccountForm />}
 
       <PasswordForm />
 

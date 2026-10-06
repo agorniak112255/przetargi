@@ -6,7 +6,8 @@ namespace App\Services\Erp;
 
 /**
  * Odczyt z Comarch ERP XL — zwykłe tablice, żeby synchronizację dało się sprawdzić bez MS SQL (atrapa w testach).
- * Liczby i daty dosłownie z XL (data Clarion jako int); przeliczenia robią ErpItemSync, ErpRwPwSync i ErpCustomerSync.
+ * Liczby i daty dosłownie z XL (data Clarion jako int); przeliczenia robią ErpItemSync, ErpRwPwSync, ErpCustomerSync
+ * i InspectionSaleSync.
  */
 interface ErpXlGateway
 {
@@ -206,4 +207,27 @@ interface ErpXlGateway
      * @return iterable<array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}>
      */
     public function customerDocumentLines(array $gids, int $fromClarionDate): iterable;
+
+    /**
+     * Usługi (Twr_Typ = 4) o numerze większym niż $afterGid, rosnąco — katalog modułu Przeglądy. Jednostka pusta = null.
+     *
+     * @return list<array{gid: int, type: int, code: string, name: string, unit: string|null, archived: bool}>
+     */
+    public function services(int $afterGid, int $limit): array;
+
+    /**
+     * Pozycje faktur sprzedaży do modułu Przeglądy od daty (TrN_Data2): FS 2033 i FSE 2037 (ilość > 0) oraz korekty FS
+     * 2041 (ilość albo wartość ≠ 0, ze znakiem), zatwierdzone (TrN_Stan 3–5), do kontrahenta (TrN_KntTyp 32, numer > 0).
+     * Paragonów (2034, 2042) nie ma — jeden kontrahent detaliczny. Towary z listy $itemGids i — gdy $allServices — każda
+     * pozycja z usługą (Twr_Typ 4); pozycja usługi z listy nie wraca dwa razy.
+     *
+     * issued = TrN_Data2, sold = TrN_Data3 (0 = XL nie podał), recipient_gid = TrN_KnDNumer (0 = brak), warehouse_code =
+     * MAG_Kod magazynu nagłówka (null = dokument bez magazynu), operator = Ope_Ident wystawiającego (wielkie litery, null =
+     * nieznany), corrects_type / corrects_id = dokument korygowany z nagłówka korekty (null dla FS/FSE i gdy XL go nie
+     * podał), net_value = TrE_KsiegowaNetto (PLN netto). Strumień (kursor), towary paczkami po 500.
+     *
+     * @param  list<int>  $itemGids
+     * @return iterable<array{doc_type: int, document_id: int, line: int, document_number: string, issued: int, sold: int, customer_gid: int, recipient_gid: int, item_gid: int, item_type: int, quantity: float, net_value: float, warehouse_code: string|null, operator: string|null, corrects_type: int|null, corrects_id: int|null}>
+     */
+    public function inspectionSaleLines(array $itemGids, bool $allServices, int $fromClarionDate): iterable;
 }

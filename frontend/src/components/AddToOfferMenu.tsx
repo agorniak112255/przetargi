@@ -67,7 +67,9 @@ export function AddToOfferMenu({
     setOffersErr('')
     try {
       const res = await listOffers()
-      const recent = [...res.data]
+      // oferty przeglądu (moduł Przeglądy) nie przyjmują produktów
+      const recent = res.data
+        .filter((o) => o.kind !== 'inspection')
         .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
         .slice(0, RECENT_OFFERS)
       if (my === seq.current) setOffers(recent)

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { BTN_PRIMARY, BTN_SM, ConfirmDialog, ErrorBar } from '../components/CampaignsUi'
+import { useAuth } from '../auth'
+import { BTN_PRIMARY, BTN_SM, Chip, ConfirmDialog, ErrorBar } from '../components/CampaignsUi'
+import { can } from '../lib/api'
 import { errorText, fmtDateTime, fmtInt } from '../lib/campaignFormat'
 import { createOffer, deleteOffer, listOffers, type OfferListRow } from '../lib/offers'
 import { plural } from '../lib/plural'
@@ -8,9 +10,14 @@ import { plural } from '../lib/plural'
 /**
  * Oferty: lista własnych ofert dla klientów (wybrane produkty z ceną) — wysyłka ze skrzynki „Moja poczta” albo
  * nowa wiadomość w Thunderbirdzie (dodatek). Oferta jest zawsze edytowalna; historia wysyłek jest w ofercie.
+ * Oferty przeglądu (kind = inspection) przygotowuje moduł Przeglądy — tu są na tej samej liście, ze znacznikiem.
  */
 export function Offers() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  // nowa oferta produktowa tylko z „Oferty dla klientów”; oferty przeglądu powstają w module Przeglądy
+  const canProducts = can(user, 'offers.use')
+  const canInspections = can(user, 'inspections.offer')
   const [rows, setRows] = useState<OfferListRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -75,11 +82,23 @@ export function Offers() {
           <p className="mt-1 max-w-3xl text-xs text-slate-600">
             Twoje oferty dla klientów: wybrane produkty z ceną netto, wysłane ze skrzynki „Moja poczta” (osobny mail do
             każdego adresu) albo otwarte jako nowa wiadomość w Thunderbirdzie.
+            {canInspections && (
+              <>
+                {' '}
+                Oferty ze znacznikiem „Przegląd” przygotowujesz w module{' '}
+                <Link to="/przeglady" className="text-blue-600 hover:underline">
+                  Przeglądy
+                </Link>{' '}
+                — to przypomnienie dla jednego klienta, co i kiedy wymaga przeglądu, bez cen.
+              </>
+            )}
           </p>
         </div>
-        <button type="button" className={BTN_PRIMARY} disabled={busy} onClick={() => void newOffer()}>
-          + Nowa oferta
-        </button>
+        {canProducts && (
+          <button type="button" className={BTN_PRIMARY} disabled={busy} onClick={() => void newOffer()}>
+            + Nowa oferta
+          </button>
+        )}
       </div>
 
       <ErrorBar message={err} onClose={() => setErr('')} />
@@ -108,9 +127,22 @@ export function Offers() {
                   <Link to={`/oferty/${r.id}`} className="font-medium text-slate-900 hover:text-blue-700 hover:underline">
                     {r.subject.trim() || <span className="italic text-slate-500">bez tematu</span>}
                   </Link>
-                  {r.code && <div className="app-code font-mono text-[11px] text-slate-500">{r.code}</div>}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    {r.code && <span className="app-code font-mono text-[11px] text-slate-500">{r.code}</span>}
+                    {r.kind === 'inspection' && (
+                      <Chip tone="blue" title="Oferta przeglądu z modułu Przeglądy — bez cen">
+                        Przegląd
+                      </Chip>
+                    )}
+                    {r.customer_name && <span className="text-[11px] text-slate-600">dla {r.customer_name}</span>}
+                  </div>
                 </td>
-                <td className="whitespace-nowrap p-2 text-right tabular-nums">{fmtInt(r.items_count)}</td>
+                <td
+                  className="whitespace-nowrap p-2 text-right tabular-nums"
+                  title={r.kind === 'inspection' ? 'Wiersze przeglądu w ofercie' : 'Produkty w ofercie'}
+                >
+                  {fmtInt(r.items_count)}
+                </td>
                 <td className="whitespace-nowrap p-2 text-right tabular-nums">
                   {r.recipients_count > 0
                     ? `${fmtInt(r.recipients_count)} ${plural(r.recipients_count, 'adresu', 'adresów', 'adresów')}`
@@ -143,10 +175,14 @@ export function Offers() {
                   {loading ? (
                     'Ładowanie…'
                   ) : (
-                    <>
-                      Nie ma jeszcze ofert. Kliknij „+ Nowa oferta” — produkty dodasz w ofercie wyszukiwarką albo
-                      z listy Produktów i Zapasów.
-                    </>
+                    canProducts ? (
+                      <>
+                        Nie ma jeszcze ofert. Kliknij „+ Nowa oferta” — produkty dodasz w ofercie wyszukiwarką albo
+                        z listy Produktów i Zapasów.
+                      </>
+                    ) : (
+                      <>Nie ma jeszcze ofert. Oferty przeglądu przygotujesz w module Przeglądy przyciskiem „Przygotuj oferty”.</>
+                    )
                   )}
                 </td>
               </tr>
@@ -170,8 +206,9 @@ export function Offers() {
                 <b>
                   {toDelete.code ? `${toDelete.code} ` : ''}
                   {toDelete.subject.trim() || 'bez tematu'}
-                </b>{' '}
-                — {toDelete.items_count} {plural(toDelete.items_count, 'pozycja', 'pozycje', 'pozycji')}. Oferta zniknie
+                </b>
+                {toDelete.customer_name ? ` dla ${toDelete.customer_name}` : ''} — {toDelete.items_count}{' '}
+                {plural(toDelete.items_count, 'pozycja', 'pozycje', 'pozycji')}. Oferta zniknie
                 z listy razem z historią wysyłek. Tego nie da się cofnąć.
               </p>
               {toDelete.recipients_count > 0 && (

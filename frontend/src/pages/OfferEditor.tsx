@@ -34,12 +34,16 @@ import {
   offerPreview,
   offerSentMail,
   parseEmails,
+  removeOfferInspectionLine,
   removeOfferItem,
   sendOffer,
   updateOffer,
+  updateOfferInspectionLine,
   updateOfferItem,
   type Offer,
   type OfferDelivery,
+  type OfferInspectionLine,
+  type OfferInspectionLinePatch,
   type OfferItem,
   type OfferItemPatch,
   type OfferPatch,
@@ -56,6 +60,8 @@ import { useSerialAutosave } from '../lib/useSerialAutosave'
  * Oferta /oferty/:id — jedna strona: produkty z ceną netto, treść maila, podgląd, wysyłka (osobny mail do każdego
  * adresu ze skrzynki „Moja poczta”) albo „Otwórz w Thunderbirdzie” (dodatek), historia wysyłek. Oferta jest zawsze
  * edytowalna; każda wysyłka zapisuje na serwerze dokładnie to, co dostał klient.
+ * Oferta przeglądu (kind = inspection, z modułu Przeglądy): zamiast produktów klient i tabela „co wymaga przeglądu”
+ * (ilość, ostatni przegląd, termin, uwaga) — bez cen, bez układu produktów i bez wyszukiwarki kart.
  */
 
 const CONTENT_SAVE_MS = 600
@@ -87,6 +93,14 @@ const DELIVERY_HINT: Record<OfferDelivery, string> = {
   pdf: 'krótki mail, produkty z cenami w pliku PDF',
   both: 'produkty w treści wiadomości i ten sam wygląd w pliku PDF',
 }
+
+const DELIVERY_HINT_INSPECTION: Record<OfferDelivery, string> = {
+  body: 'tabela przeglądów w treści wiadomości',
+  pdf: 'krótki mail, tabela przeglądów w pliku PDF',
+  both: 'tabela w treści wiadomości i ten sam wygląd w pliku PDF',
+}
+
+const NO_INSPECTION_LINES = 'Dodaj do oferty co najmniej jeden wiersz przeglądu.'
 
 /** Jak forma oferty dociera do klienta — zdanie do potwierdzenia wysyłki i historii. */
 function deliverySentence(delivery: OfferDelivery, pdfName: string | null): string {
@@ -323,6 +337,8 @@ function Editor({ initial }: { initial: Offer }) {
   }
 
   const title = content.subject.trim() || 'Oferta bez tematu'
+  const isInspection = offer.kind === 'inspection'
+  const linesCount = isInspection ? offer.inspection_lines.length : offer.items.length
 
   return (
     <div>
@@ -334,8 +350,9 @@ function Editor({ initial }: { initial: Offer }) {
           <h1 className="app-page-title truncate text-xl font-semibold">{title}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
             {offer.code && <span className="app-code font-mono">{offer.code}</span>}
+            {isInspection && <Chip tone="blue">Oferta przeglądu</Chip>}
             <span>
-              {offer.items.length} {plural(offer.items.length, 'pozycja', 'pozycje', 'pozycji')}
+              {linesCount} {plural(linesCount, 'pozycja', 'pozycje', 'pozycji')}
             </span>
             {offer.last_sent_at && <span>· ostatnia wysyłka {fmtDateTime(offer.last_sent_at)}</span>}
             <span className="text-slate-500">
@@ -362,11 +379,23 @@ function Editor({ initial }: { initial: Offer }) {
 
       <ErrorBar message={err} onClose={() => setErr('')} />
 
-      <ItemsSection offer={offer} layout={content.layout} mutate={mutate} onError={setErr} />
+      {isInspection ? (
+        <div className="space-y-4">
+          <CustomerSection offer={offer} />
+          <InspectionLinesSection offer={offer} mutate={mutate} onError={setErr} />
+        </div>
+      ) : (
+        <ItemsSection offer={offer} layout={content.layout} mutate={mutate} onError={setErr} />
+      )}
 
       <div className="mt-4 grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,700px)]">
         <div className="space-y-4">
-          <ContentSection content={content} onEdit={editContent} onBlur={() => void flush()} />
+          <ContentSection
+            content={content}
+            inspection={isInspection}
+            onEdit={editContent}
+            onBlur={() => void flush()}
+          />
           <SendSection
             offer={offer}
             subject={content.subject}
@@ -389,15 +418,19 @@ function Editor({ initial }: { initial: Offer }) {
           fresh={previewFresh}
           loading={previewLoading}
           error={previewErr}
+          inspection={isInspection}
           onRefresh={() => void refreshPreview()}
           missingPrices={
-            <MissingPrices
-              items={offer.items}
-              onPatch={(item, price) =>
-                mutate(() => updateOfferItem(offerId, item.id, { price_net: price }), 'Nie udało się zapisać pozycji.')
-              }
-              onInvalid={setErr}
-            />
+            // oferta przeglądu jest bez cen — nie ma czego uzupełniać
+            isInspection ? null : (
+              <MissingPrices
+                items={offer.items}
+                onPatch={(item, price) =>
+                  mutate(() => updateOfferItem(offerId, item.id, { price_net: price }), 'Nie udało się zapisać pozycji.')
+                }
+                onInvalid={setErr}
+              />
+            )
           }
         />
       </div>
@@ -986,14 +1019,330 @@ function MoneyInput({
   )
 }
 
+/* ---------- Oferta przeglądu: klient i wiersze ---------- */
+
+/** Klient oferty przeglądu — z kartoteki ERP XL; adresy e-mail wstawisz do wysyłki przyciskiem w sekcji „Wysyłka”. */
+function CustomerSection({ offer }: { offer: Offer }) {
+  const { user } = useAuth()
+  const c = offer.customer
+  const canInspections = can(user, 'inspections.view') || can(user, 'inspections.manage')
+  return (
+    <div className="rounded-xl bg-white p-4 text-xs shadow-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="app-card-title text-sm font-semibold text-slate-900">Klient</h2>
+        {c && canInspections && (
+          // szerokie okno, starsze zaległe i pominięci — żeby klient był na liście niezależnie od terminu
+          <Link
+            to={`/przeglady?q=${encodeURIComponent(c.acronym)}&days=365&old=1&dismissed=1`}
+            className="text-blue-600 hover:underline"
+          >
+            Terminy tego klienta w Przeglądach →
+          </Link>
+        )}
+      </div>
+      <p className="mt-0.5 text-slate-500">Dla kogo jest ta oferta — dane z karty klienta w ERP XL.</p>
+      {c ? (
+        <div className="mt-2 flex flex-wrap gap-x-8 gap-y-2">
+          <div>
+            <div className="font-medium text-slate-900">{c.name || c.acronym}</div>
+            <div className="text-slate-500">
+              {c.name ? `${c.acronym} · ` : ''}
+              {c.city || 'miejscowość nieznana'} · numer klienta w ERP XL {c.xl_gid}
+            </div>
+          </div>
+          <div>
+            <div className="text-slate-500">Adresy e-mail z karty klienta</div>
+            {c.emails.length > 0 ? (
+              <div className="font-mono text-slate-800">{c.emails.join(', ')}</div>
+            ) : (
+              <div className="text-amber-800">brak adresu e-mail w ERP XL</div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <p className="mt-2 text-amber-800">Oferta nie ma przypisanego klienta.</p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Tabela „Co wymaga przeglądu”: wiersze przygotowane z terminów klienta (faktury ERP XL + interwał pozycji).
+ * Handlowiec poprawia ilość, termin i uwagę; klient dostaje tę tabelę bez cen.
+ */
+function InspectionLinesSection({
+  offer,
+  mutate,
+  onError,
+}: {
+  offer: Offer
+  mutate: Mutate
+  onError: (message: string) => void
+}) {
+  // ilość jako liczba, daty jako RRRR-MM-DD — także gdy serwer poda „10.000” albo pełną datę z godziną
+  const lines = offer.inspection_lines.map((l) => ({
+    ...l,
+    quantity: l.quantity == null ? null : Number(l.quantity),
+    last_on: l.last_on ? l.last_on.slice(0, 10) : null,
+    due_on: l.due_on ? l.due_on.slice(0, 10) : null,
+  }))
+  const today = localToday()
+  const patchLine = (line: OfferInspectionLine, patch: OfferInspectionLinePatch) =>
+    mutate(() => updateOfferInspectionLine(offer.id, line.id, patch), 'Nie udało się zapisać wiersza przeglądu.')
+
+  return (
+    <div className="rounded-xl bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-4 py-2.5">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h2 className="app-card-title text-sm font-semibold text-slate-900">Co wymaga przeglądu</h2>
+          <span className="text-xs tabular-nums text-slate-500">
+            {lines.length} {plural(lines.length, 'wiersz', 'wiersze', 'wierszy')}
+          </span>
+        </div>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Urządzenia i usługi tego klienta z terminem przeglądu, wyliczonym z faktur ERP XL (ostatni przegląd lub zakup
+          + interwał pozycji). Popraw ilość, termin albo uwagę, jeśli wiesz więcej — klient dostaje tę tabelę bez cen.
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead>
+            <tr className="border-b bg-slate-50">
+              <th className="p-2">Urządzenie lub usługa</th>
+              <th className="p-2 text-right">Ilość</th>
+              <th className="p-2">Ostatni przegląd lub zakup u nas</th>
+              <th className="p-2">Proponowany termin przeglądu</th>
+              <th className="p-2 text-center">Kolejność</th>
+              <th className="p-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((line, idx) => (
+              <tr key={line.id} className="border-b align-top">
+                <td className="min-w-[18rem] p-2">
+                  <b className="block font-medium text-slate-900">{line.name || <span className="italic text-slate-500">bez nazwy</span>}</b>
+                  <ItemTextLine
+                    label="Uwaga w mailu"
+                    hint="krótka linia pod nazwą, np. gdzie stoją urządzenia"
+                    value={line.note}
+                    fallback={null}
+                    emptyText="brak"
+                    ariaName={line.name}
+                    onCommit={(next) => patchLine(line, { note: next })}
+                  />
+                </td>
+                <td className="whitespace-nowrap p-2 text-right">
+                  <QuantityInput
+                    value={line.quantity}
+                    label={`Ilość: ${line.name}`}
+                    onCommit={(v) => patchLine(line, { quantity: v }).then(Boolean)}
+                    onInvalid={() => onError('Ilość: wpisz liczbę, np. 10 albo 2,5.')}
+                  />
+                  {line.unit && <span className="ml-1 text-slate-500">{line.unit}</span>}
+                </td>
+                <td className="whitespace-nowrap p-2">
+                  {line.last_on ? (
+                    <>
+                      <div className="tabular-nums text-slate-800">{fmtDate(line.last_on)}</div>
+                      <div className="text-[11px] text-slate-500">z faktur ERP XL</div>
+                    </>
+                  ) : (
+                    <span className="text-slate-400">brak danych</span>
+                  )}
+                </td>
+                <td className="whitespace-nowrap p-2">
+                  <DueDateInput
+                    value={line.due_on}
+                    label={`Termin przeglądu: ${line.name}`}
+                    onCommit={(v) => patchLine(line, { due_on: v }).then(Boolean)}
+                  />
+                  {line.due_on && line.due_on < today && (
+                    <div className="mt-0.5">
+                      <Chip tone="red">termin minął</Chip>
+                    </div>
+                  )}
+                </td>
+                <td className="whitespace-nowrap p-2 text-center">
+                  <span className="inline-flex gap-1">
+                    <button
+                      type="button"
+                      className={BTN_SM}
+                      disabled={idx === 0}
+                      aria-label={`W górę: ${line.name}`}
+                      title="Przesuń w górę"
+                      onClick={() => void patchLine(line, { position: idx })}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className={BTN_SM}
+                      disabled={idx === lines.length - 1}
+                      aria-label={`W dół: ${line.name}`}
+                      title="Przesuń w dół"
+                      onClick={() => void patchLine(line, { position: idx + 2 })}
+                    >
+                      ↓
+                    </button>
+                  </span>
+                </td>
+                <td className="p-2 text-right">
+                  <button
+                    type="button"
+                    className={BTN_SM}
+                    aria-label={`Usuń z oferty: ${line.name}`}
+                    title="Usuń wiersz z oferty"
+                    onClick={() =>
+                      void mutate(
+                        () => removeOfferInspectionLine(offer.id, line.id),
+                        'Nie udało się usunąć wiersza przeglądu.',
+                      )
+                    }
+                  >
+                    ×
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {lines.length === 0 && (
+              <tr>
+                <td colSpan={6} className="p-6 text-center text-slate-500">
+                  Oferta nie ma wierszy przeglądu. Przygotuj nową ofertę dla tego klienta w module Przeglądy — wiersze
+                  dobiorą się z jego terminów.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="px-4 py-3 text-[11px] text-slate-500">
+        Termin wyliczył system: ostatni przegląd albo zakup u nas plus interwał pozycji. Zmieniony tu termin dotyczy tylko
+        tej oferty — lista Przeglądów liczy dalej z faktur.
+      </p>
+    </div>
+  )
+}
+
+/** Liczba wpisana przez człowieka: „10”, „2,5”, „2.5”. Puste → null, niepoprawne lub ujemne → undefined. */
+function parseQuantity(text: string): number | null | undefined {
+  const t = text.replace(/\s/g, '').replace(',', '.')
+  if (t === '') return null
+  if (!/^\d+(\.\d{1,3})?$/.test(t)) return undefined
+  return Number(t)
+}
+
+function quantityInputValue(n: number | null): string {
+  return n == null ? '' : n.toLocaleString('pl-PL', { maximumFractionDigits: 3, useGrouping: false })
+}
+
+/** Pole ilości: szkic lokalnie, zapis po wyjściu z pola (albo Enter); niepoprawny wpis wraca do zapisanej wartości. */
+function QuantityInput({
+  value,
+  label,
+  onCommit,
+  onInvalid,
+}: {
+  value: number | null
+  label: string
+  onCommit: (value: number | null) => Promise<boolean>
+  onInvalid: () => void
+}) {
+  const [draft, setDraft] = useState(quantityInputValue(value))
+  const [focused, setFocused] = useState(false)
+  const [lastValue, setLastValue] = useState(value)
+  const cancelRef = useRef(false)
+  if (value !== lastValue && !focused) {
+    setLastValue(value)
+    setDraft(quantityInputValue(value))
+  }
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      aria-label={label}
+      placeholder="—"
+      className={`${INPUT} w-20 text-right tabular-nums`}
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+        if (e.key === 'Escape') {
+          cancelRef.current = true
+          e.currentTarget.blur()
+        }
+      }}
+      onBlur={() => {
+        setFocused(false)
+        if (cancelRef.current) {
+          cancelRef.current = false
+          setDraft(quantityInputValue(value))
+          return
+        }
+        const parsed = parseQuantity(draft)
+        if (parsed === undefined) {
+          setDraft(quantityInputValue(value))
+          onInvalid()
+          return
+        }
+        setDraft(quantityInputValue(parsed))
+        if (parsed === value) return
+        void onCommit(parsed).then((ok) => {
+          if (!ok) setDraft(quantityInputValue(value))
+        })
+      }}
+    />
+  )
+}
+
+/** Pole daty terminu: zapis po wyjściu z pola; pusta data = bez terminu w tabeli. */
+function DueDateInput({
+  value,
+  label,
+  onCommit,
+}: {
+  value: string | null
+  label: string
+  onCommit: (value: string | null) => Promise<boolean>
+}) {
+  const [draft, setDraft] = useState(value ?? '')
+  const [focused, setFocused] = useState(false)
+  const [lastValue, setLastValue] = useState(value)
+  if (value !== lastValue && !focused) {
+    setLastValue(value)
+    setDraft(value ?? '')
+  }
+  return (
+    <input
+      type="date"
+      aria-label={label}
+      className={`${INPUT} tabular-nums`}
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        setFocused(false)
+        const next = draft === '' ? null : draft
+        if (next === value) return
+        void onCommit(next).then((ok) => {
+          if (!ok) setDraft(value ?? '')
+        })
+      }}
+    />
+  )
+}
+
 /* ---------- Treść ---------- */
 
 function ContentSection({
   content,
+  inspection,
   onEdit,
   onBlur,
 }: {
   content: Content
+  /** Oferta przeglądu: bez wyboru układu produktów i bez dopisku o cenach netto. */
+  inspection: boolean
   onEdit: (patch: Partial<Content>, immediate?: boolean) => void
   onBlur: () => void
 }) {
@@ -1009,11 +1358,18 @@ function ContentSection({
           value={content.subject}
           onChange={(e) => onEdit({ subject: e.target.value.replace(/[\r\n]+/g, ' ') })}
           onBlur={onBlur}
-          placeholder="np. Oferta: rękawice i półbuty S3 dla Państwa firmy"
+          placeholder={
+            inspection
+              ? 'np. Przypomnienie o terminie przeglądu gaśnic'
+              : 'np. Oferta: rękawice i półbuty S3 dla Państwa firmy'
+          }
         />
       </label>
       <label className="block font-medium text-slate-700">
-        Wstęp <span className="font-normal text-slate-500">— tekst nad produktami (puste = bez wstępu)</span>
+        Wstęp{' '}
+        <span className="font-normal text-slate-500">
+          — tekst nad {inspection ? 'tabelą przeglądów' : 'produktami'} (puste = bez wstępu)
+        </span>
         <textarea
           className={field}
           rows={5}
@@ -1021,26 +1377,32 @@ function ContentSection({
           value={content.intro}
           onChange={(e) => onEdit({ intro: e.target.value })}
           onBlur={onBlur}
-          placeholder="np. Dzień dobry, w nawiązaniu do rozmowy przesyłam ofertę na…"
+          placeholder={
+            inspection
+              ? 'np. Dzień dobry, zbliża się termin przeglądu urządzeń, które serwisowaliśmy u Państwa…'
+              : 'np. Dzień dobry, w nawiązaniu do rozmowy przesyłam ofertę na…'
+          }
         />
         <span className="mt-0.5 block font-normal text-slate-500">{content.intro.length}/5000</span>
       </label>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block font-medium text-slate-700">
-          Układ produktów
-          <select
-            className={field}
-            value={content.layout}
-            onChange={(e) => onEdit({ layout: e.target.value as CampaignLayout }, true)}
-          >
-            {LAYOUTS.map((l) => (
-              <option key={l} value={l}>
-                {CAMPAIGN_LAYOUT_LABEL[l]}
-              </option>
-            ))}
-          </select>
-          <span className="mt-0.5 block font-normal text-slate-500">{CAMPAIGN_LAYOUT_HINT[content.layout]}</span>
-        </label>
+        {!inspection && (
+          <label className="block font-medium text-slate-700">
+            Układ produktów
+            <select
+              className={field}
+              value={content.layout}
+              onChange={(e) => onEdit({ layout: e.target.value as CampaignLayout }, true)}
+            >
+              {LAYOUTS.map((l) => (
+                <option key={l} value={l}>
+                  {CAMPAIGN_LAYOUT_LABEL[l]}
+                </option>
+              ))}
+            </select>
+            <span className="mt-0.5 block font-normal text-slate-500">{CAMPAIGN_LAYOUT_HINT[content.layout]}</span>
+          </label>
+        )}
         <label className="block font-medium text-slate-700">
           Oferta ważna do
           <input
@@ -1050,7 +1412,11 @@ function ContentSection({
             onChange={(e) => onEdit({ valid_until: e.target.value }, true)}
           />
           <span className="mt-0.5 block font-normal text-slate-500">
-            W mailu: „Ceny netto.{content.valid_until ? ` Oferta ważna do ${fmtDate(content.valid_until)}` : ''}”
+            {inspection
+              ? content.valid_until
+                ? `Oferta ważna do ${fmtDate(content.valid_until)}.`
+                : 'Puste = oferta bez daty ważności.'
+              : `W mailu: „Ceny netto.${content.valid_until ? ` Oferta ważna do ${fmtDate(content.valid_until)}` : ''}”`}
           </span>
           {content.valid_until !== '' && content.valid_until < localToday() && (
             <span className="mt-0.5 block font-normal text-red-700">
@@ -1070,6 +1436,7 @@ function PreviewSection({
   fresh,
   loading,
   error,
+  inspection,
   onRefresh,
   missingPrices,
 }: {
@@ -1077,6 +1444,8 @@ function PreviewSection({
   fresh: boolean
   loading: boolean
   error: string
+  /** Oferta przeglądu — w PDF jest tabela przeglądów, nie produkty z cenami. */
+  inspection: boolean
   onRefresh: () => void
   /** Pola cen pozycji bez ceny — przy podglądzie, bo tu widać, że w mailu brakuje ceny. */
   missingPrices: ReactNode
@@ -1135,7 +1504,8 @@ function PreviewSection({
             )}
             {preview.delivery === 'pdf' && (
               <span className="text-slate-500">
-                Forma „{DELIVERY_LABEL.pdf}”: poniżej krótki mail, produkty z cenami są w pliku PDF — obejrzysz go
+                Forma „{DELIVERY_LABEL.pdf}”: poniżej krótki mail,{' '}
+                {inspection ? 'tabela przeglądów jest' : 'produkty z cenami są'} w pliku PDF — obejrzysz go
                 przyciskiem „Pobierz PDF” w sekcji „Wysyłka”.
               </span>
             )}
@@ -1264,16 +1634,28 @@ function SendSection({
   const emails = parseEmails(raw)
   const invalid = emails.filter((e) => !EMAIL_RE.test(e))
   const max = offer.limits.max_recipients
+  // oferta przeglądu: wiersze zamiast produktów, bez cen; adresy z karty klienta do wstawienia jednym kliknięciem
+  const inspection = offer.kind === 'inspection'
+  const noLines = inspection ? offer.inspection_lines.length === 0 : offer.items.length === 0
+  const emptyText = inspection ? NO_INSPECTION_LINES : 'Dodaj produkty do oferty.'
+  const lineCount = inspection ? offer.inspection_lines.length : offer.items.length
+  const customerEmails = inspection ? (offer.customer?.emails ?? []) : []
+  const missingCustomerEmails = customerEmails.filter(
+    (e) => !emails.some((x) => x.toLowerCase() === e.toLowerCase()),
+  )
+  const deliveryHint = inspection ? DELIVERY_HINT_INSPECTION : DELIVERY_HINT
   // data z serwera (zapisana); porównanie napisów RRRR-MM-DD z dzisiejszą datą lokalną
   const validUntilPast = offer.valid_until !== null && offer.valid_until < localToday()
   // pozycje bez towaru i bez karty (usunięte dane) serwer pomija w mailu — nie blokują wysyłki
-  const noPrice = offer.items.filter((i) => i.price_net == null && (i.erp_item_id != null || i.product_id != null)).length
+  const noPrice = inspection
+    ? 0
+    : offer.items.filter((i) => i.price_net == null && (i.erp_item_id != null || i.product_id != null)).length
   // pozycje w stanie strony są zawsze świeże; lista z podglądu liczy się tylko, gdy podgląd jest aktualny
-  const missingPrices = noPrice > 0 || (previewFresh && (preview?.missing_prices.length ?? 0) > 0)
+  const missingPrices = !inspection && (noPrice > 0 || (previewFresh && (preview?.missing_prices.length ?? 0) > 0))
 
   // Powód, dla którego wysyłka jest zablokowana (pierwszy z listy) — pokazany pod przyciskiem.
   const sendBlock = (() => {
-    if (offer.items.length === 0) return 'Dodaj produkty do oferty.'
+    if (noLines) return emptyText
     // najpierw nieudany zapis — dalsze powody (np. data) liczone są ze stanu serwera, który może być starszy
     if (contentFailed) return SAVE_FAILED
     if (saving) return 'Poczekaj, aż zmiany się zapiszą.'
@@ -1290,7 +1672,7 @@ function SendSection({
 
   // „Otwórz w Thunderbirdzie” bierze HTML z podglądu — musi być aktualny i kompletny
   const composeBlock = (() => {
-    if (offer.items.length === 0) return 'Dodaj produkty do oferty.'
+    if (noLines) return emptyText
     if (contentFailed) return SAVE_FAILED
     if (saving) return 'Poczekaj, aż zmiany się zapiszą.'
     if (missingPrices) return 'Uzupełnij cenę przy każdej pozycji.'
@@ -1301,7 +1683,7 @@ function SendSection({
 
   // PDF bieżącej oferty — serwer stosuje te same reguły co wysyłka (pozycje, ceny), tu tylko wcześniejsza podpowiedź
   const pdfBlock = (() => {
-    if (offer.items.length === 0) return 'Dodaj produkty do oferty.'
+    if (noLines) return emptyText
     if (contentFailed) return SAVE_FAILED
     if (saving) return 'Poczekaj, aż zmiany się zapiszą.'
     if (missingPrices) return 'Uzupełnij cenę przy każdej pozycji.'
@@ -1389,7 +1771,7 @@ function SendSection({
               />
               <span>
                 <span className="block font-medium">{DELIVERY_LABEL[d]}</span>
-                <span className="block text-[11px] font-normal text-slate-500">{DELIVERY_HINT[d]}</span>
+                <span className="block text-[11px] font-normal text-slate-500">{deliveryHint[d]}</span>
               </span>
             </label>
           ))}
@@ -1429,6 +1811,32 @@ function SendSection({
           placeholder="np. zakupy@firma.pl, jan.kowalski@firma.pl"
         />
       </label>
+      {inspection && (
+        <p className="text-slate-600">
+          {customerEmails.length === 0 ? (
+            <span className="text-amber-800">
+              Karta klienta w ERP XL nie ma adresu e-mail — wpisz adres ręcznie albo otwórz ofertę w Thunderbirdzie.
+            </span>
+          ) : missingCustomerEmails.length > 0 ? (
+            <>
+              Adresy z karty klienta w ERP XL: <span className="font-mono">{customerEmails.join(', ')}</span>{' '}
+              <button
+                type="button"
+                className={BTN_SM}
+                disabled={sending}
+                onClick={() => {
+                  setRaw((r) => [r.trim(), ...missingCustomerEmails].filter(Boolean).join('\n'))
+                  setSendErr('')
+                }}
+              >
+                Wstaw adresy klienta
+              </button>
+            </>
+          ) : (
+            <span className="text-slate-500">Adresy z karty klienta w ERP XL są już w polu.</span>
+          )}
+        </p>
+      )}
       <p className={`tabular-nums ${emails.length > max ? 'text-red-700' : 'text-slate-500'}`}>
         {emails.length} {plural(emails.length, 'adres', 'adresy', 'adresów')} (najwyżej {max}). Każdy adres dostaje osobny
         mail — klienci nie widzą siebie nawzajem. Kopia z listą adresów trafi do Twojej skrzynki.
@@ -1487,8 +1895,8 @@ function SendSection({
           message={
             <>
               <p>
-                <b>{subject.trim()}</b> — {offer.items.length}{' '}
-                {plural(offer.items.length, 'pozycja', 'pozycje', 'pozycji')}. Każdy adres dostanie osobny mail z Twojej
+                <b>{subject.trim()}</b> — {lineCount} {plural(lineCount, 'pozycja', 'pozycje', 'pozycji')}. Każdy adres
+                dostanie osobny mail z Twojej
                 skrzynki{preview?.from ? ` (${preview.from})` : ''}:
               </p>
               <p>

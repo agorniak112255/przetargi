@@ -142,7 +142,8 @@ final class OfferApiTest extends TestCase
 
         $list = $this->getJson('/api/offers')->assertOk()->json('data');
         $this->assertSame([[
-            'id' => $offer->id, 'code' => $offer->code, 'subject' => '', 'items_count' => 3, 'recipients_count' => 0,
+            'id' => $offer->id, 'kind' => 'products', 'customer_name' => null,
+            'code' => $offer->code, 'subject' => '', 'items_count' => 3, 'recipients_count' => 0,
             'last_sent_at' => null, 'last_copied_at' => null, 'updated_at' => $offer->fresh()->updated_at->toIso8601String(),
         ]], $list);
     }

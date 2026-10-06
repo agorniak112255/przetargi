@@ -61,8 +61,51 @@ export type OfferSend = {
   recipients: OfferRecipient[]
 }
 
+/**
+ * Rodzaj oferty: products — produkty z cenami; inspection — oferta przeglądu dla jednego klienta z modułu Przeglądy
+ * (zaczepna, bez cen: co i kiedy wymaga przeglądu).
+ */
+export type OfferKind = 'products' | 'inspection'
+
+/** Klient oferty przeglądu (z kartoteki ERP XL); adresy e-mail z karty klienta — do wstawienia przy wysyłce. */
+export type OfferCustomer = {
+  xl_gid: number
+  acronym: string
+  name: string | null
+  city: string | null
+  emails: string[]
+}
+
+/** Wiersz oferty przeglądu: urządzenie lub usługa, ilość, ostatni przegląd lub zakup, termin — bez ceny. */
+export type OfferInspectionLine = {
+  id: number
+  position: number
+  inspection_position_id: number | null
+  xl_gid: number | null
+  name: string
+  unit: string | null
+  quantity: number | null
+  /** RRRR-MM-DD z faktur ERP XL; null = brak. */
+  last_on: string | null
+  /** RRRR-MM-DD; termin wyliczony, handlowiec może go poprawić. */
+  due_on: string | null
+  note: string | null
+}
+
+export type OfferInspectionLinePatch = {
+  quantity?: number | null
+  due_on?: string | null
+  note?: string | null
+  position?: number
+}
+
 export type Offer = {
   id: number
+  kind: OfferKind
+  /** Tylko oferta przeglądu; null dla ofert produktowych. */
+  customer: OfferCustomer | null
+  /** Wiersze oferty przeglądu; dla ofert produktowych pusta lista. */
+  inspection_lines: OfferInspectionLine[]
   code: string | null
   subject: string
   intro: string | null
@@ -80,6 +123,9 @@ export type Offer = {
 
 export type OfferListRow = {
   id: number
+  kind: OfferKind
+  /** Nazwa klienta oferty przeglądu; null dla ofert produktowych. */
+  customer_name: string | null
   code: string | null
   subject: string
   items_count: number
@@ -161,6 +207,41 @@ export function updateOfferItem(id: number, itemId: number, patch: OfferItemPatc
 
 export function removeOfferItem(id: number, itemId: number) {
   return api<Offer>(`/offers/${id}/items/${itemId}`, { method: 'DELETE' })
+}
+
+export function updateOfferInspectionLine(id: number, lineId: number, patch: OfferInspectionLinePatch) {
+  return api<Offer>(`/offers/${id}/inspection-lines/${lineId}`, { method: 'PATCH', ...json(patch) })
+}
+
+export function removeOfferInspectionLine(id: number, lineId: number) {
+  return api<Offer>(`/offers/${id}/inspection-lines/${lineId}`, { method: 'DELETE' })
+}
+
+export type InspectionOffersResult = {
+  offers: {
+    id: number
+    code: string | null
+    customer_xl_gid: number
+    customer_name: string
+    lines_count: number
+    emails: string[]
+    /**
+     * Najnowsza wysłana oferta przeglądu do tego klienta w ostatnich 90 dniach, a gdy jej nie ma — niewysłany szkic
+     * innej osoby z ostatnich 14 dni (sent_at = null).
+     */
+    previous: { code: string | null; sent_at: string | null; created_at: string | null; user_name: string | null } | null
+    /** Pozycje, przy których inna karta XL z tym samym NIP-em ma późniejszą sprzedaż (przegląd mógł już być zrobiony). */
+    same_nip_newer_lines: number
+  }[]
+  skipped: { customer_xl_gid: number; customer_name: string; reason: string }[]
+}
+
+/**
+ * Szkice ofert przeglądu dla zaznaczonych klientów (1–50): po jednej ofercie na klienta z wierszami o terminie
+ * w ciągu `days` dni (zaległe też); position_ids zawęża do wybranych pozycji, null = wszystkie.
+ */
+export function createInspectionOffers(body: { customer_xl_gids: number[]; days: number; position_ids: number[] | null }) {
+  return api<InspectionOffersResult>('/inspections/offers', { method: 'POST', ...json(body) })
 }
 
 export function offerPreview(id: number) {

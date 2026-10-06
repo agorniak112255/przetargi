@@ -207,6 +207,21 @@ PROSZKOWEJ GP-6”. System wtedy:
    - sekcja na karcie klienta;
    - wynik „przegląd wykonany po ofercie” (faktura usługi po dacie wysłania oferty).
 
+## 10a. Decyzje właściciela (06.10.2026) — zastępują sekcje 3–5 tam, gdzie się różnią
+
+1. Zgoda na mail z ofertą do klienta, który u nas kupował — niepotrzebna.
+2. Oferty przeglądu na liście „Oferty” z numerem OF- → moduł Ofert dostaje rodzaj `inspection`
+   (offers.kind, offers.customer_xl_gid, tabela offer_inspection_lines) zamiast osobnych tabel inspection_offers.
+3. Każda pozycja XL (towar albo usługa) ma własny interwał z listy 1, 3, 6, 9, 12, 15, 18, 24 mies. → tabela
+   `inspection_positions` zamiast definicji z wieloma pozycjami; towar może wskazać usługę, która go odnawia
+   (gaśnica GP-6X ↔ przegląd GP-6).
+4. Dostęp przez role: inspections.view, inspections.manage, inspections.offer (na start tylko administrator).
+5. Oferta zaczepna bez cen — klient widzi, co i kiedy wymaga przeglądu; wartości netto widzi tylko pracownik.
+6. Dojazd pomijamy.
+7. Domyślny filtr: termin w ciągu 30 dni, do zmiany; zaległe też widoczne.
+
+Kontrakt wykonania: tabele w migracjach 2026_10_06_200000/200100/200200.
+
 ## 10. Pytania do właściciela (zmieniają implementację)
 
 1. **Podstawa wysyłki.** Czy mail z ofertą przeglądu do klienta, który wcześniej u nas kupował, wymaga zgody?

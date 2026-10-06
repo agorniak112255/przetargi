@@ -64,7 +64,7 @@ final class ErpXlClient implements ErpXlGateway
      * Skróty numerów dokumentów sprzedaży klienta. FSK i PAK (korekty FS i PA) — oznaczenia przyjęte w aplikacji,
      * do potwierdzenia z numeracją w XL (TraNag nie przechowuje symbolu dokumentu).
      */
-    private const CLIENT_DOCUMENT_PREFIXES = [2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK'];
+    private const CLIENT_DOCUMENT_PREFIXES = [2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK', 2045 => 'FSEK'];
 
     /**
      * Data sprzedaży dokumentu (Clarion) do „ostatniej sprzedaży” (decyzja właściciela 01.10.2026, wariant B): dokument
@@ -73,6 +73,18 @@ final class ErpXlClient implements ErpXlGateway
      * bieżącą sprzedażą, rezerwacja nieruszana od stycznia 2025 przestaje udawać sprzedaż z dzisiaj (01WZR, SZP21PPS).
      */
     private const SALE_DATE_SQL = 'CASE WHEN n.TrN_Stan < 3 AND n.TrN_LastMod > 0 THEN n.TrN_LastMod / 86400 + 69035 ELSE n.TrN_Data2 END';
+
+    /** Usługa w katalogu XL (Twr_Typ; towar = 1). 399 aktywnych usług przeglądów, legalizacji i dojazdów (06.10.2026). */
+    private const SERVICE_ITEM_TYPE = 4;
+
+    /** Przeglądy: FS i FSE. Paragony (2034, 2042) pomijamy — mają jednego kontrahenta detalicznego (plan 06.10.2026). */
+    private const INSPECTION_SALE_TYPES = [2033, 2037];
+
+    /**
+     * Przeglądy: korekty FS (2041) i FSE (2045, sonda 06.10.2026: 4 od 2019) — ilość i wartość ze znakiem, dokument
+     * korygowany w nagłówku (TrN_ZwrTyp / TrN_ZwrNumer).
+     */
+    private const INSPECTION_CORRECTION_TYPES = [2041, 2045];
 
     /** Skróty dokumentów, którymi partia weszła na magazyn (CDN.Dostawy.Dst_TrnTyp). */
     private const DOCUMENT_PREFIXES = [1489 => 'PZ', 1617 => 'PW', 1521 => 'FZ', 1616 => 'RW'];
@@ -842,6 +854,101 @@ final class ErpXlClient implements ErpXlGateway
                     'item_gid' => (int) $r->item_gid,
                     'quantity' => (float) $r->quantity,
                     'net_value' => (float) $r->net_value,
+                ];
+            }
+        }
+    }
+
+    public function services(int $afterGid, int $limit): array
+    {
+        $rows = $this->db()->table('CDN.TwrKarty')
+            ->select(['Twr_GIDNumer', 'Twr_Typ', 'Twr_Kod', 'Twr_Nazwa', 'Twr_Jm', 'Twr_Archiwalny'])
+            ->where('Twr_Typ', self::SERVICE_ITEM_TYPE)
+            ->where('Twr_GIDNumer', '>', $afterGid)
+            ->orderBy('Twr_GIDNumer')
+            ->limit($limit)
+            ->get();
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'gid' => (int) $r->Twr_GIDNumer,
+                'type' => (int) $r->Twr_Typ,
+                'code' => trim((string) $r->Twr_Kod),
+                'name' => trim((string) $r->Twr_Nazwa),
+                'unit' => $this->text($r->Twr_Jm),
+                'archived' => (int) $r->Twr_Archiwalny !== 0,
+            ];
+        }
+
+        return $out;
+    }
+
+    public function inspectionSaleLines(array $itemGids, bool $allServices, int $fromClarionDate): iterable
+    {
+        $sales = implode(',', self::INSPECTION_SALE_TYPES);
+        $corrections = implode(',', self::INSPECTION_CORRECTION_TYPES);
+        $states = implode(',', self::CUSTOMER_SALE_STATES);
+        $customer = self::CUSTOMER_TYPE;
+        $service = self::SERVICE_ITEM_TYPE;
+        // FS/FSE z dodatnią ilością; korekty z każdą niezerową ilością albo wartością (ilość 0 = korekta ceny);
+        // bez kontrahenta jednorazowego (numer 0)
+        $where = "n.TrN_KntTyp = $customer AND n.TrN_KntNumer > 0 AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ?"
+            ." AND ((n.TrN_GIDTyp IN ($sales) AND e.TrE_Ilosc > 0)"
+            ." OR (n.TrN_GIDTyp IN ($corrections) AND (e.TrE_Ilosc <> 0 OR e.TrE_KsiegowaNetto <> 0)))";
+        // magazyn nagłówka (FS do WZ bywa bez magazynu — LEFT JOIN), operator wystawiający jak w customerOperators
+        $select = <<<SQL
+            SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, e.TrE_GIDLp AS line, n.TrN_TrNSeria AS series,
+                   n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month,
+                   n.TrN_Data2 AS issued, n.TrN_Data3 AS sold, n.TrN_KntNumer AS customer_gid, n.TrN_KnDNumer AS recipient_gid,
+                   e.TrE_TwrNumer AS item_gid, t.Twr_Typ AS item_type, e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value,
+                   m.MAG_Kod AS warehouse_code, o.Ope_Ident AS operator, n.TrN_ZwrTyp AS corrects_type, n.TrN_ZwrNumer AS corrects_id
+            FROM CDN.TraElem e
+            JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
+            JOIN CDN.TwrKarty t ON t.Twr_GIDNumer = e.TrE_TwrNumer
+            LEFT JOIN CDN.Magazyny m ON m.MAG_GIDNumer = n.TrN_MagZNumer AND m.MAG_GIDTyp = n.TrN_MagZTyp
+            LEFT JOIN CDN.OpeKarty o ON o.Ope_GIDNumer = n.TrN_OpeNumerW AND o.Ope_GIDTyp = n.TrN_OpeTypW
+            WHERE $where
+            SQL;
+
+        $queries = [];
+        if ($allServices) {
+            $queries[] = $select." AND t.Twr_Typ = $service";
+        }
+        // paczkami — limit parametrów MS SQL to 2100 (numery wpisane jako liczby całkowite); usługi już wyżej
+        foreach (array_chunk(array_values(array_unique(array_map('intval', $itemGids))), 500) as $chunk) {
+            $queries[] = $select.' AND e.TrE_TwrNumer IN ('.implode(',', $chunk).')'.($allServices ? " AND t.Twr_Typ <> $service" : '');
+        }
+        if ($queries === []) {
+            return;
+        }
+
+        $this->yieldToXl();
+        foreach ($queries as $sql) {
+            foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
+                $type = (int) $r->doc_type;
+                // dokument korygowany tylko z nagłówka korekty (0 = XL go nie podał)
+                $isCorrection = in_array($type, self::INSPECTION_CORRECTION_TYPES, true);
+                $correctsType = $isCorrection && (int) $r->corrects_type > 0 ? (int) $r->corrects_type : null;
+                $correctsId = $isCorrection && (int) $r->corrects_id > 0 ? (int) $r->corrects_id : null;
+                $operator = mb_strtoupper(trim((string) $r->operator));
+                yield [
+                    'doc_type' => $type,
+                    'document_id' => (int) $r->document_id,
+                    'line' => (int) $r->line,
+                    'document_number' => $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
+                    'issued' => (int) $r->issued,
+                    'sold' => (int) ($r->sold ?? 0),
+                    'customer_gid' => (int) $r->customer_gid,
+                    'recipient_gid' => (int) ($r->recipient_gid ?? 0),
+                    'item_gid' => (int) $r->item_gid,
+                    'item_type' => (int) $r->item_type,
+                    'quantity' => (float) $r->quantity,
+                    'net_value' => (float) $r->net_value,
+                    'warehouse_code' => $this->text($r->warehouse_code),
+                    'operator' => $operator !== '' ? $operator : null,
+                    'corrects_type' => $correctsType !== null && $correctsId !== null ? $correctsType : null,
+                    'corrects_id' => $correctsType !== null && $correctsId !== null ? $correctsId : null,
                 ];
             }
         }

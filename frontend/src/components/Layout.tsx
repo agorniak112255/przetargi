@@ -37,13 +37,14 @@ const links: NavEntry[] = [
   { to: '/products', label: 'Produkty', icon: 'products', permission: 'products.view' },
   { to: '/zapasy', label: 'Zapasy', icon: 'inventory', anyOf: ['inventory.view', 'campaigns.use'] },
   { to: '/raport-zapasow', label: 'Raport dla zarządu', icon: 'reports', permission: 'inventory.report.view' },
+  { to: '/przeglady', label: 'Przeglądy', icon: 'inspections', anyOf: ['inspections.view', 'inspections.manage'] },
   {
     group: 'campaigns-offers',
     label: 'Kampanie i oferty',
     icon: 'campaigns',
     children: [
       { to: '/kampanie', label: 'Kampanie', icon: 'campaigns', anyOf: ['campaigns.use', 'campaigns.view'] },
-      { to: '/oferty', label: 'Oferty', icon: 'offers', permission: 'offers.use' },
+      { to: '/oferty', label: 'Oferty', icon: 'offers', anyOf: ['offers.use', 'inspections.offer'] },
     ],
   },
   { to: '/card-matches', label: 'Łączenie kart', icon: 'substitutes', permission: 'card_matches.view' },

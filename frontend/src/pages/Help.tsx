@@ -9,6 +9,7 @@ import { InventoryHelp } from './help/InventoryHelp'
 import { AppFrame, Btn, Card, Field, LivePage, Mark, Slideshow, Th } from './help/kit'
 import { NewFeaturesHelp } from './help/NewFeaturesHelp'
 import { OffersHelp } from './help/OffersHelp'
+import { PrzegladyHelp } from './help/PrzegladyHelp'
 import { ReportsHelp } from './help/ReportsHelp'
 import { SubstitutesHelp } from './help/SubstitutesHelp'
 import { useAuth } from '../auth'
@@ -26,6 +27,7 @@ const modules = [
   { id: 'produkty', label: 'Produkty' },
   { id: 'zapasy', label: 'Zapasy' },
   { id: 'raport-zarzad', label: 'Raport dla zarządu' },
+  { id: 'przeglady', label: 'Przeglądy' },
   { id: 'kampanie', label: 'Kampanie' },
   { id: 'oferty', label: 'Oferty' },
   { id: 'laczenie-kart', label: 'Łączenie kart' },
@@ -2213,6 +2215,7 @@ const panels: Record<ModuleId, () => ReactNode> = {
   produkty: () => <ProductsHelp />,
   zapasy: () => <InventoryHelp />,
   'raport-zarzad': () => <BoardReportHelp />,
+  przeglady: () => <PrzegladyHelp />,
   kampanie: () => <CampaignsHelp />,
   oferty: () => <OffersHelp />,
   'laczenie-kart': () => <CardMatchesHelp />,

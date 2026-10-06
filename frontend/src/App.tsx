@@ -29,6 +29,8 @@ import { Chat } from './pages/Chat'
 import { ClientDetail } from './pages/ClientDetail'
 import { Clients } from './pages/Clients'
 import { Inquiries } from './pages/Inquiries'
+import { InspectionPositions } from './pages/InspectionPositions'
+import { Inspections } from './pages/Inspections'
 import { InquiryReply } from './pages/InquiryReply'
 import { Inventory } from './pages/Inventory'
 import { InventoryRwPw } from './pages/InventoryRwPw'
@@ -274,9 +276,26 @@ export default function App() {
               }
             />
             <Route
+              path="przeglady"
+              element={
+                <PermissionGuard anyOf={['inspections.view', 'inspections.manage']}>
+                  <Inspections />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="przeglady/pozycje"
+              element={
+                <PermissionGuard permission="inspections.manage">
+                  <InspectionPositions />
+                </PermissionGuard>
+              }
+            />
+            {/* oferty przeglądu (moduł Przeglądy) są w module Oferty — wystarczy jedno z uprawnień; resztę pilnuje serwer */}
+            <Route
               path="oferty"
               element={
-                <PermissionGuard permission="offers.use">
+                <PermissionGuard anyOf={['offers.use', 'inspections.offer']}>
                   <Offers />
                 </PermissionGuard>
               }
@@ -284,7 +303,7 @@ export default function App() {
             <Route
               path="oferty/:id"
               element={
-                <PermissionGuard permission="offers.use">
+                <PermissionGuard anyOf={['offers.use', 'inspections.offer']}>
                   <OfferEditor />
                 </PermissionGuard>
               }

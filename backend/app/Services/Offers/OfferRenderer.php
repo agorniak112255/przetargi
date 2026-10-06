@@ -16,11 +16,15 @@ use Illuminate\Support\Collection;
  * klienta: bez linii wypisu i notki o administratorze danych mailingu, bez linków mierzonych, „Zapytaj o ofertę” na adres
  * autora. Podgląd i kopia do Thunderbirda są bez podpisu (program pocztowy doda podpis handlowca), wysyłka z aplikacji —
  * z podpisem ze skrzynki „Moja poczta”. Forma „pdf” = krótki mail bez produktów (oferta w załączniku, OfferPdf).
+ * Oferta przeglądu (kind = inspection): zamiast produktów tabela terminów bez cen (InspectionOfferRenderer).
  * Nie final — testy podmieniają zależności.
  */
 class OfferRenderer
 {
-    public function __construct(private readonly CampaignRenderer $renderer) {}
+    public function __construct(
+        private readonly CampaignRenderer $renderer,
+        private readonly InspectionOfferRenderer $inspection,
+    ) {}
 
     /**
      * @param  string|null  $notice  informacja na górze maila (kopia dla nadawcy) — klient jej nie dostaje
@@ -42,7 +46,16 @@ class OfferRenderer
 
         $blocks = [['type' => 'header', 'logo' => null]];
         $intro = trim((string) $offer->intro);
-        if ($delivery === 'pdf') {
+        // oferta przeglądu (bez cen): zamiast bloku produktów akapit ze znacznikiem, podmieniany niżej na tabelę
+        // „Co wymaga przeglądu” — bez linii „Ceny netto…” (jest w bloku produktów) i bez „Zapytaj o ofertę”
+        $tableToken = null;
+        if ($offer->isInspection() && $delivery !== 'pdf') {
+            $tableToken = $this->inspection->token();
+            if ($intro !== '') {
+                $blocks[] = ['type' => 'text', 'text' => $intro];
+            }
+            $blocks[] = ['type' => 'text', 'text' => $tableToken];
+        } elseif ($delivery === 'pdf') {
             // linia „Ceny netto…” jest w szablonie częścią bloku produktów — bez bloku nie ma i jej
             $blocks[] = ['type' => 'text', 'text' => $intro !== '' ? $intro : "Dzień dobry,\n\nw załączeniu przesyłam ofertę ".$offer->code.'.'];
         } else {
@@ -55,7 +68,7 @@ class OfferRenderer
 
         $rendered = $this->renderer->renderItems(
             // pozycje świeżo z bazy — załadowana relacja mogła się zestarzeć po zmianie ceny; krótki mail ich nie pokazuje
-            $delivery === 'pdf' ? new Collection : OfferItemPresenter::campaignItems($offer->items()->get()),
+            $delivery === 'pdf' || $tableToken !== null ? new Collection : OfferItemPresenter::campaignItems($offer->items()->get()),
             $author,
             (string) $offer->code,
             false,
@@ -81,6 +94,9 @@ class OfferRenderer
             $fromAddress !== '' ? $fromAddress : trim((string) $author->email),
         );
 
+        if ($tableToken !== null) {
+            $rendered = $this->inspection->insertTable($rendered, $tableToken, $offer);
+        }
         $fromName = $account !== null ? trim((string) $account->from_name) : '';
 
         return [

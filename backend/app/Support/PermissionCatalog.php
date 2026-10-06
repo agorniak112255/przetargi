@@ -77,6 +77,10 @@ final class PermissionCatalog
         'campaigns.delete',
         'campaigns.view',
         'offers.use',
+        // moduł Przeglądy (06.10.2026) — na start tylko admin (rolePermissions: admin = ALL); innym nadaje właściciel
+        'inspections.view',
+        'inspections.manage',
+        'inspections.offer',
         'chat',
     ];
 
@@ -253,6 +257,9 @@ final class PermissionCatalog
             ['campaigns.view', 'Kampanie — podgląd wysłanych', 'Widzi kampanie wszystkich pracowników po rozpoczęciu wysyłki (w trakcie, wysłane i anulowane): treść maila, pozycje, odbiorców, kliknięcia, odpowiedzi i sprzedaż. Nie zmienia, nie wysyła, nie duplikuje i nie usuwa kampanii. Może wysłać mail testowy tylko na własny adres. Projekty innych osób są niewidoczne.', 'Kampanie'],
             ['offers.use', 'Oferty dla klientów', 'Może przygotować ofertę z towarów ERP XL i kart produktów, skopiować ją do własnej wiadomości albo wysłać ze swojej skrzynki pod podane adresy (osobny mail do każdego adresu). Przy pozycjach widzi koszt zakupu towaru z ERP XL i cenę zakupu karty produktu. Dodawanie produktów z listy produktów wymaga też uprawnienia „Produkty — podgląd”.', 'Kampanie'],
             ['inquiries.view_others', 'Zapytania — otwieranie cudzych', 'Może otworzyć zapytanie innego pracownika i zobaczyć mail klienta, dobrane pozycje i przygotowany list. Tylko podgląd — zmieniać i wysyłać może wyłącznie autor.', 'Zapytania'],
+            ['inspections.view', 'Przeglądy — lista terminów', 'Widzi zakładkę „Przeglądy”: klientów, którym mija albo minął termin przeglądu (gaśnic, hydrantów i innych pozycji z listy przeglądów), wyliczony z faktur sprzedaży w ERP XL — z ilością, datą i wartością netto ostatniego przeglądu lub zakupu. Może pobrać listę do Excela i raport PDF.', 'Przeglądy'],
+            ['inspections.manage', 'Przeglądy — lista pozycji i odstępy', 'Może dodawać usługi i towary z ERP XL do listy przeglądów, ustawiać dla każdej co ile miesięcy wypada przegląd, wskazać usługę, która odnawia towar, oraz zatwierdzać i odrzucać podpowiedzi podobnych pozycji. Może też pomijać klientów na liście terminów.', 'Przeglądy'],
+            ['inspections.offer', 'Przeglądy — oferty dla klientów', 'Może przygotować z listy terminów ofertę przeglądu (bez cen: co i kiedy wymaga przeglądu) i wysłać ją klientowi ze swojej skrzynki; oferty przeglądu są na liście „Oferty”. Może też pomijać klientów na liście terminów (na zawsze albo do wybranej daty).', 'Przeglądy'],
             ['chat', 'Czat firmowy', 'Może pisać do współpracowników i w kanałach czatu oraz przekazywać do czatu maile, zapytania i przetargi.', 'Czat'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],

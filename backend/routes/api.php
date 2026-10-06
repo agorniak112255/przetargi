@@ -51,6 +51,9 @@ use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\GlobalSearchController;
 use App\Http\Controllers\Api\ImportExclusionController;
 use App\Http\Controllers\Api\InquiryOutcomeController;
+use App\Http\Controllers\Api\InspectionController;
+use App\Http\Controllers\Api\InspectionOfferController;
+use App\Http\Controllers\Api\InspectionPositionController;
 use App\Http\Controllers\Api\InventoryBoardController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\InventoryRwPwController;
@@ -607,16 +610,17 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::delete('/email-suppressions/{suppression}', [EmailSuppressionController::class, 'destroy']);
     });
 
-    // „Moja poczta” — skrzynka do wysyłki kampanii i ofert
-    Route::middleware('permission:campaigns.use|offers.use')->group(function (): void {
+    // „Moja poczta” — skrzynka do wysyłki kampanii i ofert (także ofert przeglądu)
+    Route::middleware('permission:campaigns.use|offers.use|inspections.offer')->group(function (): void {
         Route::get('/me/mail-account', [UserMailAccountController::class, 'show']);
         Route::put('/me/mail-account', [UserMailAccountController::class, 'update']);
         Route::post('/me/mail-account/test', [UserMailAccountController::class, 'test'])->middleware('throttle:10,1');
     });
 
     // oferty dla klientów — tylko własne (cudza = 404, sprawdza kontroler); whereNumber: /offers/compose/* (zapytania
-    // klientów, wyżej) nie trafia tutaj
-    Route::middleware('permission:offers.use')->group(function (): void {
+    // klientów, wyżej) nie trafia tutaj. Rodzaj oferty sprawdza kontroler: z produktami — offers.use, przeglądu —
+    // inspections.offer
+    Route::middleware('permission:offers.use|inspections.offer')->group(function (): void {
         Route::get('/offers', [OfferController::class, 'index']);
         Route::post('/offers', [OfferController::class, 'store']);
         Route::get('/offers/{offer}', [OfferController::class, 'show'])->whereNumber('offer');
@@ -632,6 +636,37 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         // PDF bieżącej oferty i PDF zapisany przy wysyłce (forma „pdf”/„both”); składanie PDF kosztuje — limit
         Route::get('/offers/{offer}/pdf', [OfferController::class, 'pdf'])->whereNumber('offer')->middleware('throttle:30,1');
         Route::get('/offers/{offer}/sends/{send}/pdf', [OfferController::class, 'sendPdf'])->whereNumber(['offer', 'send'])->middleware('throttle:30,1');
+        // wiersze oferty przeglądu (w ofercie z produktami — 404)
+        Route::patch('/offers/{offer}/inspection-lines/{line}', [OfferController::class, 'updateInspectionLine'])->whereNumber(['offer', 'line']);
+        Route::delete('/offers/{offer}/inspection-lines/{line}', [OfferController::class, 'removeInspectionLine'])->whereNumber(['offer', 'line']);
+    });
+
+    // „Przygotuj oferty” w Przeglądach — po jednej ofercie przeglądu na zaznaczonego klienta XL; pokazuje klientów,
+    // adresy i terminy jak lista, więc wymaga też inspections.view
+    Route::post('/inspections/offers', [InspectionOfferController::class, 'store'])->middleware(['permission:inspections.view', 'permission:inspections.offer']);
+
+    // Przeglądy — terminy przeglądów u klientów z faktur ERP XL (lista, szczegóły, Excel, raport PDF)
+    Route::middleware('permission:inspections.view')->group(function (): void {
+        Route::get('/inspections', [InspectionController::class, 'index']);
+        Route::get('/inspections/customers/{xlGid}', [InspectionController::class, 'show'])->whereNumber('xlGid');
+        Route::get('/inspections/export', [InspectionController::class, 'export'])->middleware('throttle:30,1');
+        Route::get('/inspections/report', [InspectionController::class, 'report'])->middleware('throttle:30,1');
+    });
+    // pomijanie klientów na liście terminów — kto przygotowuje oferty albo prowadzi listę pozycji
+    Route::middleware('permission:inspections.offer|inspections.manage')->group(function (): void {
+        Route::post('/inspections/dismissals', [InspectionController::class, 'storeDismissal']);
+        Route::delete('/inspections/dismissals/{id}', [InspectionController::class, 'destroyDismissal'])->whereNumber('id');
+    });
+    // lista pozycji przeglądów (usługi i towary XL z interwałem) i podpowiedzi z wzorca
+    Route::middleware('permission:inspections.manage')->group(function (): void {
+        Route::get('/inspection-positions', [InspectionPositionController::class, 'index']);
+        Route::get('/inspection-positions/catalog', [InspectionPositionController::class, 'catalog']);
+        Route::get('/inspection-positions/suggestions', [InspectionPositionController::class, 'suggestions']);
+        Route::post('/inspection-positions/suggestions/accept', [InspectionPositionController::class, 'acceptSuggestions']);
+        Route::post('/inspection-positions/suggestions/reject', [InspectionPositionController::class, 'rejectSuggestions']);
+        Route::post('/inspection-positions', [InspectionPositionController::class, 'store']);
+        Route::patch('/inspection-positions/{position}', [InspectionPositionController::class, 'update'])->whereNumber('position');
+        Route::delete('/inspection-positions/{position}', [InspectionPositionController::class, 'destroy'])->whereNumber('position');
     });
 
     Route::middleware('permission:admin.access')->prefix('admin')->group(function (): void {

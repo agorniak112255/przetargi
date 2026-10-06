@@ -55,7 +55,9 @@ class OfferComposeController extends Controller
             'body_text' => ['nullable', 'string', 'max:100000'],
             'product_id' => ['nullable', 'integer', 'exists:products,id'],
             // oferta z modułu Ofert — tylko własna (cudzej nie widać, więc i jej PDF nie wolno dołączyć)
-            'offer_id' => ['nullable', 'integer', Rule::exists('offers', 'id')->where('user_id', $user->id)],
+            // oferta przeglądu — tylko z uprawnieniem do ofert przeglądu (jak w OfferController)
+            'offer_id' => ['nullable', 'integer', Rule::exists('offers', 'id')->where('user_id', $user->id)
+                ->whereIn('kind', $user->can('inspections.offer') ? Offer::KINDS : [Offer::KIND_PRODUCTS])],
             'attach_pdf' => ['sometimes', 'boolean'],
         ], [
             'body_html.max' => 'Oferta jest za duża, żeby przekazać ją do Thunderbirda — skopiuj ją i wklej ręcznie.',
@@ -96,10 +98,11 @@ class OfferComposeController extends Controller
     {
         $this->assertOwner($request, $offerCompose);
         $offer = $offerCompose->attach_pdf && $offerCompose->offer_id !== null ? Offer::query()->find($offerCompose->offer_id) : null;
-        if ($offer === null || (int) $offer->user_id !== (int) $request->user()->id) {
+        if ($offer === null || (int) $offer->user_id !== (int) $request->user()->id
+            || ($offer->isInspection() && ! $request->user()->can('inspections.offer'))) {
             abort(404, 'Ta prośba nie ma pliku PDF oferty.');
         }
-        OfferSender::assertItemsReady($offer->items()->get(), 'przed pobraniem PDF');
+        OfferSender::assertReady($offer, 'przed pobraniem PDF');
 
         return response($pdf->render($offer, $request->user()), 200, [
             'Content-Type' => 'application/pdf',

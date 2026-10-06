@@ -6,8 +6,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Campaign;
+use App\Models\ErpCustomer;
 use App\Models\ErpItemLink;
 use App\Models\Offer;
+use App\Models\OfferInspectionLine;
 use App\Models\OfferItem;
 use App\Models\OfferRecipient;
 use App\Models\OfferSend;
@@ -19,10 +21,12 @@ use App\Services\Offers\OfferPdf;
 use App\Services\Offers\OfferRenderer;
 use App\Services\Offers\OfferSender;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
@@ -32,6 +36,10 @@ use Illuminate\Validation\ValidationException;
  * Oferty dla klientów (kontrakt: frontend/src/lib/offers.ts): pozycje z ceną, treść, podgląd maila, znacznik
  * kopiowania i wysyłka ze skrzynki autora. Ofertę widzi i zmienia tylko autor — cudza oferta to 404. Oferta jest
  * zawsze edytowalna; co dostał klient, zapisuje każda wysyłka (sends). Wyliczenia w App\Services\Offers.
+ *
+ * Dwa rodzaje (Offer::KINDS): products — produkty z ceną (uprawnienie offers.use, bez niego 403); inspection — oferta
+ * przeglądu z modułu Przeglądy, bez cen, z wierszami terminów (uprawnienie inspections.offer, bez niego 404 jak cudza).
+ * Tworzy ją InspectionOfferController; tu edycja wierszy, podgląd, PDF i wysyłka jak w ofercie z produktami.
  */
 class OfferController extends Controller
 {
@@ -50,7 +58,9 @@ class OfferController extends Controller
         $user = $request->user();
         $offers = Offer::query()
             ->where('user_id', $user->id)
-            ->withCount('items')
+            // tylko rodzaje, do których konto ma uprawnienie
+            ->whereIn('kind', $this->allowedKinds($user))
+            ->withCount(['items', 'inspectionLines'])
             // adresy z udaną wysyłką — ten sam adres w kilku wysyłkach (także innymi literami) liczony raz
             ->selectSub(
                 OfferRecipient::query()->selectRaw('count(distinct lower(email))')
@@ -61,13 +71,17 @@ class OfferController extends Controller
             )
             ->orderByDesc('updated_at')->orderByDesc('id')
             ->get();
+        $customers = $this->customers($offers->filter(static fn (Offer $o): bool => $o->isInspection())->pluck('customer_xl_gid')->all());
 
         return response()->json([
-            'data' => $offers->map(static fn (Offer $o): array => [
+            'data' => $offers->map(fn (Offer $o): array => [
                 'id' => (int) $o->id,
+                'kind' => $o->isInspection() ? Offer::KIND_INSPECTION : Offer::KIND_PRODUCTS,
+                'customer_name' => $o->isInspection() ? InspectionOfferController::customerName((int) $o->customer_xl_gid, $customers[(int) $o->customer_xl_gid] ?? null) : null,
                 'code' => $o->code,
                 'subject' => (string) $o->subject,
-                'items_count' => (int) $o->getAttribute('items_count'),
+                // oferta przeglądu: liczba wierszy przeglądu
+                'items_count' => (int) $o->getAttribute($o->isInspection() ? 'inspection_lines_count' : 'items_count'),
                 'recipients_count' => (int) $o->getAttribute('recipients_count'),
                 'last_sent_at' => $o->last_sent_at?->toIso8601String(),
                 'last_copied_at' => $o->last_copied_at?->toIso8601String(),
@@ -78,9 +92,13 @@ class OfferController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $v = $request->validate($this->itemIdRules(), $this->itemIdMessages());
         /** @var User $user */
         $user = $request->user();
+        // oferta z produktami; ofertę przeglądu tworzy POST /inspections/offers
+        if (! $user->can('offers.use')) {
+            abort(403, 'Brak uprawnienia do ofert z produktami.');
+        }
+        $v = $request->validate($this->itemIdRules(), $this->itemIdMessages());
 
         $offer = DB::transaction(function () use ($v, $user): Offer {
             $offer = Offer::query()->create(['user_id' => $user->id, 'subject' => '', 'layout' => 'grid3']);
@@ -155,6 +173,11 @@ class OfferController extends Controller
     public function addItems(Request $request, Offer $offer): JsonResponse
     {
         $this->authorizeOwner($request, $offer);
+        if ($offer->isInspection()) {
+            throw ValidationException::withMessages(['items' => [
+                'Do oferty przeglądu nie dopisuje się produktów — ma tylko wiersze przeglądu z modułu Przeglądy.',
+            ]]);
+        }
         $v = $request->validate($this->itemIdRules(), $this->itemIdMessages());
         /** @var User $user */
         $user = $request->user();
@@ -232,6 +255,62 @@ class OfferController extends Controller
         return response()->json($this->present($offer->fresh() ?? $offer, $request->user()));
     }
 
+    /** Wiersz oferty przeglądu: ilość, termin, uwaga, miejsce na liście. W ofercie z produktami — 404. */
+    public function updateInspectionLine(Request $request, Offer $offer, OfferInspectionLine $line): JsonResponse
+    {
+        $this->authorizeOwner($request, $offer);
+        $this->ensureInspectionLineOf($offer, $line);
+        $v = $request->validate([
+            'quantity' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:99999999999'],
+            'due_on' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
+            'note' => ['sometimes', 'nullable', 'string', 'max:300'],
+            'position' => ['sometimes', 'integer', 'min:1', 'max:1000'],
+        ], [
+            'quantity.numeric' => 'Ilość musi być liczbą.',
+            'quantity.min' => 'Ilość nie może być ujemna.',
+            'quantity.max' => 'Ilość jest za duża.',
+            'due_on.date_format' => 'Termin przeglądu musi mieć postać RRRR-MM-DD.',
+            'note.max' => 'Uwaga może mieć najwyżej 300 znaków.',
+            'position.integer' => 'Miejsce na liście musi być liczbą od 1.',
+            'position.min' => 'Miejsce na liście musi być liczbą od 1.',
+            'position.max' => 'Miejsce na liście może być najwyżej 1000.',
+        ]);
+
+        $this->locked($offer, function (Offer $locked) use ($line, $v): void {
+            $data = array_intersect_key($v, array_flip(['quantity', 'due_on', 'note']));
+            if (array_key_exists('quantity', $data) && $data['quantity'] !== null) {
+                $data['quantity'] = round((float) $data['quantity'], 3);
+            }
+            if (array_key_exists('note', $data) && is_string($data['note'])) {
+                $data['note'] = trim($data['note']) !== '' ? trim($data['note']) : null;
+            }
+            if ($data !== []) {
+                $line->update($data);
+            }
+            if (array_key_exists('position', $v)) {
+                $this->moveRow($locked->inspectionLines()->pluck('id'), OfferInspectionLine::class, (int) $line->id, (int) $v['position']);
+            }
+            // zmiana wiersza to zmiana oferty — lista ofert sortuje po updated_at
+            $locked->touch();
+        });
+
+        return response()->json($this->present($offer->fresh() ?? $offer, $request->user()));
+    }
+
+    public function removeInspectionLine(Request $request, Offer $offer, OfferInspectionLine $line): JsonResponse
+    {
+        $this->authorizeOwner($request, $offer);
+        $this->ensureInspectionLineOf($offer, $line);
+
+        $this->locked($offer, function (Offer $locked) use ($line): void {
+            $line->delete();
+            $this->writePositions($locked->inspectionLines()->pluck('id')->map(fn ($id): int => (int) $id)->all(), OfferInspectionLine::class);
+            $locked->touch();
+        });
+
+        return response()->json($this->present($offer->fresh() ?? $offer, $request->user()));
+    }
+
     public function preview(Request $request, Offer $offer): JsonResponse
     {
         $this->authorizeOwner($request, $offer);
@@ -245,7 +324,8 @@ class OfferController extends Controller
             'from' => $rendered['from'],
             'html' => $rendered['html'],
             'text' => $rendered['text'],
-            'missing_prices' => OfferSender::missingPrices($offer->items()->get()),
+            // oferta przeglądu nie ma cen
+            'missing_prices' => $offer->isInspection() ? [] : OfferSender::missingPrices($offer->items()->get()),
             'public_url_missing' => rtrim((string) config('campaigns.public_url'), '/') === '',
             'delivery' => $delivery,
             'pdf_filename' => $delivery === 'body' ? null : OfferPdf::filename($offer),
@@ -259,7 +339,7 @@ class OfferController extends Controller
     public function pdf(Request $request, Offer $offer): Response
     {
         $this->authorizeOwner($request, $offer);
-        OfferSender::assertItemsReady($offer->items()->get(), 'przed pobraniem PDF');
+        OfferSender::assertReady($offer, 'przed pobraniem PDF');
 
         return $this->pdfResponse($this->pdf->render($offer, $request->user()), OfferPdf::filename($offer));
     }
@@ -478,10 +558,21 @@ class OfferController extends Controller
     /** Przesuwa pozycję na miejsce N (od 1) i numeruje resztę po kolei. */
     private function moveItem(Offer $offer, OfferItem $item, int $position): void
     {
-        $ids = $offer->items()->pluck('id')->map(fn ($id): int => (int) $id)->reject(fn (int $id): bool => $id === (int) $item->id)->values()->all();
+        $this->moveRow($offer->items()->pluck('id'), OfferItem::class, (int) $item->id, $position);
+    }
+
+    /**
+     * Wiersz oferty (pozycja albo wiersz przeglądu) na miejsce N (od 1), reszta po kolei.
+     *
+     * @param  Collection<int, mixed>  $orderedIds  id wierszy oferty w bieżącej kolejności
+     * @param  class-string<Model>  $model
+     */
+    private function moveRow(Collection $orderedIds, string $model, int $rowId, int $position): void
+    {
+        $ids = $orderedIds->map(fn ($id): int => (int) $id)->reject(fn (int $id): bool => $id === $rowId)->values()->all();
         $index = max(0, min(count($ids), $position - 1));
-        array_splice($ids, $index, 0, [(int) $item->id]);
-        $this->writePositions($ids);
+        array_splice($ids, $index, 0, [$rowId]);
+        $this->writePositions($ids, $model);
     }
 
     private function renumber(Offer $offer): void
@@ -489,11 +580,14 @@ class OfferController extends Controller
         $this->writePositions($offer->items()->pluck('id')->map(fn ($id): int => (int) $id)->all());
     }
 
-    /** @param list<int> $ids */
-    private function writePositions(array $ids): void
+    /**
+     * @param  list<int>  $ids
+     * @param  class-string<Model>  $model  OfferItem albo OfferInspectionLine
+     */
+    private function writePositions(array $ids, string $model = OfferItem::class): void
     {
         foreach ($ids as $i => $id) {
-            OfferItem::query()->whereKey($id)->where('position', '!=', $i + 1)->update(['position' => $i + 1]);
+            $model::query()->whereKey($id)->where('position', '!=', $i + 1)->update(['position' => $i + 1]);
         }
     }
 
@@ -525,12 +619,81 @@ class OfferController extends Controller
         return in_array($offer->delivery, Offer::DELIVERIES, true) ? (string) $offer->delivery : 'body';
     }
 
-    /** Ofertę widzi i zmienia tylko autor; cudza = 404 (bez zdradzania, że istnieje). */
+    /**
+     * Ofertę widzi i zmienia tylko autor; cudza = 404 (bez zdradzania, że istnieje). Oferta przeglądu bez uprawnienia
+     * inspections.offer — też 404; oferta z produktami bez offers.use — 403.
+     */
     private function authorizeOwner(Request $request, Offer $offer): void
     {
-        if ((int) $offer->user_id !== (int) $request->user()->id) {
+        /** @var User $user */
+        $user = $request->user();
+        if ((int) $offer->user_id !== (int) $user->id) {
             abort(404);
         }
+        if ($offer->isInspection()) {
+            if (! $user->can('inspections.offer')) {
+                abort(404);
+            }
+        } elseif (! $user->can('offers.use')) {
+            abort(403, 'Brak uprawnienia do ofert z produktami.');
+        }
+    }
+
+    /** @return list<string> rodzaje ofert, które konto widzi */
+    private function allowedKinds(User $user): array
+    {
+        $kinds = [];
+        if ($user->can('offers.use')) {
+            $kinds[] = Offer::KIND_PRODUCTS;
+        }
+        if ($user->can('inspections.offer')) {
+            $kinds[] = Offer::KIND_INSPECTION;
+        }
+
+        return $kinds;
+    }
+
+    private function ensureInspectionLineOf(Offer $offer, OfferInspectionLine $line): void
+    {
+        if (! $offer->isInspection() || (int) $line->offer_id !== (int) $offer->id) {
+            abort(404);
+        }
+    }
+
+    /**
+     * Klienci XL ofert przeglądu po numerze XL.
+     *
+     * @param  list<mixed>  $xlGids
+     * @return array<int, ErpCustomer>
+     */
+    private function customers(array $xlGids): array
+    {
+        $xlGids = array_values(array_unique(array_filter(array_map('intval', $xlGids))));
+        if ($xlGids === []) {
+            return [];
+        }
+
+        return ErpCustomer::query()->whereIn('xl_gid', $xlGids)
+            ->get(['id', 'xl_gid', 'acronym', 'name', 'city', 'emails'])
+            ->keyBy(static fn (ErpCustomer $c): int => (int) $c->xl_gid)->all();
+    }
+
+    /**
+     * Klient oferty przeglądu (kontrakt OfferCustomer); klienta nie ma w kartotece — akronim „Klient XL {numer}”.
+     *
+     * @return array{xl_gid: int, acronym: string, name: string|null, city: string|null, emails: list<string>}
+     */
+    private function presentCustomer(int $xlGid, ?ErpCustomer $customer): array
+    {
+        $acronym = trim((string) $customer?->acronym);
+
+        return [
+            'xl_gid' => $xlGid,
+            'acronym' => $acronym !== '' ? $acronym : 'Klient XL '.$xlGid,
+            'name' => $customer?->name,
+            'city' => $customer?->city,
+            'emails' => InspectionOfferController::customerEmails($customer),
+        ];
     }
 
     private function ensureItemOf(Offer $offer, OfferItem $item): void
@@ -545,9 +708,26 @@ class OfferController extends Controller
     {
         $items = $offer->items()->get();
         $sends = $offer->sends()->with('recipients')->get(['id', 'offer_id', 'delivery', 'pdf_path', 'created_at']);
+        $inspection = $offer->isInspection();
+        $xlGid = (int) $offer->customer_xl_gid;
 
         return [
             'id' => (int) $offer->id,
+            'kind' => $inspection ? Offer::KIND_INSPECTION : Offer::KIND_PRODUCTS,
+            // oferta przeglądu: klient z kartoteki XL i wiersze terminów (bez cen); oferta z produktami: null i []
+            'customer' => $inspection ? $this->presentCustomer($xlGid, $this->customers([$xlGid])[$xlGid] ?? null) : null,
+            'inspection_lines' => $inspection ? $offer->inspectionLines()->get()->map(static fn (OfferInspectionLine $l): array => [
+                'id' => (int) $l->id,
+                'position' => (int) $l->position,
+                'inspection_position_id' => $l->inspection_position_id,
+                'xl_gid' => $l->xl_gid,
+                'name' => (string) $l->name,
+                'unit' => $l->unit,
+                'quantity' => $l->quantity !== null ? (float) $l->quantity : null,
+                'last_on' => $l->last_on?->toDateString(),
+                'due_on' => $l->due_on?->toDateString(),
+                'note' => $l->note,
+            ])->values()->all() : [],
             'code' => $offer->code,
             'subject' => (string) $offer->subject,
             'intro' => $offer->intro,

@@ -18,11 +18,23 @@ class Offer extends Model
     /** Forma oferty: body — produkty w treści maila; pdf — krótki mail, oferta w załączniku PDF; both — oba. */
     public const DELIVERIES = ['body', 'pdf', 'both'];
 
-    /** @var array<string, mixed> jak domyślna kolumny — nowa oferta ma formę bez odczytu z bazy */
-    protected $attributes = ['delivery' => 'body'];
+    /**
+     * Rodzaj: products — produkty z ceną (offer_items); inspection — oferta przeglądu dla klienta XL (customer_xl_gid)
+     * z terminami bez cen (offer_inspection_lines), przygotowywana z modułu Przeglądy.
+     */
+    public const KIND_PRODUCTS = 'products';
+
+    public const KIND_INSPECTION = 'inspection';
+
+    public const KINDS = [self::KIND_PRODUCTS, self::KIND_INSPECTION];
+
+    /** @var array<string, mixed> jak domyślne kolumn — nowa oferta ma formę i rodzaj bez odczytu z bazy */
+    protected $attributes = ['delivery' => 'body', 'kind' => self::KIND_PRODUCTS];
 
     protected $fillable = [
         'user_id',
+        'kind',
+        'customer_xl_gid',
         'code',
         'subject',
         'intro',
@@ -36,6 +48,7 @@ class Offer extends Model
     protected function casts(): array
     {
         return [
+            'customer_xl_gid' => 'integer',
             'valid_until' => 'date',
             'last_sent_at' => 'datetime',
             'last_copied_at' => 'datetime',
@@ -62,6 +75,17 @@ class Offer extends Model
     public function items(): HasMany
     {
         return $this->hasMany(OfferItem::class)->orderBy('position')->orderBy('id');
+    }
+
+    /** @return HasMany<OfferInspectionLine, $this> wiersze oferty przeglądu (kind = inspection) */
+    public function inspectionLines(): HasMany
+    {
+        return $this->hasMany(OfferInspectionLine::class)->orderBy('position')->orderBy('id');
+    }
+
+    public function isInspection(): bool
+    {
+        return $this->kind === self::KIND_INSPECTION;
     }
 
     /** @return HasMany<OfferSend, $this> najnowsza wysyłka pierwsza */

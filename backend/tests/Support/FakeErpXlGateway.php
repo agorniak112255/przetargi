@@ -312,6 +312,62 @@ final class FakeErpXlGateway implements ErpXlGateway
         }
     }
 
+    /** @var list<array{gid: int, type: int, code: string, name: string, unit: string|null, archived: bool}> */
+    public array $serviceRows = [];
+
+    /** @var list<array<string, mixed>> pozycje w postaci ErpXlGateway::inspectionSaleLines (pomocnik inspectionLine()) */
+    public array $inspectionLineRows = [];
+
+    /** @var list<array{items: list<int>, all_services: bool, from: int}> wywołania inspectionSaleLines */
+    public array $inspectionLineCalls = [];
+
+    public function services(int $afterGid, int $limit): array
+    {
+        $rows = array_values(array_filter($this->serviceRows, static fn (array $s): bool => $s['gid'] > $afterGid));
+        usort($rows, static fn (array $a, array $b): int => $a['gid'] <=> $b['gid']);
+
+        return array_slice($rows, 0, $limit);
+    }
+
+    public function inspectionSaleLines(array $itemGids, bool $allServices, int $fromClarionDate): iterable
+    {
+        $this->inspectionLineCalls[] = ['items' => array_values($itemGids), 'all_services' => $allServices, 'from' => $fromClarionDate];
+        foreach ($this->inspectionLineRows as $row) {
+            if ($row['issued'] < $fromClarionDate) {
+                continue;
+            }
+            if (($allServices && $row['item_type'] === 4) || in_array($row['item_gid'], $itemGids, true)) {
+                yield $row;
+            }
+        }
+    }
+
+    /** @return array{gid: int, type: int, code: string, name: string, unit: string|null, archived: bool} */
+    public static function service(int $gid, string $code, string $name, bool $archived = false, ?string $unit = 'szt'): array
+    {
+        return ['gid' => $gid, 'type' => 4, 'code' => $code, 'name' => $name, 'unit' => $unit, 'archived' => $archived];
+    }
+
+    /**
+     * Pozycja FS (albo FSE / korekty — $overrides) jak z inspectionSaleLines; $issued i $sold w zapisie Clarion
+     * (sold 0 = XL nie podał daty sprzedaży).
+     *
+     * @param  array<string, mixed>  $overrides
+     * @return array<string, mixed>
+     */
+    public static function inspectionLine(int $documentId, int $issued, int $customerGid, int $itemGid, float $quantity, float $netValue, int $itemType = 4, array $overrides = []): array
+    {
+        $type = (int) ($overrides['doc_type'] ?? 2033);
+        $prefix = [2033 => 'FS', 2037 => 'FSE', 2041 => 'FSK'][$type] ?? 'dok. '.$type;
+
+        return [
+            'doc_type' => $type, 'document_id' => $documentId, 'line' => 1, 'document_number' => $prefix.'-01G/'.$documentId.'/26/09',
+            'issued' => $issued, 'sold' => 0, 'customer_gid' => $customerGid, 'recipient_gid' => 0, 'item_gid' => $itemGid,
+            'item_type' => $itemType, 'quantity' => $quantity, 'net_value' => $netValue, 'warehouse_code' => '01G', 'operator' => 'NOMA',
+            'corrects_type' => null, 'corrects_id' => null, ...$overrides,
+        ];
+    }
+
     /**
      * Nagłówek dokumentu sprzedaży jak z customerDocuments (2033 FS, 2034 PA, 2037 FSE, 2041/2042 korekty).
      *

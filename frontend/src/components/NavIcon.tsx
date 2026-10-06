@@ -6,6 +6,7 @@ export type NavIconName =
   | 'notices'
   | 'products'
   | 'inventory'
+  | 'inspections'
   | 'price-lists'
   | 'substitutes'
   | 'reports'
@@ -58,6 +59,13 @@ const shapes: Record<NavIconName, ReactNode> = {
     <>
       <path d="M3 21V9l9-5 9 5v12" />
       <path d="M7 21v-8h10v8M7 17h10" />
+    </>
+  ),
+  // Kalendarz z ptaszkiem — terminy przeglądów u klientów.
+  inspections: (
+    <>
+      <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
+      <path d="M3.5 10h17M8 3v4M16 3v4M9 15.5l2 2 4-4" />
     </>
   ),
   'price-lists': (

@@ -43,6 +43,7 @@ const NAV: Array<[string, NavIconName, ('group' | 'sub')?]> = [
   ['Produkty', 'products'],
   ['Zapasy', 'inventory'],
   ['Raport dla zarządu', 'reports'],
+  ['Przeglądy', 'inspections'],
   ['Kampanie i oferty', 'campaigns', 'group'],
   ['Kampanie', 'campaigns', 'sub'],
   ['Oferty', 'offers', 'sub'],
