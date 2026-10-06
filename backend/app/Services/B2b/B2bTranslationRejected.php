@@ -15,15 +15,21 @@ use RuntimeException;
  */
 final class B2bTranslationRejected extends RuntimeException
 {
-    /** @param  array<string, mixed>|null  $modelResponse */
-    public function __construct(string $message, public readonly ?array $modelResponse = null)
-    {
+    /**
+     * @param  array<string, mixed>|null  $modelResponse
+     * @param  bool  $structural  inna liczba segmentów albo linii — treść mogła być dobra, model zmienił układ
+     */
+    public function __construct(
+        string $message,
+        public readonly ?array $modelResponse = null,
+        public readonly bool $structural = false,
+    ) {
         parent::__construct($message);
     }
 
     /** @param  array<string, mixed>  $modelResponse */
     public function withResponse(array $modelResponse): self
     {
-        return new self($this->getMessage(), $modelResponse);
+        return new self($this->getMessage(), $modelResponse, $this->structural);
     }
 }

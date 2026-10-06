@@ -479,6 +479,115 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function norm_level_code_after_norm_number_is_not_a_thousands_group(): void
+    {
+        // SIR MA1524 05.10.2026: „EN 388 234XX” było liczone jako 388234XX — kod uznany za zgubiony, choć model go zachował
+        $translator = $this->translatorReturning(['segments' => ["EN 388 234XX\nEN 407 412X4X, rękawice"]]);
+
+        $this->assertSame("EN 388 234XX\nEN 407 412X4X, rękawice", $translator->translate("EN 388 234XX\nEN 407 412X4X, gloves")['description']);
+    }
+
+    #[Test]
+    public function words_glued_in_the_source_are_compared_separately(): void
+    {
+        // SIR: „(EU)2016/425”, „APV:63/14.1/3.4/17.8”, „YKK®zippers”, „The3D-TEX”, „FFP2NRD”
+        $source = "Regulation (EU)2016/425 and amendments.\nFreq. APV:63/14.1/3.4/17.8;\nHeavy duty YKK®zippers.\nThe3D-TEX polyester lining.\nFoldable FFP2NRD respirator.";
+        $translator = $this->translatorReturning(['segments' => [
+            "Rozporządzenie (UE) 2016/425 i zmiany.\nCzęst. APV: 63/14.1/3.4/17.8;\nWytrzymałe zamki YKK®.\nPodszewka 3D-TEX z poliestru.\nSkładana półmaska FFP2 NR D.",
+        ]]);
+
+        $this->assertStringContainsString('FFP2 NR D', $translator->translate($source)['description']);
+    }
+
+    #[Test]
+    public function polish_equivalents_and_plain_uppercase_words_are_accepted(): void
+    {
+        // TLV = NDS, SRN (literówka SNR), FOOD SAFE, NEVER, zwrot z IN/WITH/THE, rodzaje wyrobów w odsyłaczach, AQL 1,5
+        $source = "Up to 12 times the TLV, SRN 35 dB.\nEN 388 3131X, FOOD SAFE\nClean and NEVER with alcohol.\n"
+            ."EN ISO 20471 CLASS 3 (IN COMBINATION WITH THE JACKET)\nMC3521 - MISTRAL COLOR TROUSERS\nNitrile, AQL 1.5.";
+        $translator = $this->translatorReturning(['segments' => [
+            "Do 12-krotności NDS, SNR 35 dB.\nEN 388 3131X, DO KONTAKTU Z ŻYWNOŚCIĄ\nCzyścić i NIGDY alkoholem.\n"
+            ."EN ISO 20471 KLASA 3 (W POŁĄCZENIU Z KURTKĄ)\nMC3521 - spodnie MISTRAL COLOR\nNitryl, AQL 1,5.",
+        ]]);
+
+        $this->assertStringContainsString('NDS', $translator->translate($source)['description']);
+    }
+
+    #[Test]
+    public function model_name_in_a_cross_reference_stays_protected(): void
+    {
+        // rodzaj wyrobu wolno przetłumaczyć, nazwy modelu (MISTRAL, COLOR) nie
+        $translator = $this->translatorReturning(['segments' => ['Łączyć z MC3521 - spodnie MISTRAL kolorowe']]);
+
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiony token: COLOR');
+
+        $translator->translate('Combine with MC3521 - MISTRAL COLOR TROUSERS');
+    }
+
+    #[Test]
+    public function decimal_after_a_code_on_the_previous_line_is_a_value(): void
+    {
+        // SIR MA2424: „…FOOD SAFE\nLENGTH 29.5 cm” — 29.5 nie należy do kodu z linii wyżej
+        $translator = $this->translatorReturning(['segments' => ["EN 388 3121X\nDługość 29,5 cm"]]);
+
+        $this->assertSame("EN 388 3121X\nDługość 29,5 cm", $translator->translate("EN 388 3121X\nLength 29.5 cm")['description']);
+    }
+
+    #[Test]
+    public function changed_layout_is_retried_line_by_line(): void
+    {
+        // model skleił tytuł ze zdaniem („w źródle 2, w tłumaczeniu 1”) — drugie zapytanie: każda linia osobno
+        $responses = [
+            ['segments' => ['Kurtka z poliestru TPU, 145 g/m².']],
+            ['segments' => ['Kurtka z poliestru', 'TPU, 145 g/m².']],
+        ];
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->twice()
+            ->andReturnUsing(function (array $messages) use (&$responses): array {
+                $this->calls[] = ['messages' => $messages, 'temperature' => null, 'max_tokens' => null];
+
+                return array_shift($responses);
+            });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $result = $this->app->make(B2bTextTranslator::class)->translate("Jacket in polyester\nTPU, 145 g/m².");
+
+        $this->assertSame("Kurtka z poliestru\nTPU, 145 g/m².", $result['description']);
+        $second = json_decode((string) $this->calls[1]['messages'][1]['content'], true);
+        $this->assertSame(['Jacket in polyester', 'TPU, 145 g/m².'], $second['segments']);
+    }
+
+    #[Test]
+    public function content_rejection_is_not_retried_line_by_line(): void
+    {
+        $translator = $this->translatorReturning(['segments' => ["Kurtka\nPoliester"]]);
+
+        try {
+            $translator->translate("Jacket TRYON\nPolyester");
+            $this->fail('Oczekiwano odrzucenia.');
+        } catch (B2bTranslationRejected $e) {
+            $this->assertSame('zgubiony token: TRYON', $e->getMessage());
+        }
+        $this->assertCount(1, $this->calls);
+    }
+
+    #[Test]
+    public function hyphenated_word_and_degree_unit_are_joined_with_the_previous_line(): void
+    {
+        $translator = $this->translatorReturning(['segments' => ['x']]);
+
+        try {
+            $translator->translate("Fire boot with nitrile rubber sole resistant up to 250\n°C; equipped with Air-\nMesh/microfibre upper.");
+        } catch (B2bTranslationRejected) {
+            // sprawdzamy tylko wejście modelu
+        }
+
+        $payload = json_decode((string) $this->calls[0]['messages'][1]['content'], true);
+        $this->assertSame(['Fire boot with nitrile rubber sole resistant up to 250 °C; equipped with Air-Mesh/microfibre upper.'], $payload['segments']);
+    }
+
+    #[Test]
     public function line_starting_with_a_comma_continues_the_previous_one(): void
     {
         $translator = $this->translatorReturning(['segments' => ['x']]);
