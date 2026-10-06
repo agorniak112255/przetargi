@@ -123,7 +123,9 @@ final class CustomerEmailFinder
             if (isset($known[$email]) || $saved >= self::MAX_SUGGESTIONS) {
                 continue;
             }
-            CustomerEmailSuggestion::query()->create([
+            // insertOrIgnore: dwa przebiegi naraz (ręczny i nocny, przycisk w oknie) mogą znaleźć ten sam adres —
+            // drugi zapis pomijany zamiast przerwać przebieg błędem unikalności
+            $saved += DB::table('customer_email_suggestions')->insertOrIgnore([
                 'customer_xl_gid' => $gid,
                 'email' => $email,
                 'source' => $c['source'],
@@ -132,8 +134,9 @@ final class CustomerEmailFinder
                 'evidence' => $c['evidence'],
                 'status' => CustomerEmailSuggestion::STATUS_PENDING,
                 'found_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
             ]);
-            $saved++;
         }
         CustomerEmailLookup::query()->updateOrCreate(
             ['customer_xl_gid' => $gid],

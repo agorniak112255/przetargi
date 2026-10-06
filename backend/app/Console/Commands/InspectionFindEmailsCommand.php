@@ -51,7 +51,13 @@ final class InspectionFindEmailsCommand extends Command
         $found = 0;
         $withAny = 0;
         $errors = 0;
+        $done = 0;
         foreach ($customers as $customer) {
+            // inny przebieg (ręczny albo nocny) mógł go sprawdzić, gdy ten szedł — lista jest z początku przebiegu
+            if (DB::table('customer_email_lookups')->where('customer_xl_gid', $customer->xl_gid)->where('checked_at', '>=', $since)->exists()) {
+                continue;
+            }
+            $done++;
             $r = $finder->find($customer);
             $found += $r['found'];
             $withAny += $r['found'] > 0 ? 1 : 0;
@@ -59,10 +65,10 @@ final class InspectionFindEmailsCommand extends Command
         }
         $this->info(sprintf(
             'Klienci sprawdzeni: %d, z nowymi propozycjami adresu: %d, propozycji: %d, błędy wyszukiwarki: %d.',
-            $customers->count(), $withAny, $found, $errors,
+            $done, $withAny, $found, $errors,
         ));
 
         // same błędy wyszukiwarki = awaria, nie „brak adresów”
-        return $customers->isNotEmpty() && $errors === $customers->count() ? self::FAILURE : self::SUCCESS;
+        return $done > 0 && $errors === $done ? self::FAILURE : self::SUCCESS;
     }
 }
