@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment;
 
-use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -53,6 +53,7 @@ final class ShopHtmlCrawler
     public function __construct(
         private readonly BlockedPageReader $reader,
         private readonly ShopCatalogUrl $catalogUrl,
+        private readonly PublicUrlFetcher $urls = new PublicUrlFetcher,
     ) {}
 
     private bool $preferReader = false;
@@ -286,15 +287,15 @@ final class ShopHtmlCrawler
                 $jobs[] = ['page' => $url, 'url' => $candidate];
             }
         }
-        $live = Http::pool(function (Pool $pool) use ($jobs, $timeout): void {
-            foreach ($jobs as $i => $job) {
-                $pool->as((string) $i)
-                    ->withHeaders($this->browserHeaders())
-                    ->timeout($timeout)
-                    ->connectTimeout(min(5, $timeout))
-                    ->get($job['url']);
-            }
-        });
+        // host z wyników wyszukiwarki, przekierowania dowolne — tylko serwery z adresem publicznym, każdy krok sprawdzony
+        $live = $this->urls->pool(
+            array_column($jobs, 'url'),
+            fn (PendingRequest $request): PendingRequest => $request
+                ->withHeaders($this->browserHeaders())
+                ->timeout($timeout)
+                ->connectTimeout(min(5, $timeout)),
+            PublicUrlFetcher::PAGE_MAX_BYTES,
+        );
         foreach ($jobs as $i => $job) {
             $page = $job['page'];
             if ($out[$page] !== null) {
@@ -397,9 +398,8 @@ final class ShopHtmlCrawler
     {
         $timeout = max(5, $timeout);
         try {
-            $response = Http::withHeaders($this->browserHeaders())
-                ->timeout($timeout)->connectTimeout(min(5, $timeout))
-                ->get($url);
+            $response = $this->urls->get(fn () => Http::withHeaders($this->browserHeaders())
+                ->timeout($timeout)->connectTimeout(min(5, $timeout)), $url, PublicUrlFetcher::PAGE_MAX_BYTES);
         } catch (Throwable $e) {
             Log::info('Shop HTML fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
 
@@ -684,6 +684,7 @@ final class ShopHtmlCrawler
     {
         $path = mb_strtolower(trim((string) (parse_url($url, PHP_URL_PATH) ?? ''), '/'));
         $path = preg_replace('/\.(php|html?)$/i', '', $path) ?? $path;
+
         return in_array($path, [
             'index', 'privacypolicy', 'privacy-policy', 'privacy', 'company', 'contact',
             'about', 'about-us', 'terms', 'cookies', 'productpage',

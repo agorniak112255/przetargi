@@ -62,6 +62,7 @@ final class ManufacturerCatalogPdf
 
     public function __construct(
         private readonly ManufacturerDomainResolver $manufacturers,
+        private readonly PublicUrlFetcher $urls = new PublicUrlFetcher,
     ) {}
 
     /**
@@ -421,10 +422,11 @@ final class ManufacturerCatalogPdf
      */
     private function download(string $url): string
     {
-        $response = Http::timeout(self::DOWNLOAD_TIMEOUT_SECONDS)
+        // adres z konfiguracji, ale przekierowanie serwera producenta dowolne — każdy krok sprawdzony; plik ponad
+        // limit przerwany w trakcie (wyjątek → catalogText zostaje przy starym tekście, jak dotąd przy za dużym pliku)
+        $response = $this->urls->get(fn () => Http::timeout(self::DOWNLOAD_TIMEOUT_SECONDS)
             ->connectTimeout(10)
-            ->withHeaders(['Accept' => 'application/pdf,*/*'])
-            ->get($url);
+            ->withHeaders(['Accept' => 'application/pdf,*/*']), $url, self::MAX_BYTES);
         if (! $response->successful()) {
             Log::info('Katalog producenta: HTTP '.$response->status(), ['url' => $url]);
 

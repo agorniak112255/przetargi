@@ -93,7 +93,10 @@ final class RetailerOnSiteSearch
 
     private const CLERK_KEY_CACHE = 'enrichment:misterworker_clerk_key';
 
-    public function __construct(private readonly ProductSearchIdentity $identity) {}
+    public function __construct(
+        private readonly ProductSearchIdentity $identity,
+        private readonly PublicUrlFetcher $urls = new PublicUrlFetcher,
+    ) {}
 
     /**
      * @return list<array{url: string, title: string, snippet: string}>
@@ -669,6 +672,7 @@ final class RetailerOnSiteSearch
                         return $this->hitFromMisterworkerUrl($next);
                     }
                     $current = $next;
+
                     continue;
                 }
                 if ($response->successful()) {
@@ -862,10 +866,10 @@ final class RetailerOnSiteSearch
     private function fetch(string $url): array
     {
         try {
-            $response = Http::timeout(8)
+            // adres z szablonu sklepu, ale przekierowanie sklepu dowolne — każdy krok sprawdzony i przypięty
+            $response = $this->urls->get(fn () => Http::timeout(8)
                 ->connectTimeout(4)
-                ->withHeaders($this->browserHeaders())
-                ->get($url);
+                ->withHeaders($this->browserHeaders()), $url, PublicUrlFetcher::PAGE_MAX_BYTES);
             if (! $response->successful()) {
                 return ['html' => '', 'url' => ''];
             }

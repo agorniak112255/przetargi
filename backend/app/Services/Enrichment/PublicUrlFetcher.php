@@ -125,20 +125,41 @@ final class PublicUrlFetcher
      */
     public function get(Closure $request, string $url, int $maxBytes): Response
     {
+        $response = null;
+        $this->follow(function (string $url, array $pins) use ($request, $maxBytes, &$response): ?string {
+            try {
+                $response = $this->hop($request(), $pins, $maxBytes)->get($url);
+            } catch (ConnectionException $e) {
+                throw $this->tooLarge($e, $maxBytes) ?? $e;
+            }
+
+            return $this->redirectTarget($response, $url);
+        }, $url);
+
+        /** @var Response $response follow() kończy się tylko po kroku bez przekierowania */
+        return $response;
+    }
+
+    /**
+     * Pętla przekierowań dla dowolnego klienta (Http albo systemowy curl bez -L): każdy krok sprawdzony i przypięty.
+     *
+     * @param  Closure(string, list<string>): ?string  $hop  jeden krok pod adres (nazwa IDN już jako sprawdzony
+     *                                                       punycode) z wpisami CURLOPT_RESOLVE / curl --resolve;
+     *                                                       zwraca bezwzględny adres przekierowania albo null
+     *
+     * @throws BlockedUrlException adres albo cel przekierowania poza siecią publiczną
+     * @throws ConnectionException nieznana nazwa, więcej niż 5 przekierowań
+     */
+    public function follow(Closure $hop, string $url): void
+    {
         for ($redirects = 0; ; $redirects++) {
             $target = $this->resolve($url);
             if (! is_array($target)) {
                 throw $target;
             }
-            $url = $target['url'];
-            try {
-                $response = $this->hop($request(), $target['pins'], $maxBytes)->get($url);
-            } catch (ConnectionException $e) {
-                throw $this->tooLarge($e, $maxBytes) ?? $e;
-            }
-            $next = $this->redirectTarget($response, $url);
+            $next = $hop($target['url'], $target['pins']);
             if ($next === null) {
-                return $response;
+                return;
             }
             if ($redirects >= self::MAX_REDIRECTS) {
                 throw new ConnectionException(self::TOO_MANY_REDIRECTS);
@@ -204,17 +225,21 @@ final class PublicUrlFetcher
             $curl[CURLOPT_RESOLVE] = $pins;
         }
 
-        return $request->withOptions(['allow_redirects' => false, 'curl' => $curl]);
+        // stream => true wybrałby StreamHandler Guzzle, który pomija opcje curl — bez przypięcia i bez limitu
+        return $request->withOptions(['allow_redirects' => false, 'stream' => false, 'curl' => $curl]);
     }
 
     /** Adres następnego kroku albo null, gdy to nie przekierowanie (tak jak Guzzle: 3xx z nagłówkiem Location). */
     private function redirectTarget(mixed $response, string $url): ?string
     {
-        if (! $response instanceof Response || $response->status() < 300 || $response->status() > 399) {
-            return null;
-        }
-        $location = trim($response->header('Location'));
-        if ($location === '') {
+        return $response instanceof Response ? self::nextUrl($url, $response->status(), $response->header('Location')) : null;
+    }
+
+    /** Przekierowanie 3xx z nagłówkiem Location jako adres bezwzględny (względny liczony od $url) albo null. */
+    public static function nextUrl(string $url, int $status, string $location): ?string
+    {
+        $location = trim($location);
+        if ($status < 300 || $status > 399 || $location === '') {
             return null;
         }
         try {

@@ -11,10 +11,14 @@ use App\Services\Campaigns\SmtpHostGuard;
 use App\Services\Enrichment\BlockedPageReader;
 use App\Services\Enrichment\BlockedUrlException;
 use App\Services\Enrichment\CandidateRejection;
+use App\Services\Enrichment\CatalogSitemapIndexer;
+use App\Services\Enrichment\ManufacturerCatalogPdf;
 use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Enrichment\PublicUrlFetcher;
+use App\Services\Enrichment\RetailerOnSiteSearch;
+use App\Services\Enrichment\ShopHtmlCrawler;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
@@ -313,6 +317,146 @@ final class EnrichmentPublicUrlGuardTest extends TestCase
         $this->assertSame([['url' => $page, 'reason' => CandidateRejection::FETCH_FAILED, 'detail' => 'brak odpowiedzi']], $fetched['rejected']);
         $this->assertStringContainsString('Could not resolve host', $downloader->lastFailures()[$image] ?? '');
         $this->assertSame([], $downloader->lastRetryLaterUrls());
+    }
+
+    public function test_follow_pins_each_hop_and_stops_before_private_redirect(): void
+    {
+        $hops = [];
+        try {
+            (new PublicUrlFetcher)->follow(function (string $url, array $pins) use (&$hops): ?string {
+                $hops[] = [$url, $pins];
+
+                return $url === 'https://shop.example.com/robots.txt' ? 'https://www.shop.example.com/robots.txt' : 'http://10.0.0.5/robots.txt';
+            }, 'https://shop.example.com/robots.txt');
+            $this->fail('Przekierowanie na adres prywatny przeszło.');
+        } catch (BlockedUrlException $e) {
+            $this->assertSame('http://10.0.0.5/robots.txt', $e->url);
+        }
+        $this->assertSame([
+            ['https://shop.example.com/robots.txt', ['shop.example.com:80:'.self::PUBLIC_IP, 'shop.example.com:443:'.self::PUBLIC_IP]],
+            ['https://www.shop.example.com/robots.txt', ['www.shop.example.com:80:'.self::PUBLIC_IP, 'www.shop.example.com:443:'.self::PUBLIC_IP]],
+        ], $hops);
+    }
+
+    public function test_shop_crawler_does_not_follow_redirects_into_private_network(): void
+    {
+        // Http::fake dopisuje „*” na początku wzorca — czytnik (r.jina.ai/<adres sklepu>) musi stać przed sklepem
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response('', 404),
+            'https://www.sklep.example.com/*' => Http::response('', 302, ['Location' => 'http://127.0.0.1/server-status']),
+            'https://sklep.example.com/*' => Http::response('', 301, ['Location' => 'http://169.254.169.254/latest/meta-data/']),
+            '*' => Http::response('', 404),
+        ]);
+
+        $rows = app(ShopHtmlCrawler::class)->crawl('sklep.example.com', 10, microtime(true) + 30, static fn (string $text) => null);
+
+        $this->assertSame([], $rows);
+        Http::assertSent(static fn (Request $r): bool => $r->url() === 'https://www.sklep.example.com/');
+        Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), '127.0.0.1') || str_contains($r->url(), '169.254'));
+    }
+
+    public function test_shop_crawler_reads_page_behind_public_redirect(): void
+    {
+        $html = '<!doctype html><html><head><title>Sklep</title></head><body>'
+            .'<a href="/productpage/ABC-123">Rękawice ABC-123</a>'.str_repeat('<p>Odzież robocza</p>', 20).'</body></html>';
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response('', 404),
+            'https://www.sklep.example.com/' => Http::response('', 301, ['Location' => 'https://sklep.example.com/']),
+            'https://sklep.example.com/' => Http::response($html, 200, ['Content-Type' => 'text/html']),
+            '*' => Http::response('', 404),
+        ]);
+
+        $rows = app(ShopHtmlCrawler::class)->crawl('sklep.example.com', 10, microtime(true) + 30, static fn (string $text) => null);
+
+        // strona główna z przekierowania www → apex przeczytana; link względny liczony od adresu startowego, jak dotąd
+        $this->assertContains('https://www.sklep.example.com/productpage/ABC-123', array_column($rows, 'url'));
+        Http::assertSent(static fn (Request $r): bool => $r->url() === 'https://sklep.example.com/');
+    }
+
+    public function test_retailer_search_does_not_follow_redirect_into_private_network(): void
+    {
+        Http::fake([
+            'https://bpbhp.pl/catalogsearch/*' => Http::response('', 302, ['Location' => 'http://169.254.169.254/latest/meta-data/']),
+            'https://optimumbhp.pl/produkt/abc-123.html' => Http::response('<html>karta ABC-123</html>', 200),
+            'https://optimumbhp.pl/search*' => Http::response('', 302, ['Location' => 'https://optimumbhp.pl/produkt/abc-123.html']),
+            '*' => Http::response('nie powinno paść', 500),
+        ]);
+        $search = app(RetailerOnSiteSearch::class);
+        $fetch = (new \ReflectionMethod($search, 'fetch'))->getClosure($search);
+
+        $this->assertSame(['html' => '', 'url' => ''], $fetch('https://bpbhp.pl/catalogsearch/result/?q=ABC-123'));
+        Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), '169.254'));
+        // przekierowanie w obrębie publicznego sklepu — jak dotąd
+        $page = $fetch('https://optimumbhp.pl/search?controller=search&s=ABC-123');
+        $this->assertSame('<html>karta ABC-123</html>', $page['html']);
+        // adres końcowy dla productPageFromRedirect — jak dotąd
+        $this->assertSame('https://optimumbhp.pl/produkt/abc-123.html', $page['url']);
+    }
+
+    public function test_manufacturer_catalog_redirect_into_private_network_is_not_downloaded(): void
+    {
+        Http::fake([
+            'https://www.producent.example.com/katalog.pdf' => Http::response('', 302, ['Location' => 'http://10.0.0.7/katalog.pdf']),
+            '*' => Http::response('%PDF-1.4 nie powinno paść', 200, ['Content-Type' => 'application/pdf']),
+        ]);
+        $catalog = app(ManufacturerCatalogPdf::class);
+        $download = (new \ReflectionMethod($catalog, 'download'))->getClosure($catalog);
+
+        try {
+            $download('https://www.producent.example.com/katalog.pdf');
+            $this->fail('Przekierowanie na adres prywatny przeszło.');
+        } catch (BlockedUrlException) {
+        }
+        Http::assertSentCount(1);
+        Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), '10.0.0.7'));
+    }
+
+    public function test_sitemap_index_does_not_reach_private_network(): void
+    {
+        // robots.txt i indeks map podają adresy na dowolny serwer — prywatne pomijamy, publiczne czytamy jak dotąd
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response('', 404),
+            'https://sklep.example.com/robots.txt' => Http::response(
+                "User-agent: *\nSitemap: http://169.254.169.254/latest/meta-data/sitemap.xml\n"
+                ."Sitemap: https://sklep.example.com/sitemap.xml\nSitemap: https://sklep.example.com/sitemap-old.xml\n",
+                200
+            ),
+            'https://sklep.example.com/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><sitemapindex>'
+                .'<sitemap><loc>https://intranet.example.com/sitemap-products.xml</loc></sitemap>'
+                .'<sitemap><loc>https://sklep.example.com/sitemap-products.xml</loc></sitemap>'
+                .'</sitemapindex>',
+                200
+            ),
+            'https://sklep.example.com/sitemap-products.xml' => Http::response(
+                '<?xml version="1.0"?><urlset><url><loc>https://sklep.example.com/produkt/rekawice-abc-123</loc></url></urlset>',
+                200
+            ),
+            'https://sklep.example.com/sitemap-old.xml' => Http::response('', 302, ['Location' => 'http://localhost/sitemap.xml']),
+            '*' => Http::response('<!DOCTYPE html><html><head><title>404</title></head></html>', 404),
+        ]);
+
+        $result = app(CatalogSitemapIndexer::class)->index('sklep.example.com', 1000, 60);
+
+        $this->assertGreaterThanOrEqual(1, $result['saved']);
+        $this->assertDatabaseHas('catalog_pages', ['url' => 'https://sklep.example.com/produkt/rekawice-abc-123']);
+        Http::assertSent(static fn (Request $r): bool => $r->url() === 'https://sklep.example.com/sitemap-old.xml');
+        Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), '169.254')
+            || str_contains($r->url(), 'intranet.example.com')
+            || str_contains($r->url(), 'localhost'));
+    }
+
+    public function test_robots_redirect_to_private_address_is_not_followed_nor_retried(): void
+    {
+        Http::fake([
+            'https://sklep.example.com/robots.txt' => Http::response('', 302, ['Location' => 'http://10.0.0.5/robots.txt']),
+            '*' => Http::response("Sitemap: http://10.0.0.5/sitemap.xml\n", 200),
+        ]);
+        $indexer = app(CatalogSitemapIndexer::class);
+        $fetch = (new \ReflectionMethod($indexer, 'fetch'))->getClosure($indexer);
+
+        $this->assertNull($fetch('https://sklep.example.com/robots.txt', 8, 2));
+        Http::assertSentCount(1);
     }
 
     private function product(): Product

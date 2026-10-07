@@ -6,11 +6,15 @@ namespace App\Services\Enrichment;
 
 use App\Models\CatalogPage;
 use App\Support\Utf8Trim;
+use GuzzleHttp\Psr7\Utils;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 use Throwable;
@@ -30,6 +34,15 @@ final class CatalogSitemapIndexer
 
     /** Limit pobrania przez curl.exe, gdy Guzzle dostaje 403 od WAF. */
     private const CURL_MAX_BYTES = 20971520;
+
+    /**
+     * Limit jednej mapy pobieranej przez Guzzle — w bajtach z sieci i po rozpakowaniu gzip. Specyfikacja sitemap: do
+     * 50 MB; dotąd bez limitu (strumień). Ponad limit czytamy to, co doszło.
+     */
+    private const SITEMAP_MAX_BYTES = 100_000_000;
+
+    /** Zapas na czytanie pobranej mapy, gdy pobranie skończyło się na samym deadline. */
+    private const SITEMAP_PARSE_GRACE = 30;
 
     /** Jedna mapa produktów bywa kilka MB — 45 s ucinało ją w połowie (~1100 z 3000+). */
     private const SITEMAP_FILE_TIMEOUT = 180;
@@ -163,6 +176,7 @@ final class CatalogSitemapIndexer
         private readonly CatalogPageManufacturer $pageManufacturer,
         private readonly ShopHtmlCrawler $shopCrawler,
         private readonly ShopCatalogUrl $catalogUrl,
+        private readonly PublicUrlFetcher $urls = new PublicUrlFetcher,
     ) {}
 
     /**
@@ -853,7 +867,9 @@ final class CatalogSitemapIndexer
     }
 
     /**
-     * Sitemapy sklepów mają nawet setki MB — czytamy je kawałkami, żeby nie zjeść pamięci.
+     * Sitemapy sklepów mają nawet setki MB — pobieramy je do pliku tymczasowego i czytamy kawałkami, żeby nie zjeść
+     * pamięci. Nie strumieniem Guzzle: przy stream => true pracuje StreamHandler, który pomija opcje curl — adres
+     * serwera nie byłby przypięty do sprawdzonego (PublicUrlFetcher), a limit bajtów by nie działał.
      *
      * @param  callable(string, string=): bool  $onLocation  false przerywa czytanie
      */
@@ -870,44 +886,122 @@ final class CatalogSitemapIndexer
             && $this->streamHtmlCatalogFromCurl($url, $onLocation, $timeout)) {
             return true;
         }
+        // plik na każdy krok przekierowania, kasowane na końcu (otwartego pliku Windows nie skasuje)
+        $sinks = [];
+        $status = null;
+        $contentType = '';
+        $response = null;
+        $body = null;
         try {
-            $response = Http::withHeaders([
-                'User-Agent' => self::USER_AGENT,
-                'Accept' => 'application/xml,text/xml,text/plain,*/*',
-                'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
-            ])->timeout($timeout)->connectTimeout(8)
-                // read_timeout działa tylko na StreamHandlerze, więc pod cURL-em
-                // zrywamy transfer wolniejszy niż 1 kB/s przez 20 s
-                ->withOptions([
-                    'stream' => true,
-                    'read_timeout' => min(20, $timeout),
-                    'curl' => $this->curlResolveV4() + [
-                        CURLOPT_LOW_SPEED_LIMIT => 1024,
-                        CURLOPT_LOW_SPEED_TIME => min(20, $timeout),
-                    ],
-                ])
-                ->get($url);
-        } catch (Throwable $e) {
-            Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
+            try {
+                $response = $this->urls->get(function () use ($timeout, &$sinks, &$status, &$contentType): PendingRequest {
+                    $status = null;
+                    $contentType = '';
+                    $options = [
+                        // gzip rozpakowuje readLocations, z limitem po rozpakowaniu — curl liczyłby bajty z sieci
+                        'decode_content' => false,
+                        // nagłówki przed treścią: odpowiedzi błędnej ani zdjęcia w ogóle nie ściągamy
+                        'on_headers' => function (ResponseInterface $headers) use (&$status, &$contentType): void {
+                            $status = $headers->getStatusCode();
+                            $contentType = mb_strtolower($headers->getHeaderLine('Content-Type'));
+                            if ($status < 200 || $status >= 400 || ($status < 300 && $this->isMediaType($contentType))) {
+                                throw new RuntimeException('Mapa pominięta: HTTP '.$status.' '.$contentType);
+                            }
+                        },
+                        // zrywamy transfer wolniejszy niż 1 kB/s przez 20 s
+                        'curl' => $this->curlResolveV4() + [
+                            CURLOPT_LOW_SPEED_LIMIT => 1024,
+                            CURLOPT_LOW_SPEED_TIME => min(20, $timeout),
+                        ],
+                    ];
+                    $sink = tempnam(sys_get_temp_dir(), 'smap');
+                    if ($sink !== false) {
+                        $sinks[] = $sink;
+                        $options['sink'] = $sink;
+                    }
 
-            return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
+                    return Http::withHeaders([
+                        'User-Agent' => self::USER_AGENT,
+                        'Accept' => 'application/xml,text/xml,text/plain,*/*',
+                        'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
+                        'Accept-Encoding' => 'gzip',
+                    ])->timeout($timeout)->connectTimeout(8)->withOptions($options);
+                }, $url, self::SITEMAP_MAX_BYTES);
+            } catch (BlockedUrlException $e) {
+                // adres albo przekierowanie do sieci wewnętrznej — odmowa stała, systemowy curl też nie
+                Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
+
+                return false;
+            } catch (Throwable $e) {
+                $ok = $status !== null && $status >= 200 && $status < 300;
+                if ($ok && ! $this->isMediaType($contentType) && $sinks !== []) {
+                    // timeout, limit albo zerwanie w trakcie treści: czytamy to, co doszło (jak dotąd strumień)
+                    Log::info('Sitemap download cut', ['url' => $url, 'error' => $e->getMessage()]);
+                    $handle = @fopen((string) end($sinks), 'rb');
+                    if ($handle === false) {
+                        return false;
+                    }
+                    $body = Utils::streamFor($handle);
+
+                    return $this->readLocations($body, $url, $onLocation, $deadline, $timeout, $allowCurl);
+                }
+                if ($ok) {
+                    // zdjęcie, film albo czcionka pod adresem mapy
+                    return false;
+                }
+                if ($status !== null && $status >= 400) {
+                    $this->lastStreamStatus = $status;
+                } else {
+                    Log::info('Sitemap stream failed', ['url' => $url, 'error' => $e->getMessage()]);
+                }
+
+                return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
+            }
+
+            if (! $response->successful()) {
+                $this->lastStreamStatus = $response->status();
+
+                return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
+            }
+            // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem (w testach bez on_headers)
+            if ($this->isMediaType(mb_strtolower((string) $response->header('Content-Type')))) {
+                return false;
+            }
+
+            $body = $response->toPsrResponse()->getBody();
+            if (! $body->isReadable()) {
+                return false;
+            }
+
+            return $this->readLocations($body, $url, $onLocation, $deadline, $timeout, $allowCurl);
+        } finally {
+            // zamykamy tylko własny plik (atrapy testów współdzielą strumień odpowiedzi między żądaniami)
+            if ($body !== null && in_array($body->getMetadata('uri'), $sinks, true)) {
+                $body->close();
+            }
+            $response = null;
+            foreach ($sinks as $sink) {
+                @unlink($sink);
+            }
         }
+    }
 
-        if (! $response->successful()) {
-            $this->lastStreamStatus = $response->status();
+    /** Zdjęcie, film albo czcionka — nie mapa. */
+    private function isMediaType(string $contentType): bool
+    {
+        return str_contains($contentType, 'image/') || str_contains($contentType, 'video/') || str_contains($contentType, 'font/');
+    }
 
-            return $allowCurl && $this->streamFromCurl($url, $onLocation, $timeout);
-        }
-        // sklepy z soft-404 oddają całą stronę z kodem 200 pod każdym adresem —
-        // bez tego pobralibyśmy 130 kB HTML-a dla każdej zgadywanej ścieżki
-        $contentType = mb_strtolower((string) $response->header('Content-Type'));
-        if (str_contains($contentType, 'image/') || str_contains($contentType, 'video/') || str_contains($contentType, 'font/')) {
-            return false;
-        }
-
-        $body = $response->toPsrResponse()->getBody();
-        if (! $body->isReadable()) {
-            return false;
+    /**
+     * Pobrana mapa kawałkami. Pobranie kończy się najpóźniej na deadline, więc czytanie dostaje chwilę zapasu —
+     * inaczej mapa ściągana do ostatniej sekundy nie dałaby ani jednego adresu.
+     *
+     * @param  callable(string, string=): bool  $onLocation
+     */
+    private function readLocations(StreamInterface $body, string $url, callable $onLocation, float $deadline, int $timeout, bool $allowCurl): bool
+    {
+        if ($deadline > 0.0) {
+            $deadline = max($deadline, microtime(true) + self::SITEMAP_PARSE_GRACE);
         }
         if ($body->isSeekable()) {
             $body->rewind();
@@ -915,6 +1009,7 @@ final class CatalogSitemapIndexer
         $buffer = '';
         $inflate = null;
         $first = true;
+        $decoded = 0;
 
         while (! $body->eof()) {
             if ($deadline > 0.0 && microtime(true) >= $deadline) {
@@ -932,13 +1027,19 @@ final class CatalogSitemapIndexer
             }
             if ($first) {
                 $first = false;
-                // .xml.gz bywa serwowane bez nagłówka Content-Encoding
+                // .xml.gz bywa serwowane bez nagłówka Content-Encoding (a z nim — curl go teraz nie rozpakowuje)
                 if (str_starts_with($chunk, "\x1f\x8b")) {
                     $inflate = inflate_init(ZLIB_ENCODING_GZIP);
                 }
             }
             if ($inflate !== false && $inflate !== null) {
                 $chunk = (string) inflate_add($inflate, $chunk);
+            }
+            // limit także po rozpakowaniu (bomba gzip)
+            $decoded += strlen($chunk);
+            if ($decoded > self::SITEMAP_MAX_BYTES) {
+                Log::info('Sitemap larger than limit — reading stopped', ['url' => $url]);
+                break;
             }
             if ($buffer === '' && $this->looksLikeHtml($chunk)) {
                 $html = $chunk;
@@ -1047,44 +1148,94 @@ final class CatalogSitemapIndexer
         }
         $timeout = max(5, $timeout);
         $tmp = tempnam(sys_get_temp_dir(), 'smap');
-        if ($tmp === false) {
+        $head = tempnam(sys_get_temp_dir(), 'smah');
+        if ($tmp === false || $head === false) {
+            foreach ([$tmp, $head] as $file) {
+                if ($file !== false) {
+                    @unlink($file);
+                }
+            }
+
             return null;
         }
 
-        $process = new Process([
-            $binary,
-            '-sL',
-            '--ipv4',
-            '--max-time', (string) $timeout,
-            '--connect-timeout', (string) max(2, min(5, $timeout)),
-            '--compressed',
-            '-A', self::USER_AGENT,
-            '-H', $accept,
-            '-H', 'Accept-Language: pl-PL,pl;q=0.9,en;q=0.8',
-            '-o', $tmp,
-            $url,
-        ]);
-        $process->setTimeout($timeout + 5);
-
+        $started = microtime(true);
+        $ok = false;
         try {
-            $process->run();
-        } catch (Throwable $e) {
-            @unlink($tmp);
-            Log::info('Sitemap curl failed', ['url' => $url, 'error' => $e->getMessage()]);
+            // bez -L: przekierowania prowadzi PublicUrlFetcher — każdy krok tylko na serwer z adresem publicznym,
+            // połączenie przypięte do sprawdzonego adresu (--resolve); limit czasu wspólny dla wszystkich kroków, jak przy -L
+            $this->urls->follow(function (string $hopUrl, array $pins) use ($binary, $timeout, $accept, $tmp, $head, $started, &$ok): ?string {
+                $ok = false;
+                $left = $timeout - (int) floor(microtime(true) - $started);
+                if ($left < 1) {
+                    return null;
+                }
+                $command = [
+                    $binary,
+                    // -q pierwsze: bez .curlrc (mógłby włączyć location); bez proxy (nazwę rozwiązałby serwer proxy)
+                    '-q',
+                    '-s',
+                    '--proto', '=http,https',
+                    '--noproxy', '*',
+                    '--ipv4',
+                    '--max-time', (string) $left,
+                    '--connect-timeout', (string) max(2, min(5, $left)),
+                    '--max-filesize', (string) self::CURL_MAX_BYTES,
+                    '--compressed',
+                    '-A', self::USER_AGENT,
+                    '-H', $accept,
+                    '-H', 'Accept-Language: pl-PL,pl;q=0.9,en;q=0.8',
+                    '-D', $head,
+                    '-o', $tmp,
+                ];
+                foreach ($pins as $pin) {
+                    $command[] = '--resolve';
+                    $command[] = $pin;
+                }
+                $command[] = $hopUrl;
+                $process = new Process($command);
+                $process->setTimeout($left + 5);
+                $process->run();
+                if (! $process->isSuccessful()) {
+                    return null;
+                }
+                $ok = true;
+                [$status, $location] = $this->curlResponseHead((string) @file_get_contents($head));
 
-            return null;
+                return PublicUrlFetcher::nextUrl($hopUrl, $status, $location);
+            }, $url);
+        } catch (Throwable $e) {
+            $ok = false;
+            Log::info('Sitemap curl failed', ['url' => $url, 'error' => $e->getMessage()]);
         }
 
         $size = is_file($tmp) ? (int) filesize($tmp) : 0;
-        if (! $process->isSuccessful() || $size < 1 || $size > self::CURL_MAX_BYTES) {
-            @unlink($tmp);
-
-            return null;
-        }
-        $body = (string) file_get_contents($tmp);
+        $body = $ok && $size >= 1 && $size <= self::CURL_MAX_BYTES ? (string) file_get_contents($tmp) : '';
         @unlink($tmp);
+        @unlink($head);
 
         return $body !== '' ? $body : null;
+    }
+
+    /**
+     * Status i Location z nagłówków zapisanych przez curl -D (ostatnia odpowiedź w pliku).
+     *
+     * @return array{int, string}
+     */
+    private function curlResponseHead(string $raw): array
+    {
+        $status = 0;
+        $location = '';
+        foreach (preg_split('/\r?\n/', $raw) ?: [] as $line) {
+            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m) === 1) {
+                $status = (int) $m[1];
+                $location = '';
+            } elseif (preg_match('/^location:\s*(.+)$/i', $line, $m) === 1) {
+                $location = trim($m[1]);
+            }
+        }
+
+        return [$status, $location];
     }
 
     /**
@@ -1778,13 +1929,12 @@ final class CatalogSitemapIndexer
             return null;
         }
         try {
-            $response = Http::withHeaders([
+            $response = $this->urls->get(fn () => Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
                 'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
                 'Accept-Language' => 'pl-PL,pl;q=0.9,en;q=0.8',
             ])->timeout($timeout)->connectTimeout(min(5, $timeout))
-                ->withOptions(['curl' => $this->curlResolveV4()])
-                ->get($url);
+                ->withOptions(['curl' => $this->curlResolveV4()]), $url, PublicUrlFetcher::PAGE_MAX_BYTES);
         } catch (Throwable $e) {
             Log::info('Catalog HTML fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
 
@@ -2527,12 +2677,17 @@ final class CatalogSitemapIndexer
         $tries = max(1, $attempts);
         for ($attempt = 1; $attempt <= $tries; $attempt++) {
             try {
-                $response = Http::withHeaders([
+                // host z wyników wyszukiwarki, przekierowania dowolne — tylko serwery z adresem publicznym
+                $response = $this->urls->get(fn () => Http::withHeaders([
                     'User-Agent' => self::USER_AGENT,
                     'Accept' => 'application/xml,text/xml,text/plain,*/*',
                 ])->timeout(max(5, $timeout))->connectTimeout(8)
-                    ->withOptions(['curl' => $this->curlResolveV4()])
-                    ->get($url);
+                    ->withOptions(['curl' => $this->curlResolveV4()]), $url, PublicUrlFetcher::PAGE_MAX_BYTES);
+            } catch (BlockedUrlException $e) {
+                // odmowa stała — bez ponawiania
+                Log::info('Sitemap fetch failed', ['url' => $url, 'error' => $e->getMessage()]);
+
+                return null;
             } catch (Throwable $e) {
                 $lastError = $e->getMessage();
                 if ($attempt < $tries) {
