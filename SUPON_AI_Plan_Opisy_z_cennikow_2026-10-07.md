@@ -199,7 +199,7 @@ w zapytaniach, teksty z dysku po jednym. Model lokalny: najwyżej 4 zapytania na
 4. **Opis wspólny dla modelu** (wszystkie rozmiary/wymiary); rozmiar, kolor, EAN dopisuje kod z cennika.
 5. **Przegląd: handlowcy, kilkanaście kart dziennie** — lista „do przeglądu” potrzebna od etapu 1, nie od 3.
 6. Kolejność: najpierw naprawy (etapy 1–2), potem pełne ponowne pobranie cenników z wieloma błędami w całości.
-   Pomiar „przed” dla Coby: `Coba_karty_z_cudzych_stron_2026-10-07.csv` (23 karty z cudzej strony, 57 ze zdjęciem
+   Pomiar „przed” dla Coby: `SUPON_AI_Pomiar_Coba_przed_2026-10-07.csv` (23 karty z cudzej strony, 57 ze zdjęciem
    innego koloru, 14 bez źródła) — po pełnym pobraniu porównanie na tych samych kartach.
 
 ## 5. Stan
