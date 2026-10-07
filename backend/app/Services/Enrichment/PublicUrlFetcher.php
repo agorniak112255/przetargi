@@ -8,11 +8,13 @@ use App\Services\Campaigns\SmtpHostGuard;
 use Closure;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Psr\Http\Message\StreamInterface;
 use RuntimeException;
 use Throwable;
 
@@ -21,7 +23,8 @@ use Throwable;
  * tylko http(s) na portach 80/443 i serwery, których wszystkie adresy są publiczne (SmtpHostGuard::publicIps).
  * Połączenie przypięte do sprawdzonego adresu (CURLOPT_RESOLVE), więc drugie zapytanie DNS nie podmieni go na adres
  * wewnętrzny. Przekierowania prowadzone ręcznie, każdy krok sprawdzany i przypinany od nowa — allow_redirects Guzzle
- * poszedłby pod nowy serwer bez sprawdzenia. Twardy limit bajtów w trakcie pobierania. Wzorzec: CustomerEmailFinder
+ * poszedłby pod nowy serwer bez sprawdzenia. Twardy limit bajtów w trakcie pobierania i po rozpakowaniu gzip/deflate
+ * (bomba gzip). Wzorzec: CustomerEmailFinder
  * (94a066b); tu przekierowanie na inny serwer zostaje (sklep → www.sklep, CDN zdjęć), byle publiczny.
  */
 final class PublicUrlFetcher
@@ -121,14 +124,16 @@ final class PublicUrlFetcher
      *
      * @throws BlockedUrlException adres albo cel przekierowania poza siecią publiczną
      * @throws ConnectionException brak połączenia, nieznana nazwa, timeout, więcej niż 5 przekierowań
-     * @throws RuntimeException odpowiedź większa niż $maxBytes
+     * @throws RuntimeException odpowiedź większa niż $maxBytes (z sieci albo po rozpakowaniu), treść uszkodzona albo
+     *                          w kodowaniu innym niż gzip/deflate
      */
     public function get(Closure $request, string $url, int $maxBytes): Response
     {
         $response = null;
-        $this->follow(function (string $url, array $pins) use ($request, $maxBytes, &$response): ?string {
+        $decode = true;
+        $this->follow(function (string $url, array $pins) use ($request, $maxBytes, &$response, &$decode): ?string {
             try {
-                $response = $this->hop($request(), $pins, $maxBytes)->get($url);
+                $response = $this->hop($request(), $pins, $maxBytes, $decode)->get($url);
             } catch (ConnectionException $e) {
                 throw $this->tooLarge($e, $maxBytes) ?? $e;
             }
@@ -137,7 +142,12 @@ final class PublicUrlFetcher
         }, $url);
 
         /** @var Response $response follow() kończy się tylko po kroku bez przekierowania */
-        return $response;
+        $final = $this->finish($response, $decode, $maxBytes);
+        if ($final instanceof Throwable) {
+            throw $final;
+        }
+
+        return $final;
     }
 
     /**
@@ -170,7 +180,8 @@ final class PublicUrlFetcher
 
     /**
      * Wiele adresów naraz (Http::pool), przekierowania kolejnymi rundami puli. Wynik jak z Http::pool: odpowiedź albo
-     * wyjątek — BlockedUrlException dla adresu poza siecią publiczną, ostatnia odpowiedź 3xx po pięciu przekierowaniach.
+     * wyjątek — BlockedUrlException dla adresu poza siecią publiczną, RuntimeException jak w get() (limit, kodowanie),
+     * ostatnia odpowiedź 3xx po pięciu przekierowaniach.
      *
      * @param  array<int|string, string>  $urls  klucz => adres
      * @param  Closure(PendingRequest, int|string): PendingRequest  $configure  nagłówki i czasy dla klucza (każdy krok)
@@ -191,9 +202,10 @@ final class PublicUrlFetcher
                     $pins[$key] = $target['pins'];
                 }
             }
-            $responses = $pins === [] ? [] : Http::pool(function (Pool $pool) use ($pins, $current, $configure, $maxBytes): void {
+            $decode = [];
+            $responses = $pins === [] ? [] : Http::pool(function (Pool $pool) use ($pins, $current, $configure, $maxBytes, &$decode): void {
                 foreach ($pins as $key => $pin) {
-                    $this->hop($configure($pool->as((string) $key), $key), $pin, $maxBytes)->get($current[$key]);
+                    $this->hop($configure($pool->as((string) $key), $key), $pin, $maxBytes, $decode[$key])->get($current[$key]);
                 }
             });
             $next = [];
@@ -205,7 +217,9 @@ final class PublicUrlFetcher
 
                     continue;
                 }
-                $out[$key] = $response instanceof ConnectionException ? ($this->tooLarge($response, $maxBytes) ?? $response) : $response;
+                $out[$key] = $response instanceof ConnectionException
+                    ? ($this->tooLarge($response, $maxBytes) ?? $response)
+                    : $this->finish($response, $decode[$key] ?? true, $maxBytes);
             }
             $current = $next;
         }
@@ -213,8 +227,13 @@ final class PublicUrlFetcher
         return array_replace(array_intersect_key($urls, $out), $out);
     }
 
-    private function hop(PendingRequest $request, array $pins, int $maxBytes): PendingRequest
+    /**
+     * @param  bool|null  $decode  wynik: czy treść rozpakować po pobraniu (finish) — tak, chyba że wywołujący sam wyłączył
+     *                             decode_content (mapy stron rozpakowują same, strumieniem)
+     */
+    private function hop(PendingRequest $request, array $pins, int $maxBytes, ?bool &$decode = null): PendingRequest
     {
+        $decode = ($request->getOptions()['decode_content'] ?? true) !== false;
         $curl = [
             // twardy limit rozmiaru: deklarowany (Content-Length) i faktycznie pobrany
             CURLOPT_MAXFILESIZE => $maxBytes,
@@ -225,8 +244,117 @@ final class PublicUrlFetcher
             $curl[CURLOPT_RESOLVE] = $pins;
         }
 
-        // stream => true wybrałby StreamHandler Guzzle, który pomija opcje curl — bez przypięcia i bez limitu
-        return $request->withOptions(['allow_redirects' => false, 'stream' => false, 'curl' => $curl]);
+        // stream => true wybrałby StreamHandler Guzzle, który pomija opcje curl — bez przypięcia i bez limitu.
+        // decode_content => false: curl rozpakowałby gzip sam, a limit wyżej liczy bajty z sieci — bomba gzip dałaby
+        // gigabajty w pamięci. Rozpakowuje finish(), z tym samym limitem po rozpakowaniu. Na łączu bez zmian: Guzzle
+        // przy decode_content i tak wycinał nagłówek Accept-Encoding.
+        return $request->withOptions(['allow_redirects' => false, 'stream' => false, 'decode_content' => false, 'curl' => $curl]);
+    }
+
+    /**
+     * Odpowiedź ostatniego kroku: ucięta przez limit = wyjątek (pula oddaje ją jako zwykłą odpowiedź z kodem 200 i
+     * częścią treści — błąd curla zna tylko TransferStats), treść gzip/deflate rozpakowana z limitem.
+     */
+    private function finish(Response|Throwable $response, bool $decode, int $maxBytes): Response|Throwable
+    {
+        if (! $response instanceof Response) {
+            return $response;
+        }
+        if (in_array($response->transferStats?->getHandlerErrorData(), [CURLE_ABORTED_BY_CALLBACK, CURLE_FILESIZE_EXCEEDED], true)) {
+            return $this->limitExceeded($maxBytes);
+        }
+        if (! $decode) {
+            return $response;
+        }
+        try {
+            return $this->decoded($response, $maxBytes);
+        } catch (RuntimeException $e) {
+            return $e;
+        }
+    }
+
+    /**
+     * Treść rozpakowana jak dotąd przez curl (Content-Encoding gzip, x-gzip, deflate; kilka kodowań od ostatniego),
+     * nagłówki jak po rozpakowaniu w Guzzle (x-encoded-content-encoding, x-encoded-content-length).
+     *
+     * @throws RuntimeException rozpakowana treść większa niż $maxBytes, uszkodzona albo w nieobsługiwanym kodowaniu
+     */
+    private function decoded(Response $response, int $maxBytes): Response
+    {
+        $psr = $response->toPsrResponse();
+        $encoding = $psr->getHeaderLine('Content-Encoding');
+        $codings = array_values(array_filter(
+            array_map(static fn (string $c): string => strtolower(trim($c)), explode(',', $encoding)),
+            static fn (string $c): bool => $c !== '' && $c !== 'identity',
+        ));
+        if ($codings === []) {
+            return $response;
+        }
+        $body = $psr->getBody();
+        foreach (array_reverse($codings) as $coding) {
+            $body = $this->inflate($body, $coding, $maxBytes);
+        }
+        $psr = $psr->withoutHeader('Content-Encoding')->withHeader('x-encoded-content-encoding', $encoding)->withBody($body);
+        if ($psr->hasHeader('Content-Length')) {
+            // Guzzle podmieniał długość przy nagłówkach, gdy treści jeszcze nie było — w praktyce ją usuwał
+            $psr = $psr->withHeader('x-encoded-content-length', $psr->getHeaderLine('Content-Length'))->withoutHeader('Content-Length');
+        }
+        $decoded = new Response($psr);
+        $decoded->cookies = $response->cookies;
+        $decoded->transferStats = $response->transferStats;
+
+        return $decoded;
+    }
+
+    /**
+     * Rozpakowanie kawałkami po 1 kB do php://temp (jak sink Guzzle; ponad 2 MB idzie na dysk) — kawałek gzip rozpręża
+     * się najwyżej ~1000 razy, więc w pamięci naraz ~1 MB treści (serwer CLI ma 128 MB). Ucięty strumień: to, co
+     * doszło (jak curl).
+     */
+    private function inflate(StreamInterface $body, string $coding, int $maxBytes): StreamInterface
+    {
+        if (! in_array($coding, ['gzip', 'x-gzip', 'deflate'], true)) {
+            throw new RuntimeException('Nieobsługiwane kodowanie treści: '.$coding.'.');
+        }
+        if ($body->isSeekable()) {
+            $body->rewind();
+        }
+        $out = Utils::streamFor(Utils::tryFopen('php://temp', 'w+'));
+        $context = null;
+        $size = 0;
+        while (! $body->eof()) {
+            $chunk = $body->read(1024);
+            if ($chunk === '') {
+                break;
+            }
+            if ($context === null) {
+                // „deflate” w HTTP to zlib, ale część serwerów wysyła surowy deflate — curl przyjmuje oba
+                $mode = $coding !== 'deflate' ? ZLIB_ENCODING_GZIP
+                    : (strlen($chunk) >= 2 && (ord($chunk[0]) & 0x0F) === 8 && ((ord($chunk[0]) << 8) | ord($chunk[1])) % 31 === 0
+                        ? ZLIB_ENCODING_DEFLATE
+                        : ZLIB_ENCODING_RAW);
+                $context = inflate_init($mode);
+                if ($context === false) {
+                    throw new RuntimeException('Nie da się rozpakować treści '.$coding.'.');
+                }
+            }
+            $plain = @inflate_add($context, $chunk);
+            if ($plain === false) {
+                throw new RuntimeException('Uszkodzona treść '.$coding.'.');
+            }
+            $size += strlen($plain);
+            if ($size > $maxBytes) {
+                throw $this->limitExceeded($maxBytes);
+            }
+            $out->write($plain);
+            if (inflate_get_status($context) === ZLIB_STREAM_END) {
+                // śmieci za końcem strumienia pomijamy
+                break;
+            }
+        }
+        $out->rewind();
+
+        return $out;
     }
 
     /** Adres następnego kroku albo null, gdy to nie przekierowanie (tak jak Guzzle: 3xx z nagłówkiem Location). */
@@ -252,8 +380,11 @@ final class PublicUrlFetcher
     /** Przerwane przez limit (curl 63: Content-Length ponad limit, 42: przerwane w trakcie) — odmowa stała. */
     private function tooLarge(ConnectionException $e, int $maxBytes): ?RuntimeException
     {
-        return preg_match('/cURL error (?:42|63):/', $e->getMessage()) === 1
-            ? new RuntimeException('Plik większy niż '.round($maxBytes / 1_000_000, 1).' MB — przerwane.', 0, $e)
-            : null;
+        return preg_match('/cURL error (?:42|63):/', $e->getMessage()) === 1 ? $this->limitExceeded($maxBytes, $e) : null;
+    }
+
+    private function limitExceeded(int $maxBytes, ?Throwable $previous = null): RuntimeException
+    {
+        return new RuntimeException('Plik większy niż '.round($maxBytes / 1_000_000, 1).' MB — przerwane.', 0, $previous);
     }
 }

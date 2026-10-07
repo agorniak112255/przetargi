@@ -2705,9 +2705,11 @@ final class CatalogSitemapIndexer
             if ($body === '') {
                 return '';
             }
-            // .xml.gz bywa serwowane bez nagłówka Content-Encoding
+            // .xml.gz bywa serwowane bez nagłówka Content-Encoding; limit jak przy pobraniu (bomba gzip = pusto) —
+            // max_length gzdecode liczy z zapasem bufora, więc długość sprawdzana jeszcze raz
             if (str_starts_with($body, "\x1f\x8b")) {
-                $body = (string) @gzdecode($body);
+                $decoded = @gzdecode($body, PublicUrlFetcher::PAGE_MAX_BYTES);
+                $body = is_string($decoded) && strlen($decoded) <= PublicUrlFetcher::PAGE_MAX_BYTES ? $decoded : '';
             }
 
             return $body !== '' ? $body : '';

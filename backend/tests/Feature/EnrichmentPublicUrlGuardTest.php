@@ -19,12 +19,17 @@ use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Enrichment\PublicUrlFetcher;
 use App\Services\Enrichment\RetailerOnSiteSearch;
 use App\Services\Enrichment\ShopHtmlCrawler;
+use GuzzleHttp\Psr7\Request as PsrRequest;
+use GuzzleHttp\Psr7\Response as PsrResponse;
+use GuzzleHttp\TransferStats;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -115,6 +120,111 @@ final class EnrichmentPublicUrlGuardTest extends TestCase
             $this->assertContains($host.':443:'.self::PUBLIC_IP, $options['curl'][CURLOPT_RESOLVE]);
             $this->assertSame(1000, $options['curl'][CURLOPT_MAXFILESIZE]);
         }
+    }
+
+    public function test_gzip_body_over_limit_after_inflating_is_rejected(): void
+    {
+        // bomba gzip: z sieci kilkaset bajtów (limit curla przepuszcza), po rozpakowaniu 50 razy więcej niż limit
+        $plain = str_repeat('A', 500_000);
+        $bomb = (string) gzencode($plain, 9);
+        $this->assertLessThan(10_000, strlen($bomb));
+        $seen = [];
+        Http::fake(function (Request $request, array $options) use (&$seen, $bomb) {
+            $seen[] = $options;
+
+            return Http::response($bomb, 200, ['Content-Encoding' => 'gzip', 'Content-Type' => 'text/html']);
+        });
+        $fetcher = new PublicUrlFetcher;
+
+        try {
+            $fetcher->get(fn () => Http::timeout(5), 'https://shop.example.com/karta', 10_000);
+            $this->fail('Bomba gzip przeszła przez limit.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Plik większy niż', $e->getMessage());
+        }
+        // curl nie rozpakowuje sam (liczyłby bajty z sieci) — robi to fetcher, z limitem
+        $this->assertFalse($seen[0]['decode_content']);
+
+        $pooled = $fetcher->pool(['a' => 'https://shop.example.com/a', 'b' => 'https://shop.example.com/b'], fn ($r) => $r->timeout(5), 10_000);
+        $this->assertInstanceOf(RuntimeException::class, $pooled['a']);
+        $this->assertStringContainsString('Plik większy niż', $pooled['b']->getMessage());
+    }
+
+    public function test_compressed_body_within_limit_reads_as_before(): void
+    {
+        $html = '<html><body>'.str_repeat('<p>Rękawice ochronne ABC-123, EN 388:2016</p>', 200).'</body></html>';
+        $zlib = (string) gzcompress($html);
+        $raw = (string) gzdeflate($html);
+        Http::fake([
+            'https://shop.example.com/gzip' => Http::response(gzencode($html), 200, ['Content-Encoding' => 'gzip', 'Content-Length' => (string) strlen((string) gzencode($html))]),
+            'https://shop.example.com/zlib' => Http::response($zlib, 200, ['Content-Encoding' => 'deflate']),
+            'https://shop.example.com/raw' => Http::response($raw, 200, ['Content-Encoding' => 'deflate']),
+            'https://shop.example.com/plain' => Http::response($html, 200),
+            'https://shop.example.com/br' => Http::response('???', 200, ['Content-Encoding' => 'br']),
+        ]);
+        $fetcher = new PublicUrlFetcher;
+
+        $response = $fetcher->get(fn () => Http::timeout(5), 'https://shop.example.com/gzip', PublicUrlFetcher::PAGE_MAX_BYTES);
+        $this->assertSame($html, $response->body());
+        // nagłówki jak po rozpakowaniu w Guzzle
+        $this->assertSame('', $response->header('Content-Encoding'));
+        $this->assertSame('gzip', $response->header('x-encoded-content-encoding'));
+        $this->assertSame('', $response->header('Content-Length'));
+        $this->assertSame((string) strlen((string) gzencode($html)), $response->header('x-encoded-content-length'));
+
+        $pooled = $fetcher->pool([
+            'zlib' => 'https://shop.example.com/zlib',
+            'raw' => 'https://shop.example.com/raw',
+            'plain' => 'https://shop.example.com/plain',
+            'br' => 'https://shop.example.com/br',
+        ], fn ($r) => $r->timeout(5), PublicUrlFetcher::PAGE_MAX_BYTES);
+        $this->assertSame($html, $pooled['zlib']->body());
+        $this->assertSame($html, $pooled['raw']->body());
+        $this->assertSame($html, $pooled['plain']->body());
+        // kodowanie, którego nie umiemy rozpakować, nie udaje treści strony
+        $this->assertInstanceOf(RuntimeException::class, $pooled['br']);
+    }
+
+    public function test_caller_decoding_itself_gets_the_raw_body(): void
+    {
+        // mapy stron (CatalogSitemapIndexer::streamLocations) rozpakowują same, strumieniem
+        $gzip = (string) gzencode(str_repeat('<url><loc>https://sklep.example.com/p</loc></url>', 1000));
+        Http::fake(['*' => Http::response($gzip, 200, ['Content-Encoding' => 'gzip'])]);
+
+        $response = (new PublicUrlFetcher)->get(fn () => Http::timeout(5)->withOptions(['decode_content' => false]), 'https://shop.example.com/sitemap.xml', 1000);
+
+        $this->assertSame($gzip, $response->body());
+    }
+
+    public function test_sitemap_fetch_limits_gzip_file_served_without_content_encoding(): void
+    {
+        // .xml.gz bez nagłówka Content-Encoding rozpakowuje indeks sam — też z limitem
+        $small = "User-agent: *\nSitemap: https://sklep.example.com/sitemap.xml\n";
+        Http::fake([
+            'https://sklep.example.com/robots.txt' => Http::response(gzencode($small), 200, ['Content-Type' => 'application/x-gzip']),
+            'https://bomba.example.com/robots.txt' => Http::response(gzencode(str_repeat('A', PublicUrlFetcher::PAGE_MAX_BYTES + 1), 9), 200),
+        ]);
+        $indexer = app(CatalogSitemapIndexer::class);
+        $fetch = (new \ReflectionMethod($indexer, 'fetch'))->getClosure($indexer);
+
+        $this->assertSame($small, $fetch('https://sklep.example.com/robots.txt', 8, 1));
+        $this->assertSame('', $fetch('https://bomba.example.com/robots.txt', 8, 1));
+    }
+
+    public function test_pooled_response_cut_by_size_limit_is_not_a_page(): void
+    {
+        // Http::pool oddaje odpowiedź przerwaną po nagłówkach (curl 42/63) jako zwykłą odpowiedź 200 z częścią treści
+        $finish = (new \ReflectionMethod(PublicUrlFetcher::class, 'finish'))->getClosure(new PublicUrlFetcher);
+        $psr = new PsrResponse(200, [], 'połowa strony');
+        $request = new PsrRequest('GET', 'https://shop.example.com/karta');
+        foreach ([CURLE_ABORTED_BY_CALLBACK, CURLE_FILESIZE_EXCEEDED] as $errno) {
+            $cut = new Response($psr);
+            $cut->transferStats = new TransferStats($request, $psr, 0.1, $errno);
+            $this->assertInstanceOf(RuntimeException::class, $finish($cut, true, 1000));
+        }
+        $whole = new Response($psr);
+        $whole->transferStats = new TransferStats($request, $psr, 0.1);
+        $this->assertSame($whole, $finish($whole, true, 1000));
     }
 
     public function test_international_host_is_sent_as_the_checked_punycode_name(): void
