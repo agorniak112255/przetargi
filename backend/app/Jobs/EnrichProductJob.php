@@ -328,13 +328,15 @@ class EnrichProductJob implements ShouldQueue
         ]);
     }
 
+    /** Karta wraca do stanu sprzed kolejki (pozycja partii), a nie do „błąd: Anulowano” — zob. restoreAfterCancel. */
     private function abandonCancelled(?Product $product): void
     {
-        if ($product !== null && $product->enrichment_status !== Product::ENRICHMENT_DONE) {
-            $product->update([
-                'enrichment_status' => Product::ENRICHMENT_FAILED,
-                'enrichment_error' => 'Anulowano przez użytkownika',
-            ]);
+        if ($product !== null) {
+            app(ProductEnrichmentService::class)->restoreAfterCancel(
+                (int) $this->batchId,
+                (int) $product->id,
+                'Anulowano przez użytkownika'
+            );
         }
     }
 

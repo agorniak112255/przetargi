@@ -1321,7 +1321,7 @@ function PriceListsHelp() {
         },
         {
           action: 'Cenniki z plików: skąd są opisy',
-          does: 'Zakładka „Z pliku” pokazuje każdy cennik z pliku: ile kart ma opis od producenta, ze stron cennika, z B2B, z innych stron, a ile jest bez opisu; ile opisów pobrano przed zmianą stron i czy pobieranie trwa. Znacznik „ma też konto B2B” — karty z opisem z B2B nie są tu ruszane.',
+          does: 'Zakładka „Z pliku” pokazuje każdy cennik z pliku: ile kart ma opis od producenta, ze stron cennika, z B2B, z innych stron, a ile jest bez opisu; ile opisów pobrano przed zmianą stron i czy pobieranie trwa. Znacznik „ma też konto B2B” — karty z opisem z B2B nie są tu ruszane. Od producenta liczy się też opis z ręcznie wskazanej strony producenta. Ponowne pobranie hurtem („Ponów zaznaczone” na liście produktów, ponowne pobranie całego cennika) pomija karty z gotowym opisem od producenta — po komunikacie można je pobrać przyciskiem „Pobierz też te karty”. Przerwana partia (Anuluj, „Zatrzymaj wszystko”) zostawia karty w stanie sprzed kolejki, bez „błędu”.',
           click: 'Menu „Cenniki” → zakładka „Z pliku”. Nazwa producenta otwiera karty tego cennika.',
           tone: 'slate',
           screen: (

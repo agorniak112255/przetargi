@@ -141,6 +141,34 @@ final class PriceListEnrichFiltersTest extends TestCase
         $this->assertNotSame(Product::ENRICHMENT_QUEUED, $this->cards['DATASHEET']->fresh()->enrichment_status);
     }
 
+    /**
+     * skip_manufacturer pomija też ręczny link do strony producenta i opis sprzed pola primary_source_kind z adresem
+     * producenta na początku source_urls (PriceListDescriptionSources liczy je od producenta); ręczny link do obcego
+     * sklepu zostaje do ponownego pobrania.
+     */
+    public function test_skip_manufacturer_also_skips_manual_link_and_legacy_description_from_manufacturer_domain(): void
+    {
+        config(['enrichment.manufacturer_domains' => ['testowy' => ['producent.pl']]]);
+        $done = ['enriched_at' => Carbon::parse('2026-10-01'), 'enrichment_status' => Product::ENRICHMENT_DONE];
+        $this->card('MANUAL', $done, 'https://www.producent.pl/manual', 'manual');
+        $this->card('LEGACY', [...$done, 'enrichment_payload' => ['source_urls' => ['https://producent.pl/legacy', 'https://inny.pl/legacy']]]);
+        $this->card('MANUAL-SHOP', $done, 'https://obcy-sklep.pl/manual', 'manual');
+
+        $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['force' => true, 'skip_manufacturer' => false, 'apply' => false])
+            ->assertOk()
+            ->assertJsonPath('matched', 9);
+
+        $response = $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['force' => true, 'skip_manufacturer' => true])
+            ->assertStatus(202);
+        // MFR, MANUAL i LEGACY od producenta pomijane, B2B zostaje opisem z B2B
+        $this->assertEqualsCanonicalizing(
+            ['SITE', 'OLD', 'NEW', 'NONE', 'MANUAL-SHOP'],
+            Product::query()->whereIn('id', $response->json('product_ids'))->pluck('sku')->all(),
+        );
+        $this->assertSame(Product::ENRICHMENT_DONE, $this->cards['MANUAL']->fresh()->enrichment_status);
+        $this->assertSame(Product::ENRICHMENT_DONE, $this->cards['LEGACY']->fresh()->enrichment_status);
+    }
+
     public function test_batch_limit_caps_will_queue(): void
     {
         config(['ai.enrichment_batch_limit' => 2]);
@@ -204,7 +232,13 @@ final class PriceListEnrichFiltersTest extends TestCase
         // bez force: karty gotowe odpadają, karta z opisem z B2B jest pomijana
         $response->assertJsonPath('product_ids', [$this->cards['NONE']->id])->assertJsonPath('skipped_b2b', 1);
 
+        // Od 07.10.2026 ponowne pobranie (force) pomija kartę z gotowym opisem od producenta (MFR) — wszystkie 5 kart
+        // tylko z include_manufacturer (przycisk „Pobierz też te karty”)
         $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['apply' => true, 'force' => true])
+            ->assertStatus(202)
+            ->assertJsonPath('batch.total', 4)
+            ->assertJsonPath('skipped_manufacturer_ids', [$this->cards['MFR']->id]);
+        $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['apply' => true, 'force' => true, 'include_manufacturer' => true])
             ->assertStatus(202)
             ->assertJsonPath('batch.total', 5);
     }

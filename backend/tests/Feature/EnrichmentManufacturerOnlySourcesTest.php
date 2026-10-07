@@ -311,7 +311,8 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
         $this->fakeSearch();
         $this->fakeModel($prompts ?? new \ArrayObject, $modelNorms);
         Http::fake([
-            self::MFR => Http::response($this->manufacturerPage(), 200),
+            // od 07.10.2026 normy spoza tekstu źródeł wypadają z opisu i list — strona podaje te, które zwraca model
+            self::MFR => Http::response($this->manufacturerPage(implode(', ', $modelNorms)), 200),
             self::SHOP => Http::response($this->shopPage(), 200),
             '*' => Http::response('', 404),
         ]);
@@ -391,7 +392,7 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
     }
 
-    private function manufacturerPage(): string
+    private function manufacturerPage(string $norms = ''): string
     {
         $sizes = '';
         foreach (['XS/48', 'S/50', 'M/52', 'L/54', 'XL/56', 'XXL/58', '3XL/60', '4XL/62'] as $i => $size) {
@@ -405,7 +406,8 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
             .'i przyjemnego w dotyku materiału Plavitex Eco. Wyposażony w obszerny kaptur ściągany sznurkiem, zapinanie na napy '
             .'oraz dwie zewnętrzne kieszenie przykryte patkami. Ponadczasowy krój i design sprawią, że świetnie sprawdzi się '
             .'również w wersji unisex. Płaszcz wyróżnia się zwiększoną wytrzymałością szwów, którą zapewnia zastosowanie '
-            .'technologii Solar Welding. Zaprojektowany i wykonany w Polsce, co gwarantuje najwyższą jakość produktu.</p></div>'
+            .'technologii Solar Welding. Zaprojektowany i wykonany w Polsce, co gwarantuje najwyższą jakość produktu.</p>'
+            .($norms !== '' ? '<p>Normy: '.$norms.'.</p>' : '').'</div>'
             .'<div class="product-reference"><label>Index: </label><span itemprop="sku">BEMOREGREEN-906-00001</span></div>'
             .'<div class="product-variants"><span class="form-control-label">rozmiar</span><ul id="group_1">'.$sizes.'</ul></div>'
             .'</body></html>';

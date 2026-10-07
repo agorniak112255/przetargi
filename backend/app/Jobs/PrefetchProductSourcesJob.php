@@ -66,6 +66,8 @@ class PrefetchProductSourcesJob implements ShouldQueue
         }
 
         if ($batch->isCancelled()) {
+            // bez tego karta z anulowanej partii zostawała „w kolejce” na zawsze (opisu nikt już nie zleci)
+            $enrichment->restoreAfterCancel((int) $batch->id, (int) $product->id, 'Anulowano przez użytkownika');
             $this->delete();
 
             return;
@@ -104,6 +106,7 @@ class PrefetchProductSourcesJob implements ShouldQueue
             );
             $enrichment->prefetchProductSources($product, $this->force, $this->batchId, $dispatchEnrich);
         } catch (EnrichmentCancelledException) {
+            $enrichment->restoreAfterCancel((int) $batch->id, (int) $product->id, 'Anulowano przez użytkownika');
             $this->delete();
 
             return;
@@ -128,7 +131,13 @@ class PrefetchProductSourcesJob implements ShouldQueue
     public function failed(?Throwable $e): void
     {
         $batch = ProductEnrichmentBatch::query()->find($this->batchId);
-        if ($batch === null || $batch->isCancelled()) {
+        if ($batch === null) {
+            return;
+        }
+        if ($batch->isCancelled()) {
+            // prefetch padł (limit czasu) już po anulowaniu — opisu nikt nie zleci, karta wraca do stanu sprzed kolejki
+            app(ProductEnrichmentService::class)->restoreAfterCancel((int) $batch->id, $this->productId, 'Anulowano przez użytkownika');
+
             return;
         }
 

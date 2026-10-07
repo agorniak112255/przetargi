@@ -37,6 +37,7 @@ use App\Support\ManufacturerNormFacts;
 use App\Support\NormCode;
 use App\Support\PpeAssortment;
 use App\Support\ProductDescriptionText;
+use App\Support\ProductNormsColumn;
 use App\Support\ProductSizeVariant;
 use App\Support\RequirementCheck\En388Code;
 use App\Support\Utf8Trim;
@@ -79,6 +80,14 @@ final class ProductEnrichmentService
      * wciąż w „running”, do którego nie ma joba, znaczy że proces padł.
      */
     private const STALE_RUNNING_AFTER_MINUTES = 15;
+
+    /** Stany karty, które anulowanie partii przywraca (pozycja partii: previous_status) — kolejka i przebieg to nie stan. */
+    private const RESTORABLE_STATUSES = [
+        Product::ENRICHMENT_NONE,
+        Product::ENRICHMENT_DONE,
+        Product::ENRICHMENT_MANUAL,
+        Product::ENRICHMENT_FAILED,
+    ];
 
     /** Tyle roznych norm wyciagnietych z surowego tekstu strony to slowniczek sklepu, nie karta. */
     private const NORMS_GLOSSARY_THRESHOLD = 5;
@@ -177,13 +186,15 @@ final class ProductEnrichmentService
             'force' => $force,
         ]);
 
+        // pozycja partii zapamiętuje stan sprzed kolejki (restoreAfterCancel) — dlatego przed zmianą statusu
+        $this->seedBatchItems($batch, [$product]);
+        // Ślad (enrichment_trace) zostaje: to pochodzenie obecnego opisu, a anulowana partia nie daje nowego.
+        // Nowy przebieg i tak go zastępuje (zapis opisu albo błędu).
         $product->update([
             'enrichment_status' => Product::ENRICHMENT_QUEUED,
             'enrichment_error' => null,
-            'enrichment_trace' => null,
         ]);
 
-        $this->seedBatchItems($batch, [$product]);
         PrefetchProductSourcesJob::dispatch($product->id, $batch->id, $force);
 
         return $batch;
@@ -299,13 +310,16 @@ final class ProductEnrichmentService
             'message' => $message,
         ]);
 
+        // pozycje partii zapamiętują stan sprzed kolejki (restoreAfterCancel) — dlatego przed zmianą statusu;
+        // ślad zostaje, jak w enqueueProduct
+        $this->seedBatchItems(
+            $batch,
+            Product::query()->whereIn('id', $productIds)->get(['id', 'sku', 'name', 'enrichment_status', 'enrichment_error'])
+        );
         Product::query()->whereIn('id', $productIds)->update([
             'enrichment_status' => Product::ENRICHMENT_QUEUED,
             'enrichment_error' => null,
-            'enrichment_trace' => null,
         ]);
-
-        $this->seedBatchItems($batch, Product::query()->whereIn('id', $productIds)->get());
 
         if ($dispatchJobs) {
             foreach ($productIds as $productId) {
@@ -698,6 +712,10 @@ final class ProductEnrichmentService
                 'current_name' => null,
             ]);
         } catch (Throwable $e) {
+            // bez joba nikt inny nie przywróci karty z przebiegu (EnrichProductJob::abandonCancelled)
+            if ($e instanceof EnrichmentCancelledException) {
+                $this->restoreAfterCancel((int) $batch->id, (int) $product->id, 'Anulowano przez użytkownika');
+            }
             $this->markBatchItem(
                 $batch,
                 false,
@@ -1270,6 +1288,16 @@ final class ProductEnrichmentService
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
             $extracted = $this->withoutMissingDataListItems($extracted);
+            // Źródło prawdy to pobrana strona: filtr stron (model) przepisuje tekst i bywa, że gubi zdanie z normą,
+            // którą strona podaje — obok tekstu po filtrze idzie surowy tekst tych samych stron
+            $descriptionUrls = array_fill_keys(array_map('mb_strtolower', array_column($pageSnippets, 'url')), true);
+            $rawDescriptionPages = array_values(array_filter(
+                $fetched['pages'] ?? [],
+                static fn ($page): bool => is_array($page) && isset($descriptionUrls[mb_strtolower((string) ($page['url'] ?? ''))])
+            ));
+            $claimCheck = $this->withoutUnsupportedNormClaims($product, $description, $extracted, [...$pageSnippets, ...$rawDescriptionPages]);
+            $description = $claimCheck['description'];
+            $extracted = $claimCheck['extracted'];
             $fields = $this->payloadFromExtraction($product, $extracted, $description, $pageSnippets);
             $packaging = $fields['packaging'];
 
@@ -1435,7 +1463,13 @@ final class ProductEnrichmentService
 
             // Zdjęcie wybrane, ale źródło chwilowo odmówiło (zapora ansell.com) — products:retry-images ponowi później.
             // Tylko na karcie: pamięć SKU (storeSkuCache) dostaje $payload bez tego klucza.
-            $retryImages = $cachedImageUrls === [] && $imageRetryUrls !== [];
+            // bez nowego zdjęcia poprzednie zostaje (dropPreviousWebFiles) — komunikat nie może mówić o karcie bez zdjęcia,
+            // a ponawianie (products:retry-images bierze tylko karty bez zdjęć) nie ma czego ponawiać
+            $keptPreviousImages = $savedImages === [] && $previousWebFiles !== null && $previousWebFiles['images'] !== [];
+            $retryImages = $cachedImageUrls === [] && $imageRetryUrls !== [] && ! $keptPreviousImages;
+            if ($keptPreviousImages) {
+                $this->attemptLog()->add('image', 'nowego zdjęcia brak — zostaje poprzednie zdjęcie karty');
+            }
             $product->refresh();
             $productPayload = $payload;
             if ($retryImages) {
@@ -1445,13 +1479,21 @@ final class ProductEnrichmentService
             if ($priceListSources !== null) {
                 $productPayload['price_list_sources'] = $priceListSources;
             }
+            // co kontrola źródeł usunęła (kody norm) albo tylko zauważyła (twierdzenia bez pokrycia) — do sprawdzenia na karcie
+            if ($claimCheck['dropped_norm_claims'] !== []) {
+                $productPayload['dropped_norm_claims'] = $claimCheck['dropped_norm_claims'];
+            }
+            if ($claimCheck['unverified_claims'] !== []) {
+                $productPayload['unverified_claims'] = $claimCheck['unverified_claims'];
+            }
             $saved = [
                 'description' => mb_substr($description, 0, 10000),
                 'enrichment_payload' => $productPayload,
                 'enrichment_status' => Product::ENRICHMENT_DONE,
                 'enriched_at' => now(),
                 'enrichment_error' => $cachedImageUrls === []
-                    ? 'Opis OK, nie udało się pobrać zdjęcia'.($imageFailure !== '' ? ' ('.$imageFailure.')' : ' (karty nie miały zdjęcia produktu)').'.'
+                    ? ($keptPreviousImages ? 'Opis OK, nowego zdjęcia nie udało się pobrać — zostaje poprzednie' : 'Opis OK, nie udało się pobrać zdjęcia')
+                        .($imageFailure !== '' ? ' ('.$imageFailure.')' : ' (karty nie miały zdjęcia produktu)').'.'
                         .($retryImages ? ProductImageRetry::ERROR_NOTE : '')
                     : null,
                 // Ślad zapisujemy też po udanym przebiegu (skrócony) — bez niego nie da się
@@ -1489,6 +1531,18 @@ final class ProductEnrichmentService
                 'product_id' => $product->id,
                 'error' => $e->getMessage(),
             ]);
+            // Anulowanie partii to nie wynik przebiegu: status, komunikat i ślad karty ustawia restoreAfterCancel
+            // (stan sprzed kolejki) — tu tylko nowe pliki tego przebiegu ustępują starym.
+            if ($e instanceof EnrichmentCancelledException) {
+                try {
+                    if ($previousWebFiles !== null) {
+                        $this->dropWebFilesAddedSince($product, $previousWebFiles);
+                    }
+                } catch (Throwable) {
+                    // jak niżej — pliki sprzątnie kolejny przebieg
+                }
+                throw $e;
+            }
             try {
                 $this->attemptLog()->add('fail', $e->getMessage());
                 $failed = [
@@ -1634,7 +1688,9 @@ final class ProductEnrichmentService
 
     /**
      * Usuwa zdjęcia i dokumenty sprzed przebiegu (webFileIds), których przebieg nie pobrał ponownie.
-     * null przy liście nowych plików = tych plików nie ruszamy.
+     * null przy liście nowych plików = tych plików nie ruszamy. Pusta lista nowych zdjęć też ich nie rusza: przebieg,
+     * który nie pobrał żadnego zdjęcia (zapora ansell.com oddająca stronę zamiast pliku), kasował dobre zdjęcie karty
+     * i zostawiał ją bez żadnego (plan 07.10.2026, B2). Zdjęcie ustępuje tylko nowemu zdjęciu.
      *
      * @param  array{images: list<int>, documents: list<int>}|null  $previous
      * @param  list<object>|null  $newImages
@@ -1646,9 +1702,12 @@ final class ProductEnrichmentService
             return;
         }
         $idsOf = static fn (array $rows): array => array_map(static fn (object $row): int => (int) ($row->id ?? 0), $rows);
-        if ($newImages !== null) {
+        if ($newImages !== null && $newImages !== []) {
             $this->clearProductImages($product, array_values(array_diff($previous['images'], $idsOf($newImages))));
         }
+        // Dokumenty inaczej niż zdjęcia: pusta lista nowych też kasuje stare z internetu. Certyfikat albo deklaracja
+        // z poprzedniej (być może cudzej) strony nie może zostać przy nowym opisie — idzie do przetargów jako dowód
+        // zgodności; brak pliku jest tu mniejszym złem niż cudzy plik (test_force_sync_reenriches_done_product).
         if ($newDocuments !== null) {
             $this->clearProductDocuments($product, array_values(array_diff($previous['documents'], $idsOf($newDocuments))));
         }
@@ -3338,7 +3397,7 @@ final class ProductEnrichmentService
      */
     private function writeNormsColumn(Product $product, array $norms): void
     {
-        $column = $norms !== [] ? implode(', ', array_slice($norms, 0, 8)) : null;
+        $column = ProductNormsColumn::fromList($norms);
         if ($product->norms === $column) {
             return;
         }
@@ -5010,8 +5069,9 @@ final class ProductEnrichmentService
         }
         $now = now();
         $rows = [];
+        $withPrevious = Schema::hasColumn('product_enrichment_batch_items', 'previous_status');
         foreach ($products as $product) {
-            $rows[] = [
+            $row = [
                 'batch_id' => $batch->id,
                 'product_id' => $product->id,
                 'sku' => mb_substr((string) $product->sku, 0, 100),
@@ -5021,6 +5081,14 @@ final class ProductEnrichmentService
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
+            if ($withPrevious) {
+                // Karta już w kolejce innej partii nie ma stanu do przywrócenia — anulowanie zrobi to, co przed 07.10.2026.
+                $previous = (string) $product->enrichment_status;
+                $known = in_array($previous, self::RESTORABLE_STATUSES, true);
+                $row['previous_status'] = $known ? $previous : null;
+                $row['previous_error'] = $known ? $product->enrichment_error : null;
+            }
+            $rows[] = $row;
         }
         foreach (array_chunk($rows, 250) as $chunk) {
             ProductEnrichmentBatchItem::query()->insertOrIgnore($chunk);
@@ -5196,6 +5264,72 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Karta z przerwanej partii (anulowanie, „Zatrzymaj wszystko”) wraca do stanu sprzed kolejki zapisanego w pozycji
+     * partii: gotowy opis zostaje „gotowy”, karta bez opisu — „bez opisu”, z poprzednim komunikatem. Do 07.10.2026
+     * każda taka karta dostawała „błąd: Anulowano przez użytkownika” (Coba: 137 kart, z opisem i bez). Bez zapisanego
+     * stanu (partia sprzed zmiany, karta była już w innej kolejce) — jak dotąd: błąd z komunikatem.
+     * Zmienia tylko karty w kolejce albo w przebiegu: wynik, który partia zdążyła zapisać, zostaje.
+     */
+    public function restoreAfterCancel(int $batchId, int $productId, string $message): bool
+    {
+        if ($this->waitsInAnotherOpenBatch($batchId, $productId)) {
+            // karta czeka też w innej, nieanulowanej partii — jej job ją opisze (albo przywróci, gdy i ta zostanie
+            // anulowana); stan sprzed kolejki zdjąłby kartę z tamtej kolejki bez śladu w jej pozycji
+            return false;
+        }
+        $item = self::batchItemsHavePreviousStatus()
+            ? ProductEnrichmentBatchItem::query()
+                ->where('batch_id', $batchId)
+                ->where('product_id', $productId)
+                ->first(['previous_status', 'previous_error'])
+            : null;
+        $previous = $item?->previous_status;
+        $update = in_array($previous, self::RESTORABLE_STATUSES, true)
+            ? ['enrichment_status' => $previous, 'enrichment_error' => $item?->previous_error]
+            : ['enrichment_status' => Product::ENRICHMENT_FAILED, 'enrichment_error' => $message];
+
+        return Product::query()
+            ->whereKey($productId)
+            ->whereIn('enrichment_status', [Product::ENRICHMENT_QUEUED, Product::ENRICHMENT_RUNNING])
+            ->update($update) > 0;
+    }
+
+    private function waitsInAnotherOpenBatch(int $batchId, int $productId): bool
+    {
+        if (! Schema::hasTable('product_enrichment_batch_items')) {
+            return false;
+        }
+        $otherBatches = ProductEnrichmentBatchItem::query()
+            ->where('product_id', $productId)
+            ->where('batch_id', '!=', $batchId)
+            ->whereIn('status', [ProductEnrichmentBatchItem::STATUS_QUEUED, ProductEnrichmentBatchItem::STATUS_RUNNING])
+            ->pluck('batch_id');
+        if ($otherBatches->isEmpty()) {
+            return false;
+        }
+
+        return ProductEnrichmentBatch::query()
+            ->whereIn('id', $otherBatches)
+            ->whereIn('status', [ProductEnrichmentBatch::STATUS_QUEUED, ProductEnrichmentBatch::STATUS_RUNNING])
+            ->get()
+            ->contains(static fn (ProductEnrichmentBatch $batch): bool => ! $batch->isCancelled());
+    }
+
+    /**
+     * Kolumna z migracji 07.10.2026 — po pierwszym „jest” bez kolejnych zapytań (stopAll i cancelBatch wołają przywracanie
+     * w pętli). „Brak” nie jest zapamiętywany: pracownik kolejki uruchomiony przed migracją zobaczy kolumnę po wdrożeniu.
+     */
+    private static function batchItemsHavePreviousStatus(): bool
+    {
+        static $has = false;
+        if (! $has) {
+            $has = Schema::hasColumn('product_enrichment_batch_items', 'previous_status');
+        }
+
+        return $has;
+    }
+
+    /**
      * Natychmiastowe zatrzymanie batcha: flaga + usunięcie oczekujących jobów z kolejki.
      *
      * @return array{batch: ProductEnrichmentBatch, removed_jobs: int, marked_products: int}
@@ -5215,23 +5349,24 @@ final class ProductEnrichmentService
             foreach ($rows as $row) {
                 $productId = $this->productIdFromJobPayload((string) $row->payload);
                 if ($productId !== null && $row->reserved_at === null) {
-                    $updated = Product::query()
-                        ->where('id', $productId)
-                        ->whereIn('enrichment_status', [
-                            Product::ENRICHMENT_QUEUED,
-                            Product::ENRICHMENT_RUNNING,
-                            Product::ENRICHMENT_FAILED,
-                        ])
-                        ->where('enrichment_status', '!=', Product::ENRICHMENT_DONE)
-                        ->update([
-                            'enrichment_status' => Product::ENRICHMENT_FAILED,
-                            'enrichment_error' => 'Anulowano przez użytkownika',
-                        ]);
-                    $markedProducts += (int) $updated;
+                    $markedProducts += (int) $this->restoreAfterCancel((int) $batch->id, $productId, 'Anulowano przez użytkownika');
                 }
 
                 DB::table('jobs')->where('id', $row->id)->delete();
                 $removedJobs++;
+            }
+        }
+        // Karty partii, które czekały bez joba w tabeli (zlecenie zgubione, prefetch przerwany w locie — pozycja „running”,
+        // karta wciąż „queued”) — zostawały w kolejce na zawsze. Karta w przebiegu opisu („running”) ma swój job
+        // (abandonCancelled), dlatego tylko karty „queued”: ich opisu nikt jeszcze nie przejął.
+        if (Schema::hasTable('product_enrichment_batch_items')) {
+            $waiting = ProductEnrichmentBatchItem::query()
+                ->where('batch_id', $batch->id)
+                ->whereIn('status', [ProductEnrichmentBatchItem::STATUS_QUEUED, ProductEnrichmentBatchItem::STATUS_RUNNING])
+                ->whereHas('product', static fn ($q) => $q->where('enrichment_status', Product::ENRICHMENT_QUEUED))
+                ->pluck('product_id');
+            foreach ($waiting as $productId) {
+                $markedProducts += (int) $this->restoreAfterCancel((int) $batch->id, (int) $productId, 'Anulowano przez użytkownika');
             }
         }
 
@@ -5286,7 +5421,35 @@ final class ProductEnrichmentService
             Cache::put(ProductEnrichmentBatch::cancelCacheKey((int) $batchId), true, now()->addDay());
         }
 
-        $markedProducts = Product::query()
+        $cancelledBatches = 0;
+        $open = ProductEnrichmentBatch::query()
+            ->whereIn('status', [
+                ProductEnrichmentBatch::STATUS_QUEUED,
+                ProductEnrichmentBatch::STATUS_RUNNING,
+            ])
+            ->get();
+
+        // karty otwartych partii wracają do stanu sprzed kolejki (restoreAfterCancel), reszta „w kolejce / w przebiegu”
+        // bez zapisanego stanu — jak dotąd: błąd z komunikatem
+        $markedProducts = 0;
+        if (Schema::hasTable('product_enrichment_batch_items') && $open->isNotEmpty()) {
+            $items = ProductEnrichmentBatchItem::query()
+                ->whereIn('batch_id', $open->pluck('id'))
+                ->whereIn('status', [
+                    ProductEnrichmentBatchItem::STATUS_QUEUED,
+                    ProductEnrichmentBatchItem::STATUS_RUNNING,
+                ])
+                ->orderBy('id')
+                ->get(['batch_id', 'product_id']);
+            foreach ($items as $item) {
+                $markedProducts += (int) $this->restoreAfterCancel(
+                    (int) $item->batch_id,
+                    (int) $item->product_id,
+                    'Zatrzymano wszystkie pobierania opisów'
+                );
+            }
+        }
+        $markedProducts += Product::query()
             ->whereIn('enrichment_status', [
                 Product::ENRICHMENT_QUEUED,
                 Product::ENRICHMENT_RUNNING,
@@ -5295,14 +5458,6 @@ final class ProductEnrichmentService
                 'enrichment_status' => Product::ENRICHMENT_FAILED,
                 'enrichment_error' => 'Zatrzymano wszystkie pobierania opisów',
             ]);
-
-        $cancelledBatches = 0;
-        $open = ProductEnrichmentBatch::query()
-            ->whereIn('status', [
-                ProductEnrichmentBatch::STATUS_QUEUED,
-                ProductEnrichmentBatch::STATUS_RUNNING,
-            ])
-            ->get();
         foreach ($open as $batch) {
             $processed = $batch->done + $batch->failed;
             $remaining = max(0, $batch->total - $processed);
@@ -6091,7 +6246,7 @@ SYS,
                 'confidence' => (float) ($extracted['confidence'] ?? 0),
                 'from_cache' => false,
             ],
-            'norms' => $lists['norms'] !== [] ? implode(', ', array_slice($lists['norms'], 0, 8)) : null,
+            'norms' => ProductNormsColumn::fromList($lists['norms']),
             'packaging' => $fields['packaging'],
             'dropped' => array_values(array_unique($dropped)),
             'dropped_claims' => array_values(array_unique($droppedClaims)),
@@ -6318,7 +6473,7 @@ SYS,
                 'confidence' => (float) ($extracted['confidence'] ?? 0),
                 'from_cache' => false,
             ],
-            'norms' => $lists['norms'] !== [] ? implode(', ', array_slice($lists['norms'], 0, 8)) : null,
+            'norms' => ProductNormsColumn::fromList($lists['norms']),
             'packaging' => $fields['packaging'],
             'web_source_urls' => $webUrls,
             'dropped' => array_values(array_unique($dropped)),
@@ -6603,7 +6758,8 @@ SYS,
     {
         $upper = mb_strtoupper($text);
         preg_match_all('/(?<![\p{L}\p{N}])(?:[0-5X]{6}|[0-5X]{4}[A-FX]?)(?![\p{L}\p{N}])/u', $upper, $levels);
-        preg_match_all('/(?<![\p{L}\p{N}])(?:EN|ISO)(?:\s*ISO)?\s*\d{3,5}(?:-\d+)*(?:\s*:\s*\d{4})?(?:\s*\+\s*A\d+(?:\s*:\s*\d{4})?)?/u', $upper, $norms);
+        // rok wydania tylko 19xx/20xx: w „EN 388: 4131A” po dwukropku stoją poziomy, nie rok (07.10.2026)
+        preg_match_all('/(?<![\p{L}\p{N}])(?:EN|ISO)(?:\s*ISO)?\s*\d{3,5}(?:-\d+)*(?:\s*:\s*(?:19|20)\d\d(?!\d))?(?:\s*\+\s*A\d+(?:\s*:\s*(?:19|20)\d\d(?!\d))?)?/u', $upper, $norms);
 
         $claims = array_filter($levels[0], static fn (string $code): bool => preg_match('/^(?:19|20)\d\d$/', $code) !== 1);
         foreach ($norms[0] as $norm) {
@@ -6611,6 +6767,164 @@ SYS,
         }
 
         return array_values(array_unique($claims));
+    }
+
+    /**
+     * Zwykłe wzbogacanie: oznaczenia i poziomy norm (sourceClaims) muszą stać dosłownie w tekście źródeł — jak przy
+     * opisie z B2B. Do 07.10.2026 sprawdzano je tylko tam; model pisał przy cenniku z pliku kod EN 388 czy wydanie normy
+     * z pamięci. Zdanie opisu albo pozycja listy z kodem spoza źródeł wypada (dropped_norm_claims). Źródła = teksty
+     * stron opisu, ich ramki norm, normy producenta z karty, tabelka dostawcy, cennik i nazwa — wszystko, co dostał model
+     * albo co kod dokłada do opisu (alignEn388WithManufacturer).
+     *
+     * Twierdzenia o właściwościach (SourceClaimGuard) tylko zapisujemy (unverified_claims): słownik strażnika jest po
+     * polsku, a strony producentów bywają angielskie — wycinanie wyrzucałoby poprawne zdania.
+     *
+     * @param  array<string, mixed>  $extracted
+     * @param  list<array<string, mixed>>  $pages
+     * @return array{description: string, extracted: array<string, mixed>, dropped_norm_claims: list<string>, unverified_claims: list<string>}
+     */
+    private function withoutUnsupportedNormClaims(Product $product, string $description, array $extracted, array $pages): array
+    {
+        $parts = [(string) $product->name, (string) ($product->shop_fields_summary ?? '')];
+        foreach ($pages as $page) {
+            $parts[] = (string) ($page['text'] ?? '');
+            if (is_array($page['norm_facts'] ?? null)) {
+                $parts[] = (string) json_encode($page['norm_facts'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+        }
+        foreach ([$product->manufacturer_norms, $product->price_list_attributes] as $structured) {
+            if (is_array($structured)) {
+                $parts[] = (string) json_encode($structured, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+        }
+        $sourceText = implode("\n", $parts);
+        $sources = self::claimKey($sourceText);
+        $sourceNorms = self::normDesignations($sourceText);
+        // Same cyfry („1200” z „1200 x 1800 mm” maty Coba przeliczonej z „1,2 m”) to poziom normy tylko w zdaniu
+        // o normie — kod z literą/X („4131A”, „X1XXXX”) i oznaczenie normy sprawdzamy zawsze.
+        $unsupported = static function (string $text) use ($sources, $sourceNorms): array {
+            $normContext = preg_match('/\bEN\s*(?:ISO\s*)?(?:388|407|511|374|381|1149)\b|poziom|level/iu', $text) === 1;
+
+            return array_values(array_filter(
+                self::sourceClaims($text),
+                static function (string $code) use ($sources, $sourceNorms, $normContext): bool {
+                    if (preg_match('/^(?:EN|ISO)/', $code) === 1) {
+                        return ! self::normDesignationSupported($code, $sourceNorms);
+                    }
+
+                    return ! str_contains($sources, $code) && ($normContext || preg_match('/^\d+$/', $code) !== 1);
+                },
+            ));
+        };
+
+        $filtered = SourceClaimGuard::filterSentences($description, static function (string $sentence) use ($unsupported): array {
+            $codes = $unsupported($sentence);
+
+            return $codes === [] ? [] : ['normy spoza źródeł '.implode(', ', $codes)];
+        });
+        $dropped = $filtered['dropped'];
+        $checked = $filtered['text'];
+        if ($dropped !== []) {
+            $this->attemptLog()->add('desc', 'usunięto zdania z oznaczeniami norm spoza źródeł: '.mb_substr(implode(' | ', $dropped), 0, 400));
+            if (! Product::isDescriptionText($checked)) {
+                throw new RuntimeException('Opis po usunięciu oznaczeń norm spoza źródeł jest za krótki: '.mb_substr(implode(' | ', $dropped), 0, 300));
+            }
+        }
+
+        $keepItem = static function (mixed $item) use ($unsupported, &$dropped): bool {
+            if (! is_string($item)) {
+                return true;
+            }
+            $codes = $unsupported($item);
+            if ($codes !== []) {
+                $dropped[] = 'normy spoza źródeł '.implode(', ', $codes).': '.$item;
+
+                return false;
+            }
+
+            return true;
+        };
+        foreach (['features', 'norms', 'certificates', 'materials', 'use_cases', 'specs'] as $key) {
+            if (is_array($extracted[$key] ?? null)) {
+                $extracted[$key] = array_values(array_filter($extracted[$key], $keepItem));
+            }
+        }
+        if (is_array($extracted['attributes'] ?? null)) {
+            foreach ($extracted['attributes'] as $key => $value) {
+                if (is_string($value) && ! $keepItem($value)) {
+                    $extracted['attributes'][$key] = null;
+                } elseif (is_array($value)) {
+                    $extracted['attributes'][$key] = array_values(array_filter($value, $keepItem));
+                }
+            }
+        }
+
+        $unverified = (new SourceClaimGuard($sourceText))->filterDescription($checked)['dropped'];
+        if ($unverified !== []) {
+            $this->attemptLog()->add('desc', 'twierdzenia bez pokrycia w źródłach (tylko zapis): '.mb_substr(implode(' | ', $unverified), 0, 300));
+        }
+
+        return [
+            'description' => $checked,
+            'extracted' => $extracted,
+            'dropped_norm_claims' => array_values(array_unique(array_map(static fn (string $d): string => mb_substr($d, 0, 300), $dropped))),
+            'unverified_claims' => array_values(array_unique(array_map(static fn (string $d): string => mb_substr($d, 0, 300), $unverified))),
+        ];
+    }
+
+    /**
+     * Normy wymienione w tekście źródeł: numer z częścią („13997”, „374-1”) => wydania podane przy nim. Przedrostki
+     * EN / ISO / IEC / PN- i myślnik („EN-388”) nie mają znaczenia — strona angielska pisze „ISO 13997”, sklep
+     * „EN 374-1:2016”, a model poprawnie „EN ISO 13997” i „EN ISO 374-1:2016”; wydanie bywa w nawiasie („EN 388 (2016)”).
+     *
+     * @return array<string, list<string>>
+     */
+    private static function normDesignations(string $text): array
+    {
+        preg_match_all(
+            '/(?<![\p{L}\p{N}])(?:PN[\s-]*)?(?:EN|ISO|IEC)(?:[\s-]*(?:ISO|IEC))?[\s-]*(\d{3,5}(?:-\d+)*)(?:\s*[:(]\s*((?:19|20)\d\d)(?!\d))?/iu',
+            $text,
+            $matches,
+            PREG_SET_ORDER
+        );
+        $out = [];
+        foreach ($matches as $hit) {
+            $out[$hit[1]] ??= [];
+            if (($hit[2] ?? '') !== '') {
+                $out[$hit[1]][] = $hit[2];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Oznaczenie normy z opisu (klucz z sourceClaims, np. „ENISO374-1:2016+A1:2018”) ma pokrycie, gdy źródło wymienia
+     * tę normę (numer i część; „EN 374” pokrywa „EN ISO 374-1”), a wydanie — tylko gdy źródło podaje jakiekolwiek
+     * wydanie tej normy: strona z samym „EN ISO 20345” nie przeczy „EN ISO 20345:2022”, strona z „:2011” — tak.
+     *
+     * @param  array<string, list<string>>  $sourceNorms
+     */
+    private static function normDesignationSupported(string $claim, array $sourceNorms): bool
+    {
+        if (preg_match('/(\d{3,5}(?:-\d+)*)(?::((?:19|20)\d\d))?/', $claim, $m) !== 1) {
+            return true;
+        }
+        $core = $m[1];
+        $edition = $m[2] ?? '';
+        $editions = $sourceNorms[$core] ?? null;
+        if ($editions === null) {
+            foreach ($sourceNorms as $sourceCore => $sourceEditions) {
+                if (str_starts_with((string) $sourceCore, $core.'-')) {
+                    $editions = [...($editions ?? []), ...$sourceEditions];
+                }
+            }
+        }
+        if ($editions === null) {
+            return false;
+        }
+
+        return $edition === '' || $editions === [] || in_array($edition, $editions, true);
     }
 
     /** Tekst do porównania faktów ze źródłem: wielkie litery, bez białych znaków (PDF łamie „4131 A”, „EN 388 :2016”). */

@@ -12,7 +12,7 @@ import {
   type SheetMapping,
 } from '../components/PriceListMappingModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
-import { api, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch } from '../lib/api'
+import { api, ApiError, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch } from '../lib/api'
 
 type ProgressMode = 'analyze' | 'import' | null
 
@@ -548,6 +548,8 @@ export function PriceLists() {
   const [elapsedSec, setElapsedSec] = useState(0)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  /** „Pobierz ponownie” pominęło karty z gotowym opisem od producenta — przycisk „Pobierz też te karty”. */
+  const [manufacturerSkipped, setManufacturerSkipped] = useState<{ row: PriceList; ids: number[] } | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   // mapowanie poprawione ręcznie, ale podgląd wciąż pokazuje poprzedni odczyt pliku
   const [mappingDirty, setMappingDirty] = useState(false)
@@ -889,8 +891,9 @@ export function PriceLists() {
   async function enrichPriceList(row: PriceList, force = false) {
     setEnrichBusyId(row.id)
     setErr('')
+    setManufacturerSkipped(null)
     try {
-      const res = await api<{ batch: EnrichmentBatch; product_ids?: number[] }>(
+      const res = await api<{ batch: EnrichmentBatch; product_ids?: number[]; skipped_manufacturer_ids?: number[] }>(
         `/price-lists/${row.id}/enrich`,
         {
           method: 'POST',
@@ -899,11 +902,43 @@ export function PriceLists() {
       )
       setEnrichBatches((prev) => ({ ...prev, [row.id]: res.batch }))
       const ids = res.product_ids ?? []
+      const skipped = res.skipped_manufacturer_ids ?? []
+      if (skipped.length > 0) setManufacturerSkipped({ row, ids: skipped })
       setMsg(
-        `Zlecono ${ids.length} produktów z „${row.manufacturer} / ${row.version}”. ` +
-          `Serwer liczy ${enrichConcurrency} naraz i dobiera następne, gdy zwolni się slot — ` +
+        `Zlecono ${ids.length} produktów z „${row.manufacturer} / ${row.version}”` +
+          (skipped.length > 0 ? ` (pominięto ${skipped.length} z gotowym opisem od producenta)` : '') +
+          `. Serwer liczy ${enrichConcurrency} naraz i dobiera następne, gdy zwolni się slot — ` +
           'możesz zamknąć stronę, postęp wróci po odświeżeniu.',
       )
+    } catch (ex) {
+      const skipped = ex instanceof ApiError ? ex.body.skipped_manufacturer_ids : undefined
+      if (Array.isArray(skipped) && skipped.length > 0) {
+        setManufacturerSkipped({ row, ids: skipped.filter((id): id is number => typeof id === 'number') })
+      }
+      setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
+    } finally {
+      setEnrichBusyId(null)
+    }
+  }
+
+  /** Tylko karty pominięte przez ponowne pobranie cennika (gotowy opis od producenta) — nie cały cennik drugi raz. */
+  async function enrichSkippedManufacturerCards(row: PriceList, ids: number[]) {
+    setEnrichBusyId(row.id)
+    setErr('')
+    setManufacturerSkipped(null)
+    const capped = ids.slice(0, enrichBatchLimit)
+    try {
+      const res = await api<{ batch: EnrichmentBatch; product_ids?: number[] }>('/products/enrich', {
+        method: 'POST',
+        body: JSON.stringify({ product_ids: capped, force: true, include_manufacturer: true }),
+      })
+      setEnrichBatches((prev) => ({ ...prev, [row.id]: res.batch }))
+      setMsg(
+        `Zlecono ${(res.product_ids ?? capped).length} kart z opisem od producenta z „${row.manufacturer} / ${row.version}”` +
+          (ids.length > capped.length ? ` (limit partii ${enrichBatchLimit} — resztę zleć ponownie)` : '') +
+          '.',
+      )
+      if (ids.length > capped.length) setManufacturerSkipped({ row, ids: ids.slice(capped.length) })
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
     } finally {
@@ -1725,6 +1760,22 @@ export function PriceLists() {
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {manufacturerSkipped && (
+        <p className="mb-2 flex flex-wrap items-center gap-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span>
+            {manufacturerSkipped.ids.length} kart „{manufacturerSkipped.row.manufacturer}” ma gotowy opis ze strony
+            producenta — ponowne pobranie je pomija, żeby nie zastąpić dobrego opisu gorszym.
+          </span>
+          <button
+            type="button"
+            disabled={enrichBusyId === manufacturerSkipped.row.id}
+            className="rounded border border-amber-400 px-2 py-1 disabled:opacity-50"
+            onClick={() => void enrichSkippedManufacturerCards(manufacturerSkipped.row, manufacturerSkipped.ids)}
+          >
+            Pobierz też te karty ({Math.min(manufacturerSkipped.ids.length, enrichBatchLimit)})
+          </button>
+        </p>
+      )}
 
       {canEnrich && (
         <EnrichmentQueuePanel

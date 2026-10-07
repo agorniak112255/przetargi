@@ -10,13 +10,21 @@ use Carbon\CarbonImmutable;
 
 /**
  * Skąd karty cennika z pliku mają opis (Cenniki → „Z pliku”, filtry „Pobierz opisy ponownie”): źródło opisu liczone
- * z enrichment_payload->primary_source_url i ->primary_source_kind (ścieżka JSON, bez czytania całego payloadu),
- * opis z B2B z B2bDescriptionSource. Porcje po 1000 kart — cenniki z plików obejmują dziesiątki tysięcy kart.
+ * z enrichment_payload->primary_source_url, ->primary_source_kind i ->source_urls[0] (ścieżki JSON, bez czytania
+ * całego payloadu), opis z B2B z B2bDescriptionSource. Porcje po 1000 kart — cenniki z plików obejmują dziesiątki
+ * tysięcy kart.
+ *
+ * Adres źródła karty: primary_source_url; przy rodzaju „manual” bez niego — shop_source_url karty (ręczny link, z którego
+ * powstaje „manual”); przy opisie sprzed pola primary_source_kind (13.09.2026, oba pola puste) — pierwszy adres
+ * z source_urls, bo ten był wtedy źródłem docelowym (Coba: 559 opisów z coba.com bez zapisanego rodzaju).
  *
  * Kolejność rozstrzygania jednej karty:
  *   none — karta bez opisu (Product::hasDescriptionText: także opis będący samą nazwą z cennika),
  *   b2b — opis ze sklepu dostawcy (B2bDescriptionSource) albo opis AI z karty katalogowej/uzupełnienia B2B,
- *   manufacturer — primary_source_kind manufacturer/catalog (strona producenta albo jego katalog PDF),
+ *   manufacturer — primary_source_kind manufacturer/catalog (strona producenta albo jego katalog PDF), a także ręczny
+ *     link („manual”) i opis bez zapisanego rodzaju, gdy adres źródła leży na domenie producenta przypisanej świadomie
+ *     (ManufacturerDomainResolver::assignedDomainsFor: konfiguracja i „Strony wyszukiwarka” ręczne/z konfiguracji —
+ *     bez domen wykrytych automatem, to samo kryterium co strona producenta przy stronach cennika),
  *   price_list_sites — adres źródła na stronach cennika (PriceListSourceSettings::position),
  *   other — reszta (sklepy spoza listy, adres ręczny spoza listy, opis bez zapisanego źródła).
  */
@@ -46,13 +54,20 @@ final class PriceListDescriptionSources
     /** Opis AI zbudowany na danych konta B2B (DescribeB2bProductFromDatasheetJob, uzupełnienie opisu B2B). */
     private const B2B_KINDS = ['b2b_datasheet', 'b2b_supplement'];
 
+    /** Adres wskazany ręcznie (shop_source_url) — ProductEnrichmentService::primarySource. */
+    private const MANUAL_KIND = 'manual';
+
     /**
      * Zapas ponad długość nazwy przy czytaniu początku opisu: Product::descriptionRepeatsName porównuje opis z nazwą
      * (reszta po nazwie < 80 znaków), więc dłuższy opis i tak jest opisem — nie trzeba go czytać w całości.
      */
     private const HEAD_MARGIN = 200;
 
-    public function __construct(private readonly B2bDescriptionSource $b2bDescriptions) {}
+    public function __construct(
+        private readonly B2bDescriptionSource $b2bDescriptions,
+        private readonly ManufacturerDomainResolver $manufacturers,
+        private readonly ProductSearchIdentity $identity,
+    ) {}
 
     /**
      * @param  list<int>  $ids  karty cennika (PriceListCards)
@@ -70,17 +85,26 @@ final class PriceListDescriptionSources
     public function cards(array $ids, ?PriceListSourceSettings $settings): array
     {
         $out = [];
+        // domeny producenta na jeden przebieg: assignedDomainsFor zależy tylko od marki i serii URGENT (zapytanie do bazy)
+        $domainsMemo = [];
         foreach (array_chunk(array_values(array_unique(array_map('intval', $ids))), 1000) as $chunk) {
             $rows = Product::query()
                 ->whereIntegerInRaw('id', $chunk)
                 ->toBase()
                 ->select([
                     'id',
+                    'sku',
                     'name',
+                    'model_name',
+                    'manufacturer',
+                    'category',
+                    'shop_source_url',
                     'enrichment_status',
                     'enriched_at',
                     'enrichment_payload->primary_source_url as primary_source_url',
                     'enrichment_payload->primary_source_kind as primary_source_kind',
+                    // pierwszy adres listy źródeł — opisy sprzed pola primary_source_kind (13.09.2026)
+                    'enrichment_payload->source_urls[0] as first_source_url',
                     'enrichment_payload->price_list_sources->hosts_sha1 as list_hosts_sha1',
                 ])
                 // początek opisu wystarczy do miary karty (HEAD_MARGIN); długość nazwy w bajtach (MySQL) ≥ w znakach
@@ -99,13 +123,16 @@ final class PriceListDescriptionSources
 
             foreach ($rows as $row) {
                 $id = (int) $row->id;
-                $url = $this->jsonString($row->primary_source_url ?? null);
                 $kind = $this->jsonString($row->primary_source_kind ?? null);
+                $url = $this->sourceUrl($row, $kind);
                 $position = $url !== null && $settings !== null ? $settings->position($url) : null;
                 $source = match (true) {
                     ! isset($describedSet[$id]) => self::SOURCE_NONE,
                     isset($fromB2b[$id]) || in_array($kind, self::B2B_KINDS, true) => self::SOURCE_B2B,
                     in_array($kind, self::MANUFACTURER_KINDS, true) => self::SOURCE_MANUFACTURER,
+                    // ręczny link i opis bez zapisanego rodzaju: strona producenta po domenie adresu źródła
+                    ($kind === self::MANUAL_KIND || $kind === null) && $url !== null
+                        && $this->onManufacturerDomain($row, $url, $domainsMemo) => self::SOURCE_MANUFACTURER,
                     $position !== null => self::SOURCE_PRICE_LIST_SITES,
                     default => self::SOURCE_OTHER,
                 };
@@ -123,6 +150,53 @@ final class PriceListDescriptionSources
         }
 
         return $out;
+    }
+
+    /**
+     * Adres, według którego liczy się źródło opisu: primary_source_url; przy ręcznym linku bez niego — shop_source_url
+     * karty; przy opisie bez zapisanego źródła (oba pola puste, sprzed 13.09.2026) — pierwszy adres z source_urls.
+     */
+    private function sourceUrl(object $row, ?string $kind): ?string
+    {
+        $url = $this->jsonString($row->primary_source_url ?? null);
+        if ($url !== null) {
+            return $url;
+        }
+        if ($kind === self::MANUAL_KIND) {
+            $shop = trim((string) ($row->shop_source_url ?? ''));
+
+            return preg_match('#^https?://#i', $shop) === 1 ? $shop : null;
+        }
+
+        return $kind === null ? $this->jsonString($row->first_source_url ?? null) : null;
+    }
+
+    /**
+     * Adres na domenie producenta karty przypisanej świadomie (assignedDomainsFor). Wynik zależy tylko od marki i tego,
+     * czy karta wygląda na serię rękawic URGENT — pamiętany na cały przebieg po tym kluczu, bo każde wyliczenie pyta
+     * bazę (manufacturer_sites).
+     *
+     * @param  array<string, list<string>>  $memo
+     */
+    private function onManufacturerDomain(object $row, string $url, array &$memo): bool
+    {
+        $host = $this->manufacturers->hostFromUrl($url);
+        if ($host === null) {
+            return false;
+        }
+        $probe = new Product;
+        $probe->setRawAttributes([
+            'sku' => (string) ($row->sku ?? ''),
+            'name' => (string) ($row->name ?? ''),
+            'model_name' => $row->model_name ?? null,
+            'manufacturer' => (string) ($row->manufacturer ?? ''),
+            'category' => $row->category ?? null,
+        ]);
+        $brand = $this->manufacturers->brandKey((string) $probe->manufacturer);
+        $key = $brand.'|'.($this->identity->looksLikeUrgentGloveSeries($probe) ? 'urgent' : '');
+        $memo[$key] ??= $this->manufacturers->assignedDomainsFor($probe);
+
+        return $this->manufacturers->hostMatchesAny($host, $memo[$key]);
     }
 
     /** Ta sama miara co Product::hasDescriptionText, na początku opisu (HEAD_MARGIN). */

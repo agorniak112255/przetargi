@@ -41,6 +41,8 @@ class ProductEnrichmentBatchItem extends Model
         'name',
         'status',
         'message',
+        'previous_status',
+        'previous_error',
     ];
 
     public function batch(): BelongsTo

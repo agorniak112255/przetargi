@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\CatalogPage;
+use App\Models\ManufacturerSite;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
@@ -130,6 +131,64 @@ final class PriceListFilesApiTest extends TestCase
             ['host' => 'sklep-b.pl', 'position' => 1, 'on_search_sites' => false, 'indexed_pages' => 0, 'described_cards' => 1],
             ['host' => 'sklep-c.pl', 'position' => 2, 'on_search_sites' => true, 'indexed_pages' => 1, 'described_cards' => 0],
         ], $row['hosts']);
+    }
+
+    /**
+     * Ręczny link (primary_source_kind „manual”) do strony producenta i opis sprzed pola primary_source_kind (13.09.2026:
+     * same source_urls) liczą się od producenta po domenie adresu — tylko domenie przypisanej świadomie (konfiguracja,
+     * „Strony wyszukiwarka” ręcznie), nie wykrytej automatem. Produkcja 07.10.2026: CEDERROTH 59 kart z ręcznym linkiem
+     * do cederroth.com jako „inne”, Coba 559 opisów z coba.com jako „bez źródła”.
+     */
+    public function test_manual_link_and_legacy_source_urls_on_manufacturer_domain_count_as_manufacturer(): void
+    {
+        config(['enrichment.manufacturer_domains' => ['testowy' => ['producent-testowy.pl']]]);
+        ManufacturerSite::remember('testowy', 'Testowy', ['producent-reczny.pl'], 'manual');
+        ManufacturerSite::remember('testowy', 'Testowy', ['producent-wykryty.pl'], 'discovered');
+        $list = $this->list('Testowy', ['enrichment_sites' => ['sklep-a.pl']]);
+
+        // ręczny link: domena producenta z konfiguracji (www.) i przypisana ręcznie → producent
+        $this->card($list, 'M-1', [], 'https://www.producent-testowy.pl/m-1', 'manual');
+        $this->card($list, 'M-2', [], 'https://producent-reczny.pl/m-2', 'manual');
+        // ręczny link do obcego sklepu → inne; do strony cennika → strona cennika (jak dotąd)
+        $this->card($list, 'M-3', [], 'https://obcy-sklep.pl/m-3', 'manual');
+        $this->card($list, 'M-4', [], 'https://sklep-a.pl/m-4', 'manual');
+        // domena wykryta automatem to nie domena przypisana świadomie → inne
+        $this->card($list, 'M-5', [], 'https://producent-wykryty.pl/m-5', 'manual');
+        // ręczny link bez primary_source_url: adres z shop_source_url karty
+        $this->card($list, 'M-6', [
+            'shop_source_url' => 'https://producent-testowy.pl/m-6',
+            'enrichment_payload' => ['primary_source_kind' => 'manual', 'source_urls' => ['https://obcy-sklep.pl/m-6']],
+        ]);
+        // opis bez zapisanego rodzaju: pierwszy adres z source_urls
+        $this->card($list, 'L-1', ['enrichment_payload' => ['source_urls' => ['https://producent-testowy.pl/l-1', 'https://sklep-a.pl/l-1']]]);
+        $this->card($list, 'L-2', ['enrichment_payload' => ['source_urls' => ['https://obcy-sklep.pl/l-2', 'https://producent-testowy.pl/l-2']]]);
+        $this->card($list, 'L-3', ['enrichment_payload' => ['source_urls' => ['https://sklep-a.pl/l-3']]]);
+        // bez source_urls i z pustą listą — jak dotąd „inne”
+        $this->card($list, 'L-4', ['enrichment_payload' => ['description' => 'x']]);
+        $this->card($list, 'L-5', ['enrichment_payload' => ['source_urls' => []]]);
+        // rodzaj „shop” zapisany przy opisie nie jest przeliczany po domenie
+        $this->card($list, 'S-1', [], 'https://producent-testowy.pl/s-1', 'shop');
+        // opis z B2B wygrywa także z adresem producenta w source_urls; karta bez opisu zostaje „bez opisu”
+        $b2b = $this->card($list, 'B-1', [
+            'description' => 'Opis ze sklepu dostawcy B2B, dzianina nylonowa 13.',
+            'enrichment_payload' => ['source_urls' => ['https://producent-testowy.pl/b-1']],
+        ]);
+        B2bProductLink::query()->create([
+            'b2b_account_id' => $this->account()->id, 'remote_id' => 'B-1', 'product_id' => $b2b->id, 'remote_sku' => 'B-1',
+            'remote_name' => 'Rękawice', 'description_hash' => sha1((string) $b2b->description),
+        ]);
+        $this->card($list, 'N-1', ['description' => null, 'enrichment_payload' => ['source_urls' => ['https://producent-testowy.pl/n-1']]]);
+
+        $row = $this->getJson('/api/price-lists/files')->assertOk()->json('lists.0');
+
+        $this->assertSame([
+            'price_list_sites' => 2, // M-4, L-3
+            'manufacturer' => 4, // M-1, M-2, M-6, L-1
+            'other' => 6, // M-3, M-5, L-2, L-4, L-5, S-1
+            'b2b' => 1,
+            'none' => 1,
+        ], $row['sources']);
+        $this->assertSame(2, $row['hosts'][0]['described_cards']);
     }
 
     public function test_files_list_without_sites_and_with_b2b_account(): void

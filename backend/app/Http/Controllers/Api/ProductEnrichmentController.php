@@ -116,6 +116,8 @@ class ProductEnrichmentController extends Controller
             'skip_manufacturer' => ['sometimes', 'boolean'],
             'enriched_before' => ['sometimes', 'nullable', 'date'],
             'apply' => ['sometimes', 'boolean'],
+            // „Pobierz ponownie” bez filtrów: gotowe opisy od producenta tylko na wyraźne życzenie
+            'include_manufacturer' => ['sometimes', 'boolean'],
         ]);
         $filtered = array_key_exists('only_not_from_sites', $data)
             || array_key_exists('skip_manufacturer', $data)
@@ -124,12 +126,29 @@ class ProductEnrichmentController extends Controller
             return $this->enrichPriceListFiltered($request, $priceList, $data, $filtered);
         }
 
+        $force = (bool) ($data['force'] ?? false);
+        $skippedManufacturer = [];
         try {
-            $queued = $this->enrichment->enqueuePriceList(
-                $priceList,
-                $request->user(),
-                (bool) ($data['force'] ?? false),
-            );
+            if ($force && ! (bool) ($data['include_manufacturer'] ?? false)) {
+                // ta sama lista kart co enqueuePriceList, bez gotowych opisów od producenta
+                $ids = app(PriceListCards::class)->ids($priceList);
+                if ($ids === []) {
+                    throw new RuntimeException('Ten cennik nie ma zapisanych produktów do wzbogacenia (stary import?).');
+                }
+                [$ids, $skippedManufacturer] = $this->withoutManufacturerDescribed($ids);
+                if ($ids === []) {
+                    return $this->allManufacturerDescribed($skippedManufacturer);
+                }
+                $queued = $this->enrichment->enqueueProductIds(
+                    $ids,
+                    $request->user(),
+                    true,
+                    ProductEnrichmentBatch::SCOPE_PRICE_LIST,
+                    (int) $priceList->id,
+                );
+            } else {
+                $queued = $this->enrichment->enqueuePriceList($priceList, $request->user(), $force);
+            }
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -139,6 +158,11 @@ class ProductEnrichmentController extends Controller
             'product_ids' => $queued['product_ids'],
             'skipped_b2b' => $queued['skipped_b2b'],
             'price_list_id' => $priceList->id,
+            // tylko przy ponownym pobraniu (force) — bez niego odpowiedź jak przed 07.10.2026
+            ...($force ? [
+                'skipped_manufacturer' => count($skippedManufacturer),
+                'skipped_manufacturer_ids' => $skippedManufacturer,
+            ] : []),
         ], 202);
     }
 
@@ -174,7 +198,10 @@ class ProductEnrichmentController extends Controller
                 if ($onlyNotFromSites && $card['source'] === PriceListDescriptionSources::SOURCE_PRICE_LIST_SITES) {
                     return false;
                 }
-                if ($skipManufacturer && in_array($card['kind'], PriceListDescriptionSources::MANUFACTURER_KINDS, true)) {
+                // od producenta także ręczny link do jego strony i stary opis z jego strony bez zapisanego rodzaju
+                // (PriceListDescriptionSources) — rodzaj manufacturer/catalog zostaje, jak dotąd, także bez opisu
+                if ($skipManufacturer && ($card['source'] === PriceListDescriptionSources::SOURCE_MANUFACTURER
+                    || in_array($card['kind'], PriceListDescriptionSources::MANUFACTURER_KINDS, true))) {
                     return false;
                 }
 
@@ -242,14 +269,20 @@ class ProductEnrichmentController extends Controller
             'product_ids' => ['required', 'array', 'min:1', 'max:'.$this->aiSettings->enrichmentBatchLimit()],
             'product_ids.*' => ['integer', 'exists:products,id'],
             'force' => ['sometimes', 'boolean'],
+            'include_manufacturer' => ['sometimes', 'boolean'],
         ]);
 
+        $force = (bool) ($data['force'] ?? false);
+        $ids = array_map('intval', $data['product_ids']);
+        $skippedManufacturer = [];
+        if ($force && ! (bool) ($data['include_manufacturer'] ?? false)) {
+            [$ids, $skippedManufacturer] = $this->withoutManufacturerDescribed($ids);
+            if ($ids === []) {
+                return $this->allManufacturerDescribed($skippedManufacturer);
+            }
+        }
         try {
-            $queued = $this->enrichment->enqueueProductIds(
-                array_map('intval', $data['product_ids']),
-                $request->user(),
-                (bool) ($data['force'] ?? false),
-            );
+            $queued = $this->enrichment->enqueueProductIds($ids, $request->user(), $force);
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -258,7 +291,50 @@ class ProductEnrichmentController extends Controller
             'batch' => $this->batchPayload($queued['batch']),
             'product_ids' => $queued['product_ids'],
             'skipped_b2b' => $queued['skipped_b2b'],
+            ...($force ? [
+                'skipped_manufacturer' => count($skippedManufacturer),
+                'skipped_manufacturer_ids' => $skippedManufacturer,
+            ] : []),
         ], 202);
+    }
+
+    /**
+     * Ponowne pobranie hurtem (force) pomija karty z gotowym opisem od producenta (plan 07.10.2026): MAPA i AJ GROUP
+     * miały po 4+ udane opisy na kartę w miesiąc — każdy przebieg to czas modelu i ryzyko podmiany dobrego opisu gorszym.
+     * Karty „błąd” i „ręcznie” idą jak dotąd, pojedynczą kartę „Pobierz” w karcie produktu też. Kartę od producenta
+     * przepuszcza include_manufacturer (przycisk „Pobierz też te” po komunikacie).
+     *
+     * @param  list<int>  $ids
+     * @return array{0: list<int>, 1: list<int>} [karty do kolejki, pominięte od producenta]
+     */
+    private function withoutManufacturerDescribed(array $ids): array
+    {
+        $cards = app(PriceListDescriptionSources::class)->cards($ids, null);
+        $keep = [];
+        $skipped = [];
+        foreach ($ids as $id) {
+            $card = $cards[$id] ?? null;
+            if ($card !== null && $card['status'] === Product::ENRICHMENT_DONE
+                && $card['source'] === PriceListDescriptionSources::SOURCE_MANUFACTURER) {
+                $skipped[] = $id;
+
+                continue;
+            }
+            $keep[] = $id;
+        }
+
+        return [$keep, $skipped];
+    }
+
+    /** @param  list<int>  $skipped */
+    private function allManufacturerDescribed(array $skipped): JsonResponse
+    {
+        return response()->json([
+            'message' => 'Wszystkie wybrane karty ('.count($skipped).') mają gotowy opis ze strony producenta — ponowne pobranie '
+                .'ich pomija. Żeby pobrać je mimo to, użyj „Pobierz też te karty”.',
+            'skipped_manufacturer' => count($skipped),
+            'skipped_manufacturer_ids' => $skipped,
+        ], 422);
     }
 
     public function activeBatches(): JsonResponse

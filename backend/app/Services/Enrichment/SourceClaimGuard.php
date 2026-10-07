@@ -233,13 +233,29 @@ final class SourceClaimGuard
      */
     public function filterDescription(string $description): array
     {
+        return self::filterSentences(
+            $description,
+            fn (string $sentence): array => self::statesMissingData($sentence, false) ? ['brak danych'] : $this->uncoveredClaims($sentence)
+        );
+    }
+
+    /**
+     * Opis bez zdań, dla których $reasonsFor zwraca powody — te same reguły akapitów i zdań co filterDescription
+     * (skróty „kat.”, „np.” nie kończą zdania). Dosłowne kody norm w zwykłym wzbogacaniu (07.10.2026) używają tego
+     * samego podziału, żeby nie ciąć zdań inaczej niż przy opisie z B2B.
+     *
+     * @param  callable(string): list<string>  $reasonsFor
+     * @return array{text: string, dropped: list<string>}
+     */
+    public static function filterSentences(string $description, callable $reasonsFor): array
+    {
         $dropped = [];
         $paragraphs = [];
         foreach (preg_split('/\n[ \t]*\n\s*/u', trim($description)) ?: [] as $paragraph) {
             $kept = [];
             $changed = false;
             foreach (self::sentences($paragraph) as [$separator, $sentence]) {
-                $reasons = self::statesMissingData($sentence, false) ? ['brak danych'] : $this->uncoveredClaims($sentence);
+                $reasons = $reasonsFor($sentence);
                 if ($reasons !== []) {
                     $dropped[] = implode(', ', $reasons).': '.trim($sentence);
                     $changed = true;

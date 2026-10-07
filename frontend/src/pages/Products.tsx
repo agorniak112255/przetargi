@@ -26,6 +26,7 @@ import { SourceModelsList } from '../components/SourceModelsList'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import {
   api,
+  ApiError,
   B2B_DESCRIPTION_OVERWRITE_CONFIRM,
   can,
   PERM_SUPPLIER_SPECIAL_VIEW,
@@ -382,6 +383,8 @@ export function Products() {
     risky: Product[]
     rest: number[]
   } | null>(null)
+  /** Karty pominięte przy „Ponów zaznaczone”, bo mają gotowy opis od producenta — przycisk „Pobierz też te karty”. */
+  const [manufacturerSkipped, setManufacturerSkipped] = useState<number[]>([])
   const [enrichBatchLimit, setEnrichBatchLimit] = useState(5)
   const [enrichConcurrency, setEnrichConcurrency] = useState(4)
 
@@ -630,28 +633,43 @@ export function Products() {
     setSkipPrompt({ force, risky, rest })
   }
 
-  async function enrichIds(ids: number[], force = false) {
+  async function enrichIds(ids: number[], force = false, includeManufacturer = false) {
     if (ids.length === 0) return
     const capped = ids.slice(0, enrichBatchLimit)
     setEnrichBusy(true)
     setErr('')
     setMsg('')
+    setManufacturerSkipped([])
     try {
-      const res = await api<{ batch: EnrichmentBatch; product_ids?: number[]; skipped_b2b?: number }>('/products/enrich', {
+      const res = await api<{
+        batch: EnrichmentBatch
+        product_ids?: number[]
+        skipped_b2b?: number
+        skipped_manufacturer_ids?: number[]
+      }>('/products/enrich', {
         method: 'POST',
-        body: JSON.stringify({ product_ids: capped, force }),
+        body: JSON.stringify({ product_ids: capped, force, include_manufacturer: includeManufacturer }),
       })
       setBatch(res.batch)
       const queuedIds = res.product_ids ?? capped
+      const skippedManufacturer = res.skipped_manufacturer_ids ?? []
+      setManufacturerSkipped(skippedManufacturer)
       setMsg(
         (ids.length > enrichBatchLimit
           ? `Zlecono ${queuedIds.length}/${ids.length} (limit ${enrichBatchLimit})`
           : `Zlecono ${queuedIds.length} produktów`) +
           ((res.skipped_b2b ?? 0) > 0 ? ` · pominięto ${res.skipped_b2b} z opisem z cennika B2B` : '') +
+          (skippedManufacturer.length > 0
+            ? ` · pominięto ${skippedManufacturer.length} z gotowym opisem od producenta`
+            : '') +
           `. Serwer liczy ${enrichConcurrency} naraz — możesz zamknąć stronę.`,
       )
       setSelected({})
     } catch (ex) {
+      const skipped = ex instanceof ApiError ? ex.body.skipped_manufacturer_ids : undefined
+      if (Array.isArray(skipped)) {
+        setManufacturerSkipped(skipped.filter((id): id is number => typeof id === 'number'))
+      }
       setErr(ex instanceof Error ? ex.message : 'Błąd wzbogacania')
     } finally {
       setEnrichBusy(false)
@@ -1216,6 +1234,22 @@ export function Products() {
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {manufacturerSkipped.length > 0 && (
+        <p className="mb-2 flex flex-wrap items-center gap-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span>
+            {manufacturerSkipped.length} kart ma gotowy opis ze strony producenta — ponowne pobranie hurtem je pomija,
+            żeby nie zastąpić dobrego opisu gorszym.
+          </span>
+          <button
+            type="button"
+            disabled={enrichBusy}
+            className="rounded border border-amber-400 px-2 py-1 disabled:opacity-50"
+            onClick={() => void enrichIds(manufacturerSkipped, true, true)}
+          >
+            Pobierz też te karty ({manufacturerSkipped.length})
+          </button>
+        </p>
+      )}
       {externalHints.length > 0 && (
         <div className="mb-2 space-y-1.5">
           {externalHints.map((hint) => (

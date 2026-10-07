@@ -507,6 +507,12 @@ final class PriceListImportService
                 if (($payload['ean'] ?? null) === null) {
                     unset($payload['ean']);
                 }
+                // ani norm: kolumnę products.norms pisze opis (wzbogacanie, opis B2B), plik ich nie podaje — pozycja
+                // z null zerowała normy przy każdym ponownym imporcie (też kartom z mapy połączeń, applyRedirectGroup),
+                // a z nimi indeks tekstowy i wektor (plan 07.10.2026, B1)
+                if (($payload['norms'] ?? null) === null) {
+                    unset($payload['norms']);
+                }
                 // „Usuń i pomijaj przy imporcie” — przed mapą połączeń i dopasowaniem: wiersz ze wszystkimi pozycjami
                 // zablokowanymi nie zakłada ani nie aktualizuje karty; część zablokowana (zwinięte rozmiary) — reszta
                 // pozycji idzie zwykłą drogą bez kodów zablokowanych

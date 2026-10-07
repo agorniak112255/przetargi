@@ -3351,6 +3351,43 @@ final class ProductEnrichmentApiTest extends TestCase
         Storage::disk('public')->assertMissing('products/docs/stary-arkusz.pdf');
     }
 
+    /**
+     * Plan 07.10.2026 (B2): przebieg z force, w którym nowe zdjęcie się nie pobrało (zapora ansell.com oddaje stronę
+     * zamiast pliku), kasował dobre zdjęcie karty — pusta lista nowych zdjęć znaczyła „usuń wszystkie stare”.
+     * Nowy opis i arkusz wchodzą, stare zdjęcie zostaje, komunikat mówi o poprzednim zdjęciu.
+     */
+    public function test_force_keeps_old_image_when_new_image_fails_to_download(): void
+    {
+        [$product, $service] = $this->forcedMatRunWithOldFiles($this->mockLlmWithSanitize([
+            'description' => 'Dwuwarstwowa mata przewodząca stołowa COBA do stref ESD, górna warstwa rozpraszająca 0,5 mm, '
+                .'zatrzask uziemiający 10 mm, zgodna z IEC 61340-5-1. Wymiary 0,6 m x 1,2 m, grubość 2 mm, kolor zielony.',
+            'features' => ['warstwa rozpraszająca'],
+            'specs' => ['Wymiary: 0,6 m x 1,2 m'],
+            'norms' => ['IEC 61340-5-1'],
+            'certificates' => [],
+            'materials' => ['guma'],
+            'use_cases' => ['stanowiska ESD'],
+            'image_urls' => [],
+            'document_urls' => [],
+            'source_urls' => ['https://www.coba.com/pl/produkt/mata-przewodzaca-stolowa'],
+            'confidence' => 0.9,
+        ]), newImageFails: true);
+
+        $service->enrichProduct($product, true);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertStringContainsString('Dwuwarstwowa mata', (string) $product->description);
+        $this->assertSame(['https://www.coba.com/stara-mata.jpg'], ProductImage::query()->where('product_id', $product->id)->pluck('source_url')->all());
+        Storage::disk('public')->assertExists('products/stara-mata.jpg');
+        $this->assertSame(
+            ['https://www.coba.com/datasheets/mata-przewodzaca-stolowa-pl_PL.pdf'],
+            ProductDocument::query()->where('product_id', $product->id)->pluck('source_url')->all(),
+        );
+        $this->assertStringContainsString('zostaje poprzednie', (string) $product->enrichment_error);
+        $this->assertArrayNotHasKey('image_retry', (array) $product->enrichment_payload);
+    }
+
     public function test_force_keeps_old_web_files_when_model_fails_after_card_is_confirmed(): void
     {
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
@@ -3441,7 +3478,7 @@ final class ProductEnrichmentApiTest extends TestCase
      *
      * @return array{0: Product, 1: ProductEnrichmentService}
      */
-    private function forcedMatRunWithOldFiles(OpenAiCompatibleClient $llm, ?callable $onNewImage = null): array
+    private function forcedMatRunWithOldFiles(OpenAiCompatibleClient $llm, ?callable $onNewImage = null, bool $newImageFails = false): array
     {
         Storage::fake('public');
         Storage::disk('public')->put('products/stara-mata.jpg', 'stare zdjęcie');
@@ -3476,6 +3513,11 @@ final class ProductEnrichmentApiTest extends TestCase
             'results' => [['url' => $own, 'title' => 'Mata przewodząca stołowa - COBA PL', 'snippet' => 'CDR040004 Mata przewodząca stołowa COBA']],
             'errors' => [],
         ]);
+        if ($newImageFails) {
+            // odmowa źródła zdjęcia → zastępstwo ze sklepów (tryImagesFromOtherCards); tu sklepów nie ma
+            $search->shouldReceive('moreCatalogHits')->andReturn([]);
+            $search->shouldReceive('shopCardsForImage')->andReturn([]);
+        }
         $pdf = "%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n";
         Http::fake([
             'https://api.tavily.com/*' => Http::response(['results' => []], 200),
@@ -3486,9 +3528,13 @@ final class ProductEnrichmentApiTest extends TestCase
                 .'</p><img src="https://www.coba.com/images/CDR0400-mata.png" alt="Mata przewodząca stołowa CDR0400">'
                 .'<a href="https://www.coba.com/datasheets/mata-przewodzaca-stolowa-pl_PL.pdf">Arkusz danych</a>'
                 .'</body></html>', 200, ['Content-Type' => 'text/html']),
-            'https://www.coba.com/images/*' => static function () use ($onNewImage) {
+            'https://www.coba.com/images/*' => static function () use ($onNewImage, $newImageFails) {
                 if ($onNewImage !== null) {
                     $onNewImage();
+                }
+                if ($newImageFails) {
+                    // jak zapora producenta: zamiast pliku strona HTML
+                    return Http::response('<html>Access denied</html>', 200, ['Content-Type' => 'text/html']);
                 }
                 $image = imagecreatetruecolor(600, 600);
                 imagefill($image, 0, 0, 0x2E7D32);
