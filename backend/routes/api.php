@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\Admin\ErpItemController;
 use App\Http\Controllers\Api\Admin\ErpOperatorController;
 use App\Http\Controllers\Api\Admin\LocalNetworkController as AdminLocalNetworkController;
 use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsController;
+use App\Http\Controllers\Api\Admin\NetworkAccessGrantController as AdminNetworkAccessGrantController;
 use App\Http\Controllers\Api\Admin\PrestaCategoryController as AdminPrestaCategoryController;
 use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
 use App\Http\Controllers\Api\Admin\RoleController as AdminRoleController;
@@ -105,7 +106,10 @@ use App\Http\Controllers\Api\UserDirectoryController;
 use App\Http\Controllers\Api\UserMailAccountController;
 use Illuminate\Support\Facades\Route;
 
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
+// logowanie spoza sieci z kodem e-mailem — poza `log.activity` (dziennik zapisuje ciało udanych POST, tu jest kod)
+Route::post('/login/network-code/send', [AuthController::class, 'sendNetworkCode'])->middleware('throttle:network-code');
+Route::post('/login/network-code/verify', [AuthController::class, 'verifyNetworkCode'])->middleware('throttle:network-code');
 Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class, 'show'])
     ->whereNumber('image')
     ->name('product-images.thumb');
@@ -686,6 +690,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         // adresy sieci lokalnej — dla kont i grup „tylko z sieci lokalnej”
         Route::get('/local-networks', [AdminLocalNetworkController::class, 'index'])->middleware('permission:admin.roles.manage');
         Route::put('/local-networks', [AdminLocalNetworkController::class, 'update'])->middleware('permission:admin.roles.manage');
+        // dostępy spoza sieci potwierdzone kodem e-mailem (konta i grupy „z kodem e-mailem”)
+        Route::get('/network-access-grants', [AdminNetworkAccessGrantController::class, 'index'])->middleware('permission:admin.roles.manage');
+        Route::delete('/network-access-grants/{grant}', [AdminNetworkAccessGrantController::class, 'destroy'])->whereNumber('grant')->middleware('permission:admin.roles.manage');
 
         Route::get('/roles', [AdminRoleController::class, 'index'])->middleware('permission:admin.roles.manage');
         Route::post('/roles', [AdminRoleController::class, 'store'])->middleware('permission:admin.roles.manage');

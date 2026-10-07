@@ -6,6 +6,12 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="popup">
+  <!-- Aplikacja odrzuciła połączenie spoza sieci firmy (od 1.36.0): co zrobić, zamiast samego błędu. -->
+  <div id="network" class="alarm network" hidden>
+    <p id="networkText"></p>
+    <button id="networkOpen" class="secondary">Otwórz aplikację w przeglądarce</button>
+  </div>
+
   <div id="status" class="status" hidden></div>
 
   <section id="setup" hidden>

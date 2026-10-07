@@ -105,6 +105,10 @@ class UserController extends Controller
         if ($conflict !== null) {
             return $conflict;
         }
+        // nowe hasło od administratora — dostęp spoza sieci z kodem zdobyty starym przestaje działać
+        if (! empty($data['password'])) {
+            $this->networkAccess->revokeAll($user, $user->is($request->user()) ? $request->ip() : null);
+        }
 
         return response()->json($this->present($user->fresh()));
     }
@@ -157,6 +161,7 @@ class UserController extends Controller
 
         $user->password = Hash::make($plainPassword);
         $user->save();
+        $this->networkAccess->revokeAll($user, $user->is($request->user()) ? $request->ip() : null);
 
         return response()->json([
             'ok' => true,

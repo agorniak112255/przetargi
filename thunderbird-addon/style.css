@@ -99,6 +99,20 @@ p {
   font-weight: 600;
 }
 
+/* Odmowa spoza sieci firmy (od 1.36.0): tekst i przycisk do aplikacji w przeglądarce. */
+.alarm.network {
+  margin-bottom: 10px;
+}
+
+.alarm.network p {
+  margin: 0 0 6px;
+}
+
+.alarm.network button {
+  margin: 0;
+  font-weight: normal;
+}
+
 .version {
   margin: 12px 0 0;
   color: var(--muted);

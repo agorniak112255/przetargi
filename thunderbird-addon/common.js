@@ -59,6 +59,25 @@ async function setSettings(patch) {
   await browser.storage.local.set(patch)
 }
 
+/**
+ * Odmowa z powodu sieci (od 1.36.0): poza biurem serwer odrzuca klucz dodatku (401) albo logowanie (403)
+ * z `reason: 'network'`. `code_login: true` — konto może pracować spoza biura po wpisaniu kodu z e-maila,
+ * ale ten dostęp wygasł (albo go nie było); `false` — konto działa tylko z sieci firmy.
+ *
+ * Kod wpisuje się w aplikacji w przeglądarce, nie w dodatku. Dostęp dotyczy konta i adresu, więc po wpisaniu
+ * kodu ten sam klucz dodatku znowu działa — tło pyta ponownie najpóźniej po 5 minutach.
+ */
+function isNetworkDenial(status, data) {
+  return (status === 401 || status === 403) && data !== null && typeof data === 'object' && data.reason === 'network'
+}
+
+function networkDeniedText(codeLogin) {
+  return codeLogin
+    ? 'Jesteś poza siecią firmy, a dostęp potwierdzony kodem z e-maila wygasł (działa 24 godziny dla jednego miejsca). '
+      + 'Otwórz aplikację w przeglądarce, zaloguj się i wpisz kod z e-maila — potem dodatek zadziała sam w ciągu kilku minut.'
+    : 'To konto działa tylko z sieci firmy. Połącz się z siecią w biurze.'
+}
+
 /** Backend odpowiada po polsku, więc jego komunikat pokazujemy wprost. */
 class ApiError extends Error {
   constructor(status, message, data = null) {
@@ -66,6 +85,9 @@ class ApiError extends Error {
     this.status = status
     // Całe ciało odpowiedzi — przy 409 jest w nim pole `duplicate`.
     this.data = data
+    // Odmowa z powodu sieci (401/403 z `reason: 'network'`) — `e.network === true`.
+    this.network = isNetworkDenial(status, data)
+    this.codeLogin = this.network && data.code_login === true
   }
 }
 
@@ -110,6 +132,10 @@ async function api(path, { method = 'GET', body = null, token = null, baseUrl = 
 
   if (!res.ok) {
     if (res.status === 401) {
+      // Poza biurem klucz jest dobry, tylko sieć nie ta — „zaloguj się ponownie” byłoby tu złą radą.
+      if (isNetworkDenial(401, data)) {
+        throw new ApiError(401, networkDeniedText(data.code_login === true), data)
+      }
       throw new ApiError(401, 'Sesja wygasła — zaloguj się ponownie w ustawieniach dodatku.')
     }
     const message = data && typeof data.message === 'string' && data.message !== ''

@@ -19,11 +19,12 @@ type AdminUser = User & {
   network_access_effective?: { mode: NetworkMode; source: 'user' | 'role' | 'default'; role: string | null }
 }
 
-type NetworkMode = 'any' | 'local'
+type NetworkMode = 'any' | 'local' | 'local_code'
 
 const NETWORK_LABELS: Record<NetworkMode, string> = {
   any: 'z każdej sieci',
   local: 'tylko z sieci lokalnej',
+  local_code: 'z sieci lokalnej, spoza niej z kodem e-mailem',
 }
 
 /** Wartość pola edycji: '' = jak w grupie. */
@@ -726,13 +727,14 @@ export function AdminUsers() {
                       <option value="">jak w grupie</option>
                       <option value="any">{NETWORK_LABELS.any}</option>
                       <option value="local">{NETWORK_LABELS.local}</option>
+                      <option value="local_code">{NETWORK_LABELS.local_code}</option>
                     </select>
                     <p className="mt-1 text-[11px] leading-snug text-slate-500">
                       Ustawienie konta ma pierwszeństwo przed grupą. Adresy sieci lokalnej: Administracja → Role.
                     </p>
                   </div>
                 ) : (
-                  <span className={u.network_access_effective?.mode === 'local' ? 'text-amber-800' : 'text-slate-600'}>
+                  <span className={u.network_access_effective?.mode && u.network_access_effective.mode !== 'any' ? 'text-amber-800' : 'text-slate-600'}>
                     {networkSummary(u)}
                   </span>
                 )}

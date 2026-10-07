@@ -26,7 +26,11 @@ let attachments = []
 /** Załączniki pominięte — zdjęcia, archiwa, za duże pliki. */
 let skippedAttachments = []
 
+/** Widoczna sekcja — po odmowie spoza sieci wracamy z „Zakładam zapytanie…” tam, skąd przyszliśmy. */
+let currentSection = null
+
 function show(section) {
+  currentSection = section
   for (const name of ['setup', 'known', 'fresh', 'working', 'duplicate']) {
     el(name).hidden = name !== section
   }
@@ -37,6 +41,30 @@ function status(text, kind = 'info') {
   box.textContent = text
   box.className = 'status ' + kind
   box.hidden = text === ''
+}
+
+/**
+ * Aplikacja odrzuciła połączenie spoza sieci firmy (od 1.36.0) — jeden komunikat na górze okienka, z przyciskiem
+ * do aplikacji w przeglądarce (tam wpisuje się kod z e-maila). Kolejne odmowy (zapytanie, czat) tylko go
+ * odświeżają, nie dokładają drugiego. Zwykły pasek stanu chowamy: mówiłby to samo innymi słowami.
+ */
+function showNetworkDenied(text) {
+  el('networkText').textContent = text
+  el('network').hidden = false
+  status('')
+}
+
+/** Błąd z api() albo wynik z tła (`{ network: true, error }`) — true, gdy to odmowa spoza sieci i komunikat już jest. */
+function handleNetworkDenied(error) {
+  if (!error || error.network !== true) return false
+  showNetworkDenied(error.message || error.error || '')
+
+  return true
+}
+
+async function openAppInBrowser() {
+  const { baseUrl } = await getSettings()
+  await browser.windows.openDefaultBrowser(baseUrl + '/')
 }
 
 function busy(on, text = '') {
@@ -121,6 +149,8 @@ async function inquiriesForMessage(headerMessageId) {
 
     return Array.isArray(rows) ? rows : []
   } catch (e) {
+    // Odmowa spoza sieci: wysłanie i tak by nie przeszło — null zatrzymuje okienko na komunikacie.
+    if (handleNetworkDenied(e)) return null
     // Bez połączenia zachowujemy się jak dotąd — ekran zwykłego wysłania.
     return []
   }
@@ -286,7 +316,7 @@ async function includeAttachment(item) {
   } catch (e) {
     item.state = 'error'
     item.checked = false
-    item.note = e.message || String(e)
+    item.note = handleNetworkDenied(e) ? 'nieodczytany — brak dostępu spoza sieci firmy' : e.message || String(e)
   } finally {
     renderAttachments()
     updateCounter()
@@ -334,6 +364,7 @@ function includedFileNames(body) {
 /** Założenie zapytania prowadzi tło — zamknięcie okienka go nie przerywa. */
 function sendToBackground(body, tone, force, fileNames = null) {
   busy(true)
+  const back = currentSection
   browser.runtime.sendMessage({
     type: 'createInquiry',
     headerMessageId: message.headerMessageId || null,
@@ -348,7 +379,14 @@ function sendToBackground(body, tone, force, fileNames = null) {
     tone,
     force,
     fileNames,
-  })
+  }).then((result) => {
+    // Odmowa spoza sieci, a okienko jeszcze otwarte: komunikat i powrót do treści — po wpisaniu kodu
+    // w przeglądarce wystarczy kliknąć jeszcze raz.
+    if (result && result.network === true && currentSection === 'working') {
+      show(back)
+      handleNetworkDenied(result)
+    }
+  }).catch(() => {})
 
   show('working')
   status('')
@@ -450,6 +488,7 @@ async function init() {
 
       return
     } catch (e) {
+      if (handleNetworkDenied(e)) return
       if (e.status !== 404 && e.status !== 403) {
         status(e.message, 'error')
 
@@ -465,8 +504,14 @@ async function init() {
 
     return
   }
+  // Nieudana próba spoza sieci: sam komunikat o sieci pokaże się niżej, jeśli odmowa trwa.
   if (pending && pending.error) {
-    status('Poprzednia próba się nie udała: ' + pending.error, 'error')
+    status(
+      pending.network === true
+        ? 'Poprzednia próba się nie udała — aplikacja nie przyjęła połączenia spoza sieci firmy.'
+        : 'Poprzednia próba się nie udała: ' + pending.error,
+      'error',
+    )
   }
 
   const text = await readBody()
@@ -482,6 +527,7 @@ async function init() {
 
   if (!skipServerDuplicate) {
     const rows = await inquiriesForMessage(message.headerMessageId)
+    if (rows === null) return
     const own = rows.find((row) => row.mine === true)
     if (own !== undefined) {
       // Własne zapytanie z innego komputera — zapamiętujemy, żeby następny raz
@@ -594,7 +640,13 @@ function insertReply() {
     // Tło i tak sprawdzi Message-ID z zapytania; ten numer służy tylko
     // zapytaniom wklejonym w przeglądarce, które maila nie mają.
     messageId: message.id,
-  })
+  }).then((result) => {
+    // Okno odpowiedzi się nie otworzyło, więc okienko wciąż jest — mówimy, co zrobić.
+    if (result && result.network === true) {
+      busy(false)
+      handleNetworkDenied(result)
+    }
+  }).catch(() => {})
   status('Otwieram okno odpowiedzi…', 'info')
 }
 
@@ -694,6 +746,8 @@ async function initChat() {
   try {
     [users, unread] = await Promise.all([api('/api/chat/users'), api('/api/chat/unread')])
   } catch (e) {
+    // Odmowa spoza sieci: sekcja czatu zostaje ukryta, ale komunikat mówi, co zrobić.
+    if (handleNetworkDenied(e)) return
     if (e.status !== 403 && e.status !== 404) console.warn('Czat w okienku:', e.message)
 
     return
@@ -775,7 +829,10 @@ async function chatSend() {
       browser.runtime.sendMessage({ type: 'chatSent', conversationId: chatConversationId }).catch(() => {})
     }
   } catch (e) {
-    if (e.status === 0) {
+    if (e.network === true) {
+      handleNetworkDenied(e)
+      chatStatus('Wiadomość nie poszła — brak dostępu spoza sieci firmy (komunikat na górze okienka).', 'error')
+    } else if (e.status === 0) {
       chatStatus('Brak połączenia z aplikacją — wiadomość nie poszła. Spróbuj jeszcze raz.', 'error')
     } else if (e.status === 403) {
       chatStatus('Nie możesz wysyłać wiadomości w czacie — poproś kierownika o dostęp.', 'error')
@@ -802,6 +859,9 @@ el('chatSendButton').addEventListener('click', () => {
 })
 
 el('openOptions').addEventListener('click', () => browser.runtime.openOptionsPage())
+el('networkOpen').addEventListener('click', () => {
+  openAppInBrowser().catch((e) => status(e.message || String(e), 'error'))
+})
 el('enableTags').addEventListener('click', () => {
   enableTags().catch((e) => status(e.message || String(e), 'error'))
 })

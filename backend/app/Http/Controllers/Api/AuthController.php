@@ -7,6 +7,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\ActivityLogger;
+use App\Services\Auth\NetworkAccessCodeException;
+use App\Services\Auth\NetworkAccessCodeService;
 use App\Services\Auth\NetworkAccessPolicy;
 use App\Support\OfferPricing;
 use Closure;
@@ -22,6 +24,7 @@ class AuthController extends Controller
     public function __construct(
         private readonly ActivityLogger $activityLogger,
         private readonly NetworkAccessPolicy $networkAccess,
+        private readonly NetworkAccessCodeService $networkCodes,
     ) {}
 
     public function login(Request $request): JsonResponse
@@ -50,7 +53,8 @@ class AuthController extends Controller
             ]);
         }
 
-        // hasło dobre, ale konto „tylko z sieci lokalnej” loguje się spoza niej — bez klucza
+        // hasło dobre, ale konto „tylko z sieci lokalnej” loguje się spoza niej — bez klucza; konto „z kodem e-mailem”
+        // dostaje klucz logowania z kodem (challenge), a klucz aplikacji dopiero po kodzie (verifyNetworkCode)
         if (! $this->networkAccess->allows($user, $request->ip())) {
             $this->activityLogger->log(
                 action: 'login_blocked_network',
@@ -59,9 +63,51 @@ class AuthController extends Controller
                 request: $request,
             );
 
-            return response()->json(['message' => NetworkAccessPolicy::DENIED_MESSAGE, 'reason' => 'network'], 403);
+            $body = $this->networkAccess->deniedBody($user);
+            if ($body['code_login']) {
+                $body['challenge'] = $this->networkCodes->start($user, $request->ip());
+                $body['email_hint'] = NetworkAccessCodeService::emailHint((string) $user->email);
+            }
+
+            return response()->json($body, 403);
         }
 
+        return $this->issueToken($user, $request, 'Logowanie');
+    }
+
+    /** Wysyła kod na e-mail konta (logowanie spoza sieci, tryb „z kodem e-mailem”). */
+    public function sendNetworkCode(Request $request): JsonResponse
+    {
+        $data = $request->validate(['challenge' => ['required', 'string', 'max:100']]);
+
+        try {
+            return response()->json($this->networkCodes->send($data['challenge'], $request));
+        } catch (NetworkAccessCodeException $e) {
+            return $e->toResponse();
+        }
+    }
+
+    /** Dobry kod: dostęp z tego adresu na 24 godziny i klucz aplikacji jak przy zwykłym logowaniu. */
+    public function verifyNetworkCode(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'challenge' => ['required', 'string', 'max:100'],
+            'code' => ['required', 'string', 'max:20'],
+        ], [
+            'code.required' => 'Wpisz kod z e-maila.',
+        ]);
+
+        try {
+            $user = $this->networkCodes->verify($data['challenge'], $data['code'], $request);
+        } catch (NetworkAccessCodeException $e) {
+            return $e->toResponse();
+        }
+
+        return $this->issueToken($user, $request, 'Logowanie spoza sieci (kod z e-maila)');
+    }
+
+    private function issueToken(User $user, Request $request, string $label): JsonResponse
+    {
         $newToken = $user->createToken('spa');
         $newToken->accessToken->forceFill([
             'ip_address' => $request->ip(),
@@ -78,7 +124,7 @@ class AuthController extends Controller
         $this->activityLogger->log(
             action: 'login',
             user: $user,
-            meta: ['label' => 'Logowanie'],
+            meta: ['label' => $label],
             request: $request,
         );
 
@@ -171,6 +217,8 @@ class AuthController extends Controller
         }
 
         $user->forceFill(['password' => Hash::make($validated['password'])])->save();
+        // dostęp spoza sieci z kodem zdobyty starym hasłem przestaje działać — poza adresem, z którego zmieniasz hasło
+        $this->networkAccess->revokeAll($user, $request->ip());
 
         // Przy Sanctum::actingAs w testach bieżący „token” nie jest rekordem z bazy — wtedy zostają wszystkie.
         $current = $user->currentAccessToken();

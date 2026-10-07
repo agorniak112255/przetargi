@@ -213,7 +213,7 @@ class RoleController extends Controller
 
     private static function networkAccess(Role $role): string
     {
-        return $role->getAttribute('network_access') === NetworkAccessPolicy::LOCAL ? NetworkAccessPolicy::LOCAL : NetworkAccessPolicy::ANY;
+        return NetworkAccessPolicy::roleMode($role);
     }
 
     public function destroy(string $role): JsonResponse

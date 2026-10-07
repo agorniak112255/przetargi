@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { api } from '../lib/api'
 import { AdminLocalNetworks } from '../components/AdminLocalNetworks'
+import { AdminNetworkGrants } from '../components/AdminNetworkGrants'
 import { AdminTeams } from '../components/AdminTeams'
+
+type NetworkAccessMode = 'any' | 'local' | 'local_code'
 
 type RoleRow = {
   id: number
@@ -11,7 +14,7 @@ type RoleRow = {
   users_count?: number
   permissions: string[]
   /** dostęp z sieci całej grupy; konto z własnym ustawieniem go nie dziedziczy */
-  network_access?: 'any' | 'local'
+  network_access?: NetworkAccessMode
   /** osoby, których oferty widzi rola z uprawnieniem „Oferty — podgląd ofert wybranych osób” */
   offer_visible_user_ids?: number[]
 }
@@ -117,7 +120,7 @@ export function AdminRoles() {
   }
 
   /** Dostęp z sieci grupy — zapis od razu, osobno od zaznaczeń uprawnień (te zostają na ekranie niezapisane). */
-  async function saveNetworkAccess(mode: 'any' | 'local') {
+  async function saveNetworkAccess(mode: NetworkAccessMode) {
     if (!selected) return
     setBusy(true)
     setErr('')
@@ -452,10 +455,11 @@ export function AdminRoles() {
                 className="rounded border px-2 py-1 text-sm text-slate-900"
                 value={selectedRole.network_access ?? 'any'}
                 disabled={busy}
-                onChange={(e) => void saveNetworkAccess(e.target.value as 'any' | 'local')}
+                onChange={(e) => void saveNetworkAccess(e.target.value as NetworkAccessMode)}
               >
                 <option value="any">z każdej sieci</option>
                 <option value="local">tylko z sieci lokalnej</option>
+                <option value="local_code">z sieci lokalnej, spoza niej z kodem e-mailem</option>
               </select>
             </label>
             <span className="text-xs text-slate-500">
@@ -589,6 +593,8 @@ export function AdminRoles() {
       )}
 
       <AdminLocalNetworks />
+
+      <AdminNetworkGrants />
 
       <AdminTeams />
     </div>

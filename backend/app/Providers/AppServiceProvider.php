@@ -22,6 +22,9 @@ use App\Services\Presta\PrestaShopExportClient;
 use App\Support\BrandDictionary;
 use App\Support\ProductVariantFacts;
 use App\Support\StorageOwnership;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Sanctum\PersonalAccessToken;
 use Laravel\Sanctum\Sanctum;
@@ -73,6 +76,24 @@ class AppServiceProvider extends ServiceProvider
             });
         }
 
+        // Logowanie hasłem: 10 prób na minutę na e-mail i adres (adres biura jest wspólny, więc nie sam adres).
+        // Za hasłem stoi kod e-mailem dla kont spoza sieci — limit chroni też przed zgadywaniem hasła na wyścigi.
+        RateLimiter::for('login', static fn (Request $request): Limit => Limit::perMinute(10)
+            ->by(mb_strtolower(trim((string) $request->input('email'))).'|'.$request->ip())
+            ->response(static fn (Request $request, array $headers) => response()->json(
+                ['message' => 'Za dużo prób logowania. Spróbuj ponownie za minutę.'],
+                429,
+                $headers,
+            )));
+        // Wysyłka i sprawdzanie kodu e-mailem — z jednego adresu; limity na konto liczy NetworkAccessCodeService.
+        RateLimiter::for('network-code', static fn (Request $request): Limit => Limit::perMinute(20)
+            ->by($request->ip())
+            ->response(static fn (Request $request, array $headers) => response()->json(
+                ['message' => 'Za dużo prób. Spróbuj ponownie za minutę.', 'retry_after' => 60],
+                429,
+                $headers,
+            )));
+
         // Dostęp z sieci przy każdym żądaniu z kluczem (wszystkie trasy auth:sanctum, także autoryzacja kanałów czatu).
         // Klucze sprzed zmiany ustawienia przestają działać od razu. Logowanie sesją (guard web) tego nie sprawdza —
         // dziś go nie ma (bez statefulApi()); włączenie go wymaga tej samej kontroli.
@@ -81,11 +102,13 @@ class AppServiceProvider extends ServiceProvider
                 return $isValid;
             }
             $request = $this->app->make('request');
-            if ($this->app->make(NetworkAccessPolicy::class)->allows($token->tokenable, $request->ip())) {
+            $policy = $this->app->make(NetworkAccessPolicy::class);
+            if ($policy->allows($token->tokenable, $request->ip())) {
                 return true;
             }
-            // odpowiedź 401 dostaje powód, żeby aplikacja wylogowała i powiedziała dlaczego (bootstrap/app.php)
-            $request->attributes->set('network_access_denied', true);
+            // odpowiedź 401 dostaje powód (i czy można potwierdzić dostęp kodem), żeby aplikacja wylogowała
+            // i powiedziała dlaczego (bootstrap/app.php)
+            $request->attributes->set('network_access_denied', $policy->deniedBody($token->tokenable));
 
             return false;
         });

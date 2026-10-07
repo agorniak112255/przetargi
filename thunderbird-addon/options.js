@@ -40,6 +40,17 @@ async function refresh() {
   showUpdate(await lastUpdateCheck())
 }
 
+/**
+ * Logowanie spoza sieci firmy (od 1.36.0): 403 z `reason: 'network'`. Kodu z e-maila dodatek nie obsługuje —
+ * wpisuje się go w aplikacji w przeglądarce; potem dostęp z tego miejsca ma całe konto, więc „Połącz” przejdzie.
+ */
+function loginNetworkText(codeLogin) {
+  return codeLogin
+    ? 'Jesteś poza siecią firmy. Otwórz aplikację w przeglądarce, zaloguj się i wpisz kod z e-maila, '
+      + 'potem kliknij tu „Połącz” jeszcze raz.'
+    : networkDeniedText(false)
+}
+
 async function login() {
   const baseUrl = el('baseUrl').value.trim().replace(/\/+$/, '')
   const email = el('email').value.trim()
@@ -76,7 +87,7 @@ async function login() {
     status('Połączono.', 'ok')
     await refresh()
   } catch (e) {
-    status(e.message, 'error')
+    status(e.network === true ? loginNetworkText(e.codeLogin) : e.message, 'error')
   } finally {
     busy(false)
   }
@@ -97,7 +108,7 @@ async function check() {
 
 /**
  * Wylogowuje klucz dodatku w aplikacji. Zwraca pusty tekst, gdy klucza na serwerze już nie ma
- * (także 401 — ktoś go wcześniej wylogował), albo opis problemu, gdy serwer tego nie potwierdził.
+ * (także zwykłe 401 — ktoś go wcześniej wylogował), albo opis problemu, gdy serwer tego nie potwierdził.
  */
 async function revokeToken(token, baseUrl) {
   try {
@@ -105,7 +116,8 @@ async function revokeToken(token, baseUrl) {
 
     return ''
   } catch (e) {
-    return e.status === 401 ? '' : e.message
+    // 401 spoza sieci firmy (od 1.36.0) nie znaczy, że klucza nie ma — serwer go tylko nie przyjął stąd.
+    return e.status === 401 && e.network !== true ? '' : e.message
   }
 }
 

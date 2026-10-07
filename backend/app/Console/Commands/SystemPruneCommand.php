@@ -14,7 +14,9 @@ use Illuminate\Support\Facades\DB;
  *   notifications.dispatches_retention_days,
  * - przebiegi zadań (scheduled_task_runs) starsze niż system_health.runs_retention_days,
  * - pełny HTML ogłoszeń z Biuletynu niepowiązanych z przetargiem ani z częścią wyniku, pobranych dawniej niż
- *   bzp.html_retention_days (sam wiersz ogłoszenia i odczytane z niego dane zostają).
+ *   bzp.html_retention_days (sam wiersz ogłoszenia i odczytane z niego dane zostają),
+ * - logowania z kodem e-mailem (network_access_challenges) starsze niż 7 dni i dostępy spoza sieci z kodem
+ *   (network_access_grants) po 90 dniach od końca ważności — kto i kiedy logował się kodem zostaje w dzienniku aktywności.
  * Porcjami po id — bez długich blokad tabel i bez wczytywania treści do pamięci.
  */
 final class SystemPruneCommand extends Command
@@ -32,12 +34,16 @@ final class SystemPruneCommand extends Command
         $dispatches = $this->deleteOlderThan('notification_dispatches', (int) config('notifications.dispatches_retention_days', 180));
         $runs = $this->deleteOlderThan('scheduled_task_runs', (int) config('system_health.runs_retention_days', 60));
         $html = $this->clearNoticeHtml((int) config('bzp.html_retention_days', 30));
+        $challenges = $this->deleteOlderThan('network_access_challenges', 7);
+        $grants = $this->deleteExpiredGrants(90);
 
         $this->info(sprintf(
-            'Usunięte wpisy wysłanych powiadomień: %d. Usunięte przebiegi zadań: %d. Wyczyszczona treść ogłoszeń: %d.',
+            'Usunięte wpisy wysłanych powiadomień: %d. Usunięte przebiegi zadań: %d. Wyczyszczona treść ogłoszeń: %d. Usunięte logowania z kodem: %d, stare dostępy z kodem: %d.',
             $dispatches,
             $runs,
             $html,
+            $challenges,
+            $grants,
         ));
 
         return self::SUCCESS;
@@ -58,6 +64,11 @@ final class SystemPruneCommand extends Command
         } while (count($ids) === self::BATCH);
 
         return $deleted;
+    }
+
+    private function deleteExpiredGrants(int $days): int
+    {
+        return DB::table('network_access_grants')->where('expires_at', '<', now()->subDays($days))->delete();
     }
 
     private function clearNoticeHtml(int $days): int

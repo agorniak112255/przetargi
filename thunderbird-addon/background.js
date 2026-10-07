@@ -104,10 +104,12 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
       return { ok: false, duplicate: found }
     }
 
-    await setPending(headerMessageId, { startedAt: Date.now(), error: e.message, duplicate })
+    // `network`: odmowa spoza sieci firmy — okienko pokaże wtedy, co zrobić, zamiast samego błędu.
+    const network = e.network === true
+    await setPending(headerMessageId, { startedAt: Date.now(), error: e.message, duplicate, network })
     await notify('Zapytanie nie powstało', e.message)
 
-    return { ok: false, error: e.message }
+    return { ok: false, error: e.message, network }
   }
 }
 
@@ -231,7 +233,7 @@ async function insertReply({ inquiryId, messageId = null, inquiry: known = null 
   } catch (e) {
     await notify('Nie udało się otworzyć odpowiedzi', e.message)
 
-    return { ok: false, error: e.message }
+    return { ok: false, error: e.message, network: e.network === true }
   }
 }
 

@@ -15,7 +15,10 @@ type AuthCtx = {
   /** Powód wylogowania przez serwer (konto „tylko z sieci lokalnej” poza nią) — strona logowania go pokazuje. */
   signedOutNotice: string | null
   retry: () => Promise<void>
+  /** Rzuca ApiError z ciałem odpowiedzi (np. 403 `reason:'network'` z `code_login`/`challenge` — krok z kodem e-mailem). */
   login: (email: string, password: string) => Promise<void>
+  /** Logowanie spoza sieci kodem z e-maila (konto „z sieci lokalnej, spoza niej z kodem e-mailem”); błędy jako ApiError. */
+  verifyNetworkCode: (challenge: string, code: string) => Promise<void>
   logout: () => Promise<void>
   /** Podmienia dane konta po zapisie ustawień, które zwracają świeży obiekt użytkownika. */
   replaceUser: (user: User) => void
@@ -77,15 +80,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => stopRealtime()
   }, [realtimeUserId])
 
-  async function login(email: string, password: string) {
-    const data = await api<{ token: string; user: User }>('/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    })
+  function startSession(data: { token: string; user: User }) {
     setToken(data.token)
     setConnectionError(null)
     setSignedOutNotice(null)
     setUser(data.user)
+  }
+
+  async function login(email: string, password: string) {
+    startSession(
+      await api<{ token: string; user: User }>('/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      }),
+    )
+  }
+
+  async function verifyNetworkCode(challenge: string, code: string) {
+    startSession(
+      await api<{ token: string; user: User }>('/login/network-code/verify', {
+        method: 'POST',
+        body: JSON.stringify({ challenge, code }),
+      }),
+    )
   }
 
   async function logout() {
@@ -100,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <Ctx.Provider value={{ user, loading, connectionError, signedOutNotice, retry: verify, login, logout, replaceUser: setUser }}>
+    <Ctx.Provider value={{ user, loading, connectionError, signedOutNotice, retry: verify, login, verifyNetworkCode, logout, replaceUser: setUser }}>
       {children}
     </Ctx.Provider>
   )

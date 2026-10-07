@@ -452,6 +452,36 @@ nietknięte.
   które wspierają dowolne słowa kluczowe, przenoszą się między komputerami tej
   samej osoby; niezależnie od tego stan zawsze odtwarza się z serwera aplikacji.
 
+## Praca spoza biura (od 1.36.0)
+
+Konto może mieć w aplikacji dostęp „z sieci lokalnej, spoza niej z kodem
+e-mailem” (albo „tylko z sieci lokalnej”). Poza biurem aplikacja odrzuca wtedy
+klucz dodatku odpowiedzią 401 z `reason: 'network'` i `code_login` (`true`,
+gdy konto może pracować z kodem z e-maila, a dostęp z kodem wygasł albo go nie było).
+
+**Dodatek nie ma własnego kroku z kodem.** Kod wpisuje się w aplikacji
+w przeglądarce (albo w karcie czatu — to też strona aplikacji). Dostęp z kodem
+dotyczy konta i adresu, z którego go wpisano, i trwa 24 godziny — ten sam klucz
+dodatku znowu działa, bez ponownego „Połącz”. Tło dodatku po odmowie pyta co
+5 minut, więc wszystko rusza samo najpóźniej po około 5 minutach.
+
+Co widzi handlowiec:
+
+- **okienko nad mailem** — gdy aplikacja odrzuci którekolwiek pytanie (sprawdzenie
+  maila, czat, „Wyślij do Przetargów”, „Wyślij koledze”, „Wstaw odpowiedź”),
+  na górze pojawia się jeden komunikat, co zrobić, i przycisk **Otwórz aplikację
+  w przeglądarce**; sekcja czatu jest wtedy ukryta,
+- **ustawienia dodatku** — „Połącz” spoza biura (403 z `reason: 'network'`) mówi,
+  żeby najpierw wpisać kod w aplikacji w przeglądarce, a potem kliknąć „Połącz”
+  jeszcze raz; „Sprawdź połączenie” pokazuje ten sam komunikat co okienko,
+- **tło** (kolejka „Zapisz i wyślij”, licznik czatu) — po cichu czeka 5 minut,
+  jak przy każdej odmowie klucza; żadnych dodatkowych powiadomień,
+- **przycisk „Czat”** otwiera czat jak zawsze — strona czatu sama poprosi
+  o zalogowanie i kod.
+
+Zwykłe 401 (bez `reason`, np. klucz wylogowany po zmianie hasła) działa jak
+dotąd: „Sesja wygasła — zaloguj się ponownie w ustawieniach dodatku”.
+
 ## Instalacja
 
 Dodatek nie jest podpisany przez Mozillę, więc trzeba raz wyłączyć wymóg podpisu.
@@ -591,6 +621,8 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
 - `POST /api/inquiries` przyjmuje pole `force` (domyślnie false) i przy cudzym
   zapytaniu z tego samego maila odpowiada **409** z polem `duplicate`
   (`id`, `user.name`, `created_at`, `replied_at`, `match`).
+- praca spoza biura (1.36.0+): odmowa klucza poza siecią to 401
+  `{message, reason:'network', code_login}`, odmowa logowania — 403 z tymi samymi polami.
 
 ## Podział zadań
 

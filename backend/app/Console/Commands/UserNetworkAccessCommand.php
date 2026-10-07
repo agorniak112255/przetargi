@@ -17,7 +17,7 @@ final class UserNetworkAccessCommand extends Command
 {
     protected $signature = 'users:network-access
                             {email : E-mail konta}
-                            {mode? : any = z każdej sieci, local = tylko z sieci lokalnej, group = jak w grupie}
+                            {mode? : any = z każdej sieci, local = tylko z sieci lokalnej, local_code = spoza sieci z kodem e-mailem, group = jak w grupie}
                             {--apply : Zapisz zmianę (bez tej flagi tylko podgląd)}';
 
     protected $description = 'Pokazuje albo ustawia dostęp z sieci jednego konta (wyjście awaryjne przy zablokowanym logowaniu)';
@@ -38,9 +38,9 @@ final class UserNetworkAccessCommand extends Command
         if ($mode === null) {
             return self::SUCCESS;
         }
-        $map = ['any' => NetworkAccessPolicy::ANY, 'local' => NetworkAccessPolicy::LOCAL, 'group' => null];
+        $map = ['any' => NetworkAccessPolicy::ANY, 'local' => NetworkAccessPolicy::LOCAL, 'local_code' => NetworkAccessPolicy::LOCAL_CODE, 'group' => null];
         if (! array_key_exists((string) $mode, $map)) {
-            $this->error('Tryb: any, local albo group.');
+            $this->error('Tryb: any, local, local_code albo group.');
 
             return self::FAILURE;
         }
@@ -59,7 +59,11 @@ final class UserNetworkAccessCommand extends Command
     private function describe(NetworkAccessPolicy $policy, User $user): string
     {
         $effective = $policy->effective($user);
-        $mode = $effective['mode'] === NetworkAccessPolicy::LOCAL ? 'tylko z sieci lokalnej' : 'z każdej sieci';
+        $mode = match ($effective['mode']) {
+            NetworkAccessPolicy::LOCAL => 'tylko z sieci lokalnej',
+            NetworkAccessPolicy::LOCAL_CODE => 'z sieci lokalnej, spoza niej z kodem e-mailem',
+            default => 'z każdej sieci',
+        };
         $source = match ($effective['source']) {
             'user' => 'ustawienie konta',
             'role' => $effective['role'] !== null ? 'grupa '.$effective['role'] : 'grupa',

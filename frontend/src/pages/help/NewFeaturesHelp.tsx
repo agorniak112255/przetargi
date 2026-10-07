@@ -772,9 +772,9 @@ function Stage01Slideshow() {
           ),
         },
         {
-          action: 'Dostęp z sieci: z każdej sieci albo tylko z sieci lokalnej',
-          does: 'Administrator ustala, skąd konto może pracować: „z każdej sieci” albo „tylko z sieci lokalnej” (z biura). Ustawienie ma każda grupa (rola) i może je mieć każde konto. Ustawienie konta ma pierwszeństwo przed grupą; „jak w grupie” oznacza, że obowiązuje ustawienie grupy. Gdy ktoś ma kilka grup, a choć jedna ma „tylko z sieci lokalnej”, konto bez własnego ustawienia też pracuje tylko z sieci lokalnej. Sieć lokalna to adresy IP wpisane w „Sieć lokalna — adresy IP” (Administracja → Role): pojedynczy adres albo zakres, np. 91.189.223.0/24. Liczy się publiczny adres biura — ten, który ekran pokazuje jako „Twój adres”, gdy siedzisz w biurze; adresy 192.168.… z sieci wewnętrznej nic nie dają, bo serwer ich nie widzi. Konto ograniczone do sieci lokalnej nie zaloguje się spoza niej (ekran logowania mówi dlaczego), a osoba już zalogowana zostaje wylogowana przy następnym działaniu w aplikacji. Dotyczy to też dodatku do Thunderbirda. Aplikacja nie pozwoli zapisać zmiany, która odcięłaby administratora od adresu, z którego ją zapisuje, ani ustawić „tylko z sieci lokalnej”, gdy lista adresów jest pusta. Dziennik aktywności notuje każdą zablokowaną próbę logowania. Gdy biuro dostanie nowy adres IP od dostawcy Internetu, osoby „tylko z sieci lokalnej” nie zalogują się, dopóki administrator nie dopisze nowego adresu — najlepiej zrobić to od razu z biura („Dodaj mój adres”). Plik kalendarza terminów (adres .ics) działa dalej z każdej sieci, bo pobierają go programy kalendarza.',
-          click: 'Konto: „Administracja” → „Użytkownicy” → „Edytuj” → kolumna „Dostęp z sieci” → „Zapisz”. Grupa: „Administracja” → „Role” → wybierz rolę → „Dostęp z sieci” (zapis od razu). Adresy: „Administracja” → „Role” → „Sieć lokalna — adresy IP” (link „lista adresów” przy „Dostęp z sieci” przewija do niej) → „Dodaj mój adres” albo „Dodaj adres” → „Zapisz adresy”.',
+          action: 'Dostęp z sieci: z każdej sieci, tylko z sieci lokalnej albo spoza niej z kodem e-mailem',
+          does: 'Administrator ustala, skąd konto może pracować: „z każdej sieci”, „tylko z sieci lokalnej” (z biura) albo „z sieci lokalnej, spoza niej z kodem e-mailem”. Ustawienie ma każda grupa (rola) i może je mieć każde konto. Ustawienie konta ma pierwszeństwo przed grupą; „jak w grupie” oznacza, że obowiązuje ustawienie grupy. Gdy ktoś ma kilka grup, a konto nie ma własnego ustawienia, obowiązuje najostrzejsze z ustawień grup: „tylko z sieci lokalnej” przed „z kodem e-mailem”, a to przed „z każdej sieci”. Sieć lokalna to adresy IP wpisane w „Sieć lokalna — adresy IP” (Administracja → Role): pojedynczy adres albo zakres, np. 91.189.223.0/24. Liczy się publiczny adres biura — ten, który ekran pokazuje jako „Twój adres”, gdy siedzisz w biurze; adresy 192.168.… z sieci wewnętrznej nic nie dają, bo serwer ich nie widzi. Konto ograniczone do sieci lokalnej nie zaloguje się spoza niej (ekran logowania mówi dlaczego), a osoba już zalogowana zostaje wylogowana przy następnym działaniu w aplikacji. Dotyczy to też dodatku do Thunderbirda. Aplikacja nie pozwoli zapisać zmiany, która odcięłaby administratora od adresu, z którego ją zapisuje, ani ustawić „tylko z sieci lokalnej”, gdy lista adresów jest pusta. Dziennik aktywności notuje każdą zablokowaną próbę logowania. Gdy biuro dostanie nowy adres IP od dostawcy Internetu, osoby „tylko z sieci lokalnej” nie zalogują się, dopóki administrator nie dopisze nowego adresu — najlepiej zrobić to od razu z biura („Dodaj mój adres”). Plik kalendarza terminów (adres .ics) działa dalej z każdej sieci, bo pobierają go programy kalendarza. Trzecie ustawienie, „z sieci lokalnej, spoza niej z kodem e-mailem”: w biurze konto działa jak zwykle, a poza biurem po wpisaniu hasła ekran logowania pokazuje przycisk „Wyślij kod na e-mail”. Na adres e-mail konta przychodzi kod z 6 cyfr, ważny 10 minut; po wpisaniu kodu i „Potwierdź” konto pracuje z tego miejsca (tego adresu IP) przez 24 godziny — w przeglądarce i w dodatku do Thunderbirda. Dodatek nie pyta o kod: zadziała sam po potwierdzeniu kodu w przeglądarce, najpóźniej po kilku minutach. Po 24 godzinach albo z innego miejsca trzeba wpisać nowy kod. Zmiana hasła odbiera wszystkie dostępy z kodem. Administrator widzi aktywne dostępy w „Administracja” → „Role” → „Dostęp spoza sieci z kodem — aktywne” i może każdy od razu odebrać („Odbierz”). Uwaga: kod chroni tylko wtedy, gdy do skrzynki pocztowej nie da się wejść tym samym hasłem co do aplikacji — inaczej osoba, która zna hasło, odczyta też kod. W sieci komórkowej (telefon, modem) adres często się zmienia, więc kod trzeba wpisywać ponownie.',
+          click: 'Konto: „Administracja” → „Użytkownicy” → „Edytuj” → kolumna „Dostęp z sieci” → „Zapisz”. Grupa: „Administracja” → „Role” → wybierz rolę → „Dostęp z sieci” (zapis od razu). Adresy: „Administracja” → „Role” → „Sieć lokalna — adresy IP” (link „lista adresów” przy „Dostęp z sieci” przewija do niej) → „Dodaj mój adres” albo „Dodaj adres” → „Zapisz adresy”. Logowanie z kodem (pracownik poza biurem): e-mail i hasło → „Zaloguj” → „Wyślij kod na e-mail” → kod z e-maila → „Potwierdź” („Wyślij kod ponownie” po minucie, „Wróć do logowania” — od nowa). Odebranie dostępu z kodem: „Administracja” → „Role” → „Dostęp spoza sieci z kodem — aktywne” → „Odbierz”.',
           tone: 'violet',
           screen: (
             <AppFrame nav="Administracja">
@@ -788,10 +788,21 @@ function Stage01Slideshow() {
                   <span className="rounded border border-slate-300 px-2 py-0.5">Biuro</span>
                 </div>
                 <div className="pt-1 font-semibold">Dostęp z sieci (konto)</div>
-                <Mark>
-                  <div className="rounded border border-slate-300 px-2 py-1">tylko z sieci lokalnej</div>
-                </Mark>
+                <div className="space-y-1">
+                  <div className="rounded border border-slate-200 px-2 py-1 text-slate-500">z każdej sieci</div>
+                  <div className="rounded border border-slate-200 px-2 py-1 text-slate-500">tylko z sieci lokalnej</div>
+                  <Mark>
+                    <div className="rounded border border-slate-300 px-2 py-1">z sieci lokalnej, spoza niej z kodem e-mailem</div>
+                  </Mark>
+                </div>
                 <p className="text-[11px] text-slate-500">Ustawienie konta ma pierwszeństwo przed grupą.</p>
+                <div className="pt-1 font-semibold">Dostęp spoza sieci z kodem — aktywne</div>
+                <div className="flex items-center justify-between gap-2 rounded border border-slate-200 px-2 py-1">
+                  <span>
+                    Anna Nowak · <span className="font-mono">83.24.110.7</span> · do 08.10.2026, 14:05
+                  </span>
+                  <span className="rounded bg-red-100 px-2 py-0.5 text-red-700">Odbierz</span>
+                </div>
               </Card>
             </AppFrame>
           ),
