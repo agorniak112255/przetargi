@@ -267,6 +267,38 @@ final class SourceIdentityTest extends TestCase
     }
 
     /**
+     * 07.10.2026 (podgląd baseline CEDERROTH): cederroth.com na stronach globalnych podaje numer artykułu tylko w nazwie
+     * głównego zdjęcia; nasz sklep z kodem w adresie nie potwierdza niczego, nawet wskazany ręcznie.
+     */
+    public function test_code_in_manufacturer_og_image_is_hard_and_own_shop_is_never_a_source(): void
+    {
+        config(['prestashop.shop_url' => 'https://www.supon.rzeszow.pl']);
+        $station = new Product(['sku' => '51011026', 'name' => 'Apteczka ścienna Cederroth First Aid Station', 'manufacturer' => 'CEDERROTH']);
+        $og = [['type' => 'og_image', 'value' => 'https://www.cederroth.com/app/uploads/2020/09/51011026-cederroth-first-aid-station-f-low-scaled.jpg']];
+
+        $this->assertSame('hard', $this->judge($station, 'https://www.cederroth.com/products/first-aid-station/', 'First Aid Station - Global', 'A First Aid Station.', $og)['verdict']);
+        // to samo zdjęcie na stronie sklepu — nazwa pliku sklepu bywa dowolna
+        $this->assertNotSame('hard', $this->judge($station, 'https://sklep.example/apteczka', 'Apteczka', 'Apteczka.', $og)['verdict']);
+        // kod krótki w nazwie pliku nawet u producenta — za mało
+        $short = new Product(['sku' => '6036', 'name' => 'Plastry Cederroth Salvequick', 'manufacturer' => 'CEDERROTH']);
+        $this->assertNotSame('hard', $this->judge($short, 'https://www.cederroth.com/products/plaster/', 'Plaster', 'Plaster.', [['type' => 'og_image', 'value' => 'https://www.cederroth.com/app/uploads/6036-plaster.jpg']])['verdict']);
+
+        // strona z czytnika (limit zapytań 429) — bez mikrodanych, ale ze zdjęciami wyrobu
+        $cabinet = new Product(['sku' => '290900', 'name' => 'Apteczka ścienna Cederroth First Aid Cabinet', 'manufacturer' => 'CEDERROTH']);
+        $this->assertSame('hard', $this->identity()->judgePage($cabinet, [
+            'url' => 'https://www.cederroth.com/pl/products/duza-szafkowa-apteczka-cederroth-double-door/',
+            'text' => 'Duża szafkowa apteczka.',
+            'image_urls' => ['https://www.cederroth.com/app/uploads/2020/10/290900-fa-cabinet-double-door-f.jpg'],
+        ], $this->profiles()->for($cabinet))['verdict']);
+
+        $dispenser = new Product(['sku' => '490710', 'name' => 'Dozownik na plastry Cederroth', 'manufacturer' => 'CEDERROTH']);
+        $ownShop = 'https://www.supon.rzeszow.pl/dozowniki/3893-cederroth-dozownik-na-plastry-490710.html';
+        $this->assertSame('none', $this->judge($dispenser, $ownShop, 'Dozownik 490710', 'Dozownik 490710')['verdict']);
+        $dispenser->shop_source_url = $ownShop;
+        $this->assertSame('none', $this->identity()->judgePage($dispenser, ['url' => $ownShop, 'text' => 'Dozownik'], null)['verdict']);
+    }
+
+    /**
      * @param  list<array{type: string, value: string}>  $markup
      * @return array<string, mixed>
      */

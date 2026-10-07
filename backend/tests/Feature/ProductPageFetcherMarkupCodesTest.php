@@ -85,6 +85,17 @@ final class ProductPageFetcherMarkupCodesTest extends TestCase
         $this->assertSame(['5901234567890', 'AF06', 'AF06-OFERTA', 'AF060001', 'AF060002'], $values);
     }
 
+    public function test_og_image_is_passed_for_manufacturer_file_name_codes(): void
+    {
+        $html = '<html><head><meta property="og:image" content="https://www.cederroth.com/app/uploads/2020/09/51011026-cederroth-first-aid-station-f-low-scaled.jpg" />'
+            .'</head><body>First Aid Station</body></html>';
+
+        $this->assertSame(
+            [['type' => 'og_image', 'value' => 'https://www.cederroth.com/app/uploads/2020/09/51011026-cederroth-first-aid-station-f-low-scaled.jpg']],
+            (new ProductPageFetcher)->markupIdentifiers($html)
+        );
+    }
+
     public function test_loose_itemprops_count_only_when_single_value(): void
     {
         $fetcher = new ProductPageFetcher;

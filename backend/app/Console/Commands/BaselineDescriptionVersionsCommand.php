@@ -40,6 +40,7 @@ final class BaselineDescriptionVersionsCommand extends Command
                             {--manufacturer= : Tylko karty tego producenta (bez rozróżniania wielkości liter)}
                             {--limit=0 : Najwyżej tyle kart (0 = wszystkie)}
                             {--no-fetch : Bez pobierania stron źródła — werdykt tożsamości nieznany}
+                            {--delay=3 : Sekundy odstępu między stronami tej samej witryny (cederroth.com po kilku zapytaniach odpowiada 429)}
                             {--apply : Zapisz wersje bazowe (bez tej flagi tylko podgląd)}';
 
     protected $description = 'Wersja bazowa opisu (legacy_baseline) dla kart z opisem bez wersji — z werdyktem tożsamości strony źródła; podgląd bez --apply';
@@ -201,6 +202,28 @@ final class BaselineDescriptionVersionsCommand extends Command
         return [$url !== '' ? $url : null, $kind];
     }
 
+    /** @var array<string, float> host => czas ostatniego pobrania (microtime) */
+    private array $lastFetchAt = [];
+
+    /**
+     * Odstęp między stronami tej samej witryny. Bez niego cederroth.com po pierwszej stronie odpowiadał 429, strona
+     * przychodziła z czytnika bez mikrodanych i karta dostawała fałszywe „niepotwierdzone” (podgląd 07.10.2026).
+     */
+    private function paceHost(string $url): void
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $delay = max(0.0, (float) $this->option('delay'));
+        // w testach strony są z atrapy (Http::fake) — czekanie tylko wydłużałoby pakiet
+        if ($host === '' || $delay <= 0.0 || app()->runningUnitTests()) {
+            return;
+        }
+        $wait = ($this->lastFetchAt[$host] ?? 0.0) + $delay - microtime(true);
+        if ($wait > 0) {
+            usleep((int) ($wait * 1_000_000));
+        }
+        $this->lastFetchAt[$host] = microtime(true);
+    }
+
     /**
      * Werdykt karty jak w products:source-identity-probe: strona źródła tym samym pobieraczem co wzbogacanie (pamięć
      * stron 24 h); gdy bramka pobierania ją odrzuci, drugi odczyt bez kodu karty — liczy się werdykt, nie bramka.
@@ -213,6 +236,7 @@ final class BaselineDescriptionVersionsCommand extends Command
         $profiles = app(ManufacturerProfiles::class);
         $found = [];
         if ($url !== null && $kind !== 'manual' && $kind !== 'catalog') {
+            $this->paceHost($url);
             $raw = $pages->fetchRaw($url);
             $row = ['url' => $url, 'title' => $raw !== null ? ($pages->pageTitles($raw['html'])[0] ?? '') : '', 'snippet' => ''];
             $found = $pages->fetch([$row], (string) $product->sku, 1, [], null)['pages'];

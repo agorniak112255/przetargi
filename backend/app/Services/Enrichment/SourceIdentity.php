@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Models\Product;
 use App\Models\ProductIdentifier;
+use App\Support\BlockedSourceHost;
 use App\Support\BrandKey;
 use App\Support\ProductCodeMatch;
 use App\Support\ProductIdentifierCode;
@@ -149,6 +150,14 @@ final class SourceIdentity
         $title = (string) ($page['title'] ?? '');
         $text = (string) ($page['text'] ?? '');
 
+        // Nasz sklep pokazuje nasze własne opisy — niczego o wyrobie nie potwierdza, nawet z kodem w adresie
+        // i nawet wskazany ręcznie (CEDERROTH 490710 ze źródłem supon.rzeszow.pl, 07.10.2026).
+        foreach (array_unique(array_filter([$url, $final])) as $address) {
+            if (BlockedSourceHost::matches($address)) {
+                return $this->verdict(self::NONE, 'strona naszego sklepu albo wykluczona jako źródło', null, null, null);
+            }
+        }
+
         foreach (array_unique(array_filter([$url, $final])) as $address) {
             if ($p->isTrustedShopUrl($address)) {
                 return $this->verdict(self::HARD, 'adres wskazany ręcznie', 'manual', $address, 'url');
@@ -178,7 +187,10 @@ final class SourceIdentity
                     'markup' => $this->markupHas($markup, $entry, $onManufacturerHost, $p),
                     // Kod krótki w treści to za mało („VP01”, „2039” bywa ceną, normą czy kodem sąsiada w tabeli) —
                     // jak w ManufacturerNormIdentity: tylko w adresie, tytule i mikrodanych. Tekst sklepu — nigdy.
-                    'text' => $onManufacturerHost && ! self::isShort($entry) && ProductCodeMatch::textCarries($text, $key),
+                    'text' => $onManufacturerHost && ! self::isShort($entry) && (ProductCodeMatch::textCarries($text, $key)
+                        // Nazwy zdjęć wyrobu na stronie producenta — jak kod w treści (cederroth.com podaje numer tylko
+                        // w nazwach plików i za limitem zapytań 429 strona przychodzi z czytnika bez mikrodanych).
+                        || $this->imageFileCarries($markup, $page, $key)),
                     default => false,
                 };
                 if ($hit) {
@@ -339,6 +351,38 @@ final class SourceIdentity
      * @param  list<mixed>  $markup
      * @param  array{type: string, value: string}  $entry
      */
+    /**
+     * Kod w nazwie pliku zdjęcia strony — głównego (og:image) albo zdjęć wyrobu ze strony (image_urls, także ze strony
+     * z czytnika). Konwencja producenta: cederroth.com na stronach globalnych podaje numer tylko tak
+     * („51011026-cederroth-first-aid-station-f-low-scaled.jpg”), bez REF w treści. Wołane tylko tam, gdzie liczy się
+     * tekst strony (strona producenta z profilem czytającym treść), i dla kodów, które nie są krótkie.
+     *
+     * @param  list<mixed>  $markup
+     * @param  array<string, mixed>  $page
+     */
+    private function imageFileCarries(array $markup, array $page, string $key): bool
+    {
+        $urls = [];
+        foreach ($markup as $code) {
+            if (is_array($code) && ($code['type'] ?? '') === 'og_image') {
+                $urls[] = (string) ($code['value'] ?? '');
+            }
+        }
+        foreach (['trusted_image_urls', 'image_urls'] as $field) {
+            foreach (array_slice(is_array($page[$field] ?? null) ? $page[$field] : [], 0, 20) as $url) {
+                $urls[] = is_string($url) ? $url : '';
+            }
+        }
+        foreach ($urls as $url) {
+            $file = rawurldecode(basename((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+            if ($file !== '' && ProductCodeMatch::textCarries($file, $key)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function markupHas(array $markup, array $entry, bool $onManufacturerHost, Product $p): bool
     {
         $ean = $entry['type'] === 'ean';
@@ -352,7 +396,8 @@ final class SourceIdentity
         ], static fn (string $b): bool => mb_strlen($b) >= 2)));
         foreach ($markup as $code) {
             $value = is_array($code) ? (string) ($code['value'] ?? '') : (is_string($code) ? $code : '');
-            if ($value === '' || (! $onManufacturerHost && is_array($code) && ($code['type'] ?? '') === 'part')) {
+            if ($value === '' || (is_array($code) && ($code['type'] ?? '') === 'og_image')
+                || (! $onManufacturerHost && is_array($code) && ($code['type'] ?? '') === 'part')) {
                 continue;
             }
             if ($ean) {

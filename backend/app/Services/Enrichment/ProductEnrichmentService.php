@@ -33,6 +33,7 @@ use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\PriceListCards;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\BlockedSourceHost;
 use App\Support\CertificateLabels;
 use App\Support\EnrichmentDescriptionTemplates;
 use App\Support\ManufacturerNormFacts;
@@ -664,19 +665,7 @@ final class ProductEnrichmentService
      */
     private function isBlockedSourceUrl(string $url): bool
     {
-        $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
-        if ($host === '') {
-            return false;
-        }
-        $ownShopHost = parse_url(trim((string) config('prestashop.shop_url', '')), PHP_URL_HOST);
-        foreach ([...(array) config('enrichment.blocked_source_hosts', []), is_string($ownShopHost) ? $ownShopHost : ''] as $needle) {
-            $needle = is_string($needle) ? preg_replace('/^www\./', '', mb_strtolower(trim($needle))) ?? '' : '';
-            if ($needle !== '' && ($host === $needle || str_ends_with($host, '.'.$needle))) {
-                return true;
-            }
-        }
-
-        return false;
+        return BlockedSourceHost::matches($url);
     }
 
     /**

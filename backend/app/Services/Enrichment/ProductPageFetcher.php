@@ -242,7 +242,8 @@ final class ProductPageFetcher
             }
             $value = trim(html_entity_decode((string) $value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
             $type = str_starts_with(mb_strtolower($type), 'gtin') ? 'gtin' : mb_strtolower($type);
-            if ($value === '' || mb_strlen($value) > 60 || ! in_array($type, ['sku', 'mpn', 'gtin', 'part'], true)) {
+            $limit = $type === 'og_image' ? 2000 : 60;
+            if ($value === '' || mb_strlen($value) > $limit || ! in_array($type, ['sku', 'mpn', 'gtin', 'part', 'og_image'], true)) {
                 return;
             }
             $out[$type.'|'.$value] = ['type' => $type, 'value' => $value];
@@ -261,6 +262,11 @@ final class ProductPageFetcher
         }
         foreach ($this->mainJsonLdCodes($html) as [$type, $value]) {
             $add($type, $value);
+        }
+        // główne zdjęcie strony — Cederroth podaje numer artykułu tylko w nazwie pliku (SourceIdentity::ogImageCarries)
+        if (preg_match('#<meta\s[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $og)
+            || preg_match('#<meta\s[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']#i', $html, $og)) {
+            $add('og_image', $og[1]);
         }
 
         return array_values($out);
