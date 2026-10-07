@@ -11,10 +11,9 @@ use App\Support\ProductDescriptionText;
 use App\Support\ProductSizeVariant;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Psr7\Response as Psr7Response;
-use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -47,6 +46,7 @@ final class ProductPageFetcher
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
         private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
+        private readonly PublicUrlFetcher $urls = new PublicUrlFetcher,
     ) {}
 
     public function bypassCache(bool $bypass = true): self
@@ -331,10 +331,13 @@ final class ProductPageFetcher
             return $responses;
         }
 
+        // jeden CookieJar na adres przez wszystkie przekierowania (jak dotąd w allow_redirects Guzzle)
+        $jars = [];
         try {
-            $live = Http::pool(function (Pool $pool) use ($pending) {
-                foreach ($pending as $i => $row) {
-                    $pool->as((string) $i)
+            $live = $this->urls->pool(
+                array_map(static fn (array $row): string => (string) ($row['url'] ?? ''), $pending),
+                static function (PendingRequest $request, int|string $i) use (&$jars): PendingRequest {
+                    return $request
                         ->timeout(20)
                         ->connectTimeout(4)
                         ->withHeaders([
@@ -343,13 +346,10 @@ final class ProductPageFetcher
                                 .'Chrome/128.0.0.0 Safari/537.36',
                             'Accept' => 'text/html,application/xhtml+xml',
                         ])
-                        ->withOptions([
-                            'allow_redirects' => true,
-                            'cookies' => new CookieJar,
-                        ])
-                        ->get($row['url']);
-                }
-            });
+                        ->withOptions(['cookies' => $jars[$i] ??= new CookieJar]);
+                },
+                PublicUrlFetcher::PAGE_MAX_BYTES,
+            );
         } catch (Throwable $e) {
             Log::info('Product page fetch pool failed', [
                 'urls' => array_slice(array_column($htmlRows, 'url'), 0, 3),
@@ -594,6 +594,12 @@ final class ProductPageFetcher
         $url = (string) ($row['url'] ?? '');
         $ok = $response instanceof Response && $response->successful();
 
+        // adres (albo przekierowanie) do sieci wewnętrznej — odmowa stała: bez czytnika i bez ponawiania
+        if ($response instanceof BlockedUrlException) {
+            $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::BLOCKED_HOST, 'detail' => BlockedUrlException::MESSAGE];
+
+            return;
+        }
         if (! $ok) {
             $status = $response instanceof Response ? $response->status() : null;
             // WAF sklepu (gloves.co.uk, rs-online) odrzuca IP serwerowni jeszcze przed treścią,

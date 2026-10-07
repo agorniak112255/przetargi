@@ -419,14 +419,13 @@ final class ProductImageCandidateVerifier
     private function loadForVision(string $url): ?array
     {
         try {
-            $response = Http::timeout(12)
+            // tylko serwery z adresem publicznym, każde przekierowanie sprawdzone
+            $response = (new PublicUrlFetcher)->get(fn () => Http::timeout(12)
                 ->connectTimeout(4)
                 ->withHeaders([
                     'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-ImageVerifier/1.0)',
                     'Accept' => 'image/jpeg,image/png,image/webp,image/*;q=0.8',
-                ])
-                ->withOptions(['allow_redirects' => true])
-                ->get($url);
+                ]), $url, self::MAX_IMAGE_BYTES);
             if (! $response->successful()) {
                 return null;
             }

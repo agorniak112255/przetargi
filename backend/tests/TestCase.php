@@ -2,6 +2,7 @@
 
 namespace Tests;
 
+use App\Services\Campaigns\SmtpHostGuard;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
@@ -22,6 +23,10 @@ abstract class TestCase extends BaseTestCase
         // i idzie dalej na wartości zastępczej — wtedy sam wyjątek nie oblałby testu, więc zablokowane
         // żądania są zapisywane i oblewają test w tearDown.
         Http::preventStrayRequests();
+        // Ani prawdziwego DNS: każda nazwa to adres publiczny. Pobieranie stron, zdjęć i PDF wzbogacania sprawdza
+        // adres serwera przed połączeniem (PublicUrlFetcher → SmtpHostGuard z kontenera); test sieci wewnętrznej
+        // podmienia resolver u siebie. Adres IP wprost i localhost odpadają bez pytania resolvera.
+        $this->app->instance(SmtpHostGuard::class, new SmtpHostGuard(static fn (string $host): array => ['93.184.216.34']));
         Http::globalMiddleware(fn (callable $handler): callable => function ($request, array $options) use ($handler) {
             try {
                 return $handler($request, $options);

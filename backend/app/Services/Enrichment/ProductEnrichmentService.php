@@ -6997,9 +6997,9 @@ SYS,
 
             // HTML tylko gdy brak snippetu Tavily — i krótko
             try {
-                $response = Http::timeout(12)
-                    ->withHeaders(['User-Agent' => 'SUPON-ProductEnrichment/1.0'])
-                    ->get($url);
+                // tylko serwery z adresem publicznym, każde przekierowanie sprawdzone
+                $response = (new PublicUrlFetcher)->get(fn () => Http::timeout(12)
+                    ->withHeaders(['User-Agent' => 'SUPON-ProductEnrichment/1.0']), $url, PublicUrlFetcher::PAGE_MAX_BYTES);
                 if (! $response->successful()) {
                     continue;
                 }

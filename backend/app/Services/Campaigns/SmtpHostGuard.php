@@ -43,16 +43,32 @@ class SmtpHostGuard
      */
     public function publicIps(string $host): ?array
     {
-        if ($this->problem($host) !== null) {
-            return null;
+        $ips = $this->checkedIps($host);
+
+        return is_array($ips) ? $ips : null;
+    }
+
+    /**
+     * Sprawdzone adresy publiczne serwera (jedno zapytanie DNS) albo komunikat: NOT_PUBLIC (localhost, adres IP,
+     * którykolwiek adres spoza internetu) lub NOT_FOUND (pusta nazwa, DNS nic nie zwrócił). Wyjątek z
+     * smtp_allowed_hosts nie zwalnia z wymogu adresu publicznego — on dotyczy tylko problem().
+     *
+     * @return list<string>|string
+     */
+    public function checkedIps(string $host): array|string
+    {
+        $host = rtrim(mb_strtolower(trim($host)), '.');
+        $problem = self::nameProblem($host);
+        if ($problem !== null) {
+            return $problem;
         }
-        $ips = ($this->resolver)(rtrim(mb_strtolower(trim($host)), '.'));
+        $ips = ($this->resolver)($host);
         if ($ips === []) {
-            return null;
+            return self::NOT_FOUND;
         }
         foreach ($ips as $ip) {
             if (! self::isPublicIp($ip)) {
-                return null;
+                return self::NOT_PUBLIC;
             }
         }
 
@@ -63,28 +79,26 @@ class SmtpHostGuard
     public function problem(string $host): ?string
     {
         $host = rtrim(mb_strtolower(trim($host)), '.');
+        $allowed = array_map(static fn ($h): string => rtrim(mb_strtolower(trim((string) $h)), '.'), (array) config('campaigns.smtp_allowed_hosts', []));
+        if ($host !== '' && in_array($host, $allowed, true)) {
+            return null;
+        }
+        $ips = $this->checkedIps($host);
+
+        return is_string($ips) ? $ips : null;
+    }
+
+    /** Nazwa odrzucona bez pytania DNS: pusta, localhost albo adres IP w każdej postaci. */
+    private static function nameProblem(string $host): ?string
+    {
         if ($host === '') {
             return self::NOT_FOUND;
-        }
-        $allowed = array_map(static fn ($h): string => rtrim(mb_strtolower(trim((string) $h)), '.'), (array) config('campaigns.smtp_allowed_hosts', []));
-        if (in_array($host, $allowed, true)) {
-            return null;
         }
         $labels = explode('.', $host);
         // adres IP w każdej postaci (także 2130706433 czy 127.1 — ostatni człon nazwy nigdy nie jest samą liczbą)
         if ($host === 'localhost' || str_ends_with($host, '.localhost') || filter_var($host, FILTER_VALIDATE_IP) !== false
             || ctype_digit((string) end($labels))) {
             return self::NOT_PUBLIC;
-        }
-
-        $ips = ($this->resolver)($host);
-        if ($ips === []) {
-            return self::NOT_FOUND;
-        }
-        foreach ($ips as $ip) {
-            if (! self::isPublicIp($ip)) {
-                return self::NOT_PUBLIC;
-            }
         }
 
         return null;

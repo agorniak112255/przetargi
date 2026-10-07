@@ -99,6 +99,8 @@ final class ProductImageDownloader
     /** Kod wyjątku downloadOne: odmowa chwilowa, adres trafia do $retryLater. */
     private const RETRY_LATER = 4290;
 
+    public function __construct(private readonly PublicUrlFetcher $urls = new PublicUrlFetcher) {}
+
     /** @return array<string, string> url => powód */
     public function lastFailures(): array
     {
@@ -360,16 +362,15 @@ final class ProductImageDownloader
             $url = $original;
         }
 
-        $response = Http::timeout(12)
+        // tylko serwery z adresem publicznym, każde przekierowanie sprawdzone (PublicUrlFetcher)
+        $response = $this->urls->get(fn () => Http::timeout(12)
             ->connectTimeout(4)
             ->withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
                 // Preferuj JPEG/WebP — część CDN (uvex) i tak zwróci AVIF; obsługujemy też AVIF.
                 'Accept' => 'image/jpeg,image/webp,image/png,image/*,*/*;q=0.8',
                 'Referer' => $this->refererFor($url),
-            ])
-            ->withOptions(['allow_redirects' => true])
-            ->get($url);
+            ]), $url, self::MAX_BYTES);
 
         $bytes = $response->successful() ? $response->body() : '';
         $mime = (string) ($response->header('Content-Type') ?: '');

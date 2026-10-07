@@ -42,6 +42,8 @@ final class BlockedPageReader
      */
     private array $failures = [];
 
+    public function __construct(private readonly PublicUrlFetcher $urls = new PublicUrlFetcher) {}
+
     /**
      * @return array{
      *     text: string,
@@ -162,6 +164,12 @@ final class BlockedPageReader
      */
     private function requestReader(string $url): ?Response
     {
+        // adres celu idzie do Jiny w ścieżce — adresu z sieci wewnętrznej nie wysyłamy w ogóle (jak przy pobraniu wprost)
+        if (! $this->urls->allows($url)) {
+            $this->failures[$url] = 'reader: '.BlockedUrlException::MESSAGE;
+
+            return null;
+        }
         for ($attempt = 1; $attempt <= self::READER_ATTEMPTS; $attempt++) {
             $this->reserveReaderSlot();
             try {
@@ -308,6 +316,9 @@ final class BlockedPageReader
     {
         $url = trim($url);
         if ($url === '' || (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://'))) {
+            return null;
+        }
+        if (! $this->urls->allows($url)) {
             return null;
         }
 

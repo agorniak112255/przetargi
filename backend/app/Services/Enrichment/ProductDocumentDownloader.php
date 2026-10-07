@@ -115,6 +115,7 @@ final class ProductDocumentDownloader
     public function __construct(
         private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
         private readonly B2bDocumentText $documentText = new B2bDocumentText,
+        private readonly PublicUrlFetcher $urls = new PublicUrlFetcher,
     ) {}
 
     public static function looksLikePdfUrl(string $url): bool
@@ -430,14 +431,13 @@ final class ProductDocumentDownloader
             return $this->storeUnlessTextRejects($product, $prefetched['bytes'], $prefetched['text'], $url, $sortOrder, $label);
         }
 
-        $response = Http::timeout(20)
+        // tylko serwery z adresem publicznym, każde przekierowanie sprawdzone (PublicUrlFetcher)
+        $response = $this->urls->get(fn () => Http::timeout(20)
             ->connectTimeout(5)
             ->withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
                 'Accept' => 'application/pdf,*/*;q=0.8',
-            ])
-            ->withOptions(['allow_redirects' => true])
-            ->get($url);
+            ]), $url, self::MAX_BYTES);
 
         // Bez zrzutu przez Jinę: dla plików Ansella (/pds, /doc) r.jina.ai nie oddaje ani PDF,
         // ani zrzutu — tylko pusty tekst „undefined” (sprawdzone 24.09.2026).
@@ -499,10 +499,9 @@ final class ProductDocumentDownloader
         }
 
         try {
-            $response = Http::timeout(10)
+            $response = $this->urls->get(fn () => Http::timeout(10)
                 ->connectTimeout(5)
-                ->withHeaders(['Accept' => 'application/pdf,*/*;q=0.8'])
-                ->get($url);
+                ->withHeaders(['Accept' => 'application/pdf,*/*;q=0.8']), $url, self::MAX_BYTES);
             $bytes = $response->successful() ? $response->body() : '';
             if (! str_starts_with($bytes, '%PDF') || strlen($bytes) > self::MAX_BYTES) {
                 return null;
