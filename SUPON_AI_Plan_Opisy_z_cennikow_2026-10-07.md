@@ -169,7 +169,8 @@ i spójne opisy rozmiarów. Zastępuje pamięć SKU (B6) współdzieleniem z poc
 6. „Pobierz ponownie” domyślnie pomija karty z opisem od producenta, wymuszenie z powodem.
 
 **Etap 1 — fundament:** zapisane źródła (2.3) jako skutek uboczny, profil producenta (2.1) dla MAPA i CEDERROTH,
-tożsamość z kluczy (2.2), `describeFromStoredSources` + `evidence` (2.4), wersje (2.7). Tryb cienia na dwóch
+tożsamość z kluczy (2.2), `describeFromStoredSources` + `evidence` (2.4), wersje (2.7), a po decyzjach z 07.10 także
+`review_reason` i lista „do przeglądu” dla handlowców (2.8, wersja minimalna). Tryb cienia na dwóch
 pilotach: **CEDERROTH** (tożsamość i źródła, 84 karty) i **MAPA** (rękawice z poziomami EN 388, 140/147 od
 producenta — gotowy punkt odniesienia). Cień korzysta z zapisanych źródeł, pisze tylko do nowych tabel i plików
 (zapis do `products` uruchomiłby reindeks).
@@ -188,10 +189,19 @@ reguły markowe usuwane z `ProductSearchIdentity` dopiero po przełączeniu dane
 Ograniczenia techniczne: CLI na serwerze 128 MB — porównania i audyty po `chunkById`, bez kolumn tekstowych
 w zapytaniach, teksty z dysku po jednym. Model lokalny: najwyżej 4 zapytania naraz.
 
-## 4. Decyzje właściciela
-1. Automat publikuje tylko przy twardej tożsamości; reszta czeka w „do przeglądu”. Kto przegląda i ile kart dziennie?
-2. Otwarta sieć (sklepy) tylko jako kandydat do przeglądu, nigdy automatycznie?
-3. Prośba do producentów (Coba, Ansell, SECURA) o plik danych produktowych (opisy, EAN, adresy zdjęć) — byłby
-   źródłem nr 1, bez wyszukiwania. Warto zapytać przed etapem 4.
-4. Opis wspólny dla modelu (wszystkie rozmiary) zamiast osobnego na każdą kartę.
-5. Wstrzymać ponowne opisywanie Ansella partiami do etapu 4 (dziś 9 przebiegów na kartę bez poprawy).
+## 4. Decyzje właściciela (07.10.2026)
+1. **Automat zapisuje zawsze, przegląd po fakcie.** Tożsamość miękka / brak kodu nie blokuje zapisu — ustawia
+   `review_reason` i karta trafia na listę „do przeglądu”. Wyjątek z zasady „nie nadpisuj dobrych danych gorszymi”
+   (CLAUDE.md): nowa wersja gorsza od opublikowanej (tożsamość, liczba wartości krytycznych z dowodem) nie zastępuje
+   jej, tylko czeka jako propozycja w przeglądzie.
+2. **Sklep z kodem wyrobu zapisuje się automatycznie;** sklep bez kodu też (pkt 1), ale z `review_reason`.
+3. Plik danych od producentów — otwarte (rozmowa z Coba/Ansell/SECURA po stronie właściciela).
+4. **Opis wspólny dla modelu** (wszystkie rozmiary/wymiary); rozmiar, kolor, EAN dopisuje kod z cennika.
+5. **Przegląd: handlowcy, kilkanaście kart dziennie** — lista „do przeglądu” potrzebna od etapu 1, nie od 3.
+6. Kolejność: najpierw naprawy (etapy 1–2), potem pełne ponowne pobranie cenników z wieloma błędami w całości.
+   Pomiar „przed” dla Coby: `Coba_karty_z_cudzych_stron_2026-10-07.csv` (23 karty z cudzej strony, 57 ze zdjęciem
+   innego koloru, 14 bez źródła) — po pełnym pobraniu porównanie na tych samych kartach.
+
+## 5. Stan
+- Etap 0: wdrożony 07.10.2026 (30d73e8, build c1a0501); `products:repair-cancelled-status` (151 kart) i
+  `products:restore-norms-column` (146 kart) wykonane na produkcji.
