@@ -113,6 +113,34 @@ final class EnrichmentPublicUrlGuardTest extends TestCase
         }
     }
 
+    public function test_international_host_is_sent_as_the_checked_punycode_name(): void
+    {
+        if (! function_exists('idn_to_ascii')) {
+            $this->markTestSkipped('intl jest wymagane');
+        }
+        // „ß” zamieniane inaczej przez intl (przejściowo: „ss”) i przez curl/libidn2 (xn--…) — połączenie musi iść
+        // pod tę samą nazwę, którą sprawdzono i przypięto, a nie pod nazwę, którą curl zamieniłby sam
+        $checked = [];
+        $this->app->instance(SmtpHostGuard::class, new SmtpHostGuard(static function (string $host) use (&$checked): array {
+            $checked[] = $host;
+
+            return [self::PUBLIC_IP];
+        }));
+        $seen = [];
+        Http::fake(function (Request $request, array $options) use (&$seen) {
+            $seen[] = [(string) parse_url($request->url(), PHP_URL_HOST), $options['curl'][CURLOPT_RESOLVE]];
+
+            return Http::response('ok', 200);
+        });
+
+        (new PublicUrlFetcher)->get(fn () => Http::timeout(5), 'https://straße-łódź.example.com/karta', 1000);
+
+        $ascii = idn_to_ascii('straße-łódź.example.com', IDNA_NONTRANSITIONAL_TO_ASCII, INTL_IDNA_VARIANT_UTS46);
+        $this->assertStringStartsWith('xn--', (string) $ascii);
+        $this->assertSame([$ascii], $checked);
+        $this->assertSame([[$ascii, [$ascii.':80:'.self::PUBLIC_IP, $ascii.':443:'.self::PUBLIC_IP]]], $seen);
+    }
+
     public function test_redirect_loop_stops_after_five_hops(): void
     {
         Http::fake(['*' => Http::response('', 302, ['Location' => '/znowu'])]);

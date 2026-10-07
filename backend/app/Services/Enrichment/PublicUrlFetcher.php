@@ -52,17 +52,18 @@ final class PublicUrlFetcher
      */
     public function pins(string $url): ?array
     {
-        $pins = $this->resolve($url);
+        $target = $this->resolve($url);
 
-        return is_array($pins) ? $pins : null;
+        return is_array($target) ? $target['pins'] : null;
     }
 
     /**
-     * Wpisy CURLOPT_RESOLVE albo odmowa: BlockedUrlException (sieć wewnętrzna, inny port lub schemat) albo
-     * ConnectionException, gdy DNS nic nie zwrócił — jak dotąd „Could not resolve host” z curla (chwilowa awaria DNS
-     * sklepu to nie adres prywatny).
+     * Adres do wysłania z wpisami CURLOPT_RESOLVE albo odmowa: BlockedUrlException (sieć wewnętrzna, inny port lub
+     * schemat) albo ConnectionException, gdy DNS nic nie zwrócił — jak dotąd „Could not resolve host” z curla (chwilowa
+     * awaria DNS sklepu to nie adres prywatny). Nazwa z polskimi znakami idzie do curla już jako sprawdzony punycode:
+     * curl (libidn2) mógłby zamienić ją inaczej niż intl, ominąć przypięcie i sam zapytać DNS.
      *
-     * @return list<string>|BlockedUrlException|ConnectionException
+     * @return array{url: string, pins: list<string>}|BlockedUrlException|ConnectionException
      */
     private function resolve(string $url): array|BlockedUrlException|ConnectionException
     {
@@ -80,15 +81,18 @@ final class PublicUrlFetcher
         }
         $literal = trim($host, '[]');
         if (filter_var($literal, FILTER_VALIDATE_IP) !== false) {
-            return SmtpHostGuard::isPublicIp($literal) ? [] : new BlockedUrlException($url);
+            return SmtpHostGuard::isPublicIp($literal) ? ['url' => trim($url), 'pins' => []] : new BlockedUrlException($url);
         }
         $ascii = $host;
         if (preg_match('/[^\x20-\x7e]/', $host) === 1) {
-            $converted = function_exists('idn_to_ascii') ? idn_to_ascii($host, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46) : false;
+            $converted = function_exists('idn_to_ascii') ? idn_to_ascii($host, IDNA_NONTRANSITIONAL_TO_ASCII, INTL_IDNA_VARIANT_UTS46) : false;
             if (! is_string($converted) || $converted === '') {
                 return new BlockedUrlException($url);
             }
             $ascii = strtolower($converted);
+            if (preg_match('/[^\x20-\x7e]/', $ascii) === 1) {
+                return new BlockedUrlException($url);
+            }
         }
         $ips = ($this->guard ?? app(SmtpHostGuard::class))->checkedIps($ascii);
         if ($ips === SmtpHostGuard::NOT_FOUND) {
@@ -99,14 +103,14 @@ final class PublicUrlFetcher
         }
         $ip = str_contains($ips[0], ':') ? '['.$ips[0].']' : $ips[0];
         $pins = [];
-        // obie postaci nazwy (curl zamienia nazwę z polskimi znakami na punycode) i oba porty (http → https)
-        foreach (array_unique([$host, $ascii, rtrim($ascii, '.')]) as $name) {
+        // nazwa z kropką na końcu i bez niej, oba porty (http → https)
+        foreach (array_unique([$ascii, rtrim($ascii, '.')]) as $name) {
             foreach ([80, 443] as $p) {
                 $pins[] = $name.':'.$p.':'.$ip;
             }
         }
 
-        return $pins;
+        return ['url' => $ascii === $host ? trim($url) : (string) $uri->withHost($ascii), 'pins' => $pins];
     }
 
     /**
@@ -122,12 +126,13 @@ final class PublicUrlFetcher
     public function get(Closure $request, string $url, int $maxBytes): Response
     {
         for ($redirects = 0; ; $redirects++) {
-            $pins = $this->resolve($url);
-            if (! is_array($pins)) {
-                throw $pins;
+            $target = $this->resolve($url);
+            if (! is_array($target)) {
+                throw $target;
             }
+            $url = $target['url'];
             try {
-                $response = $this->hop($request(), $pins, $maxBytes)->get($url);
+                $response = $this->hop($request(), $target['pins'], $maxBytes)->get($url);
             } catch (ConnectionException $e) {
                 throw $this->tooLarge($e, $maxBytes) ?? $e;
             }
@@ -157,11 +162,12 @@ final class PublicUrlFetcher
         for ($redirects = 0; $current !== []; $redirects++) {
             $pins = [];
             foreach ($current as $key => $url) {
-                $pin = $this->resolve($url);
-                if (! is_array($pin)) {
-                    $out[$key] = $pin;
+                $target = $this->resolve($url);
+                if (! is_array($target)) {
+                    $out[$key] = $target;
                 } else {
-                    $pins[$key] = $pin;
+                    $current[$key] = $target['url'];
+                    $pins[$key] = $target['pins'];
                 }
             }
             $responses = $pins === [] ? [] : Http::pool(function (Pool $pool) use ($pins, $current, $configure, $maxBytes): void {
