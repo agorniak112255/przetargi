@@ -81,6 +81,7 @@ use App\Http\Controllers\Api\ProductImageThumbController;
 use App\Http\Controllers\Api\ProductKitController;
 use App\Http\Controllers\Api\ProductRequirementCheckController;
 use App\Http\Controllers\Api\ProductRequirementTermsController;
+use App\Http\Controllers\Api\ProductReviewController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\SalesTargetController;
@@ -369,6 +370,21 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::delete('/products/{product}/kit', [ProductKitController::class, 'destroy'])->middleware('permission:products.view');
     Route::get('/products/{product}/price-history', [ProductController::class, 'priceHistory'])->middleware('permission:products.view');
     Route::get('/products/{product}/variants/{variant}/price-history', [ProductController::class, 'variantPriceHistory'])->middleware('permission:products.view');
+    // przegląd opisów kart cenników z plików (etap 1, 08.10.2026) — decyzje mają handlowcy (products.review)
+    Route::get('/product-reviews', [ProductReviewController::class, 'index'])
+        ->middleware('permission:products.review|price_lists.import');
+    Route::get('/products/{product}/description-versions', [ProductReviewController::class, 'versions'])
+        ->middleware('permission:products.review|products.view');
+    Route::post('/products/{product}/review', [ProductReviewController::class, 'review'])
+        ->middleware('permission:products.review|price_lists.import');
+    // {descriptionVersion}: wiązanie w zakresie karty przez relację Product::descriptionVersions (obca wersja → 404)
+    Route::post('/products/{product}/description-versions/{descriptionVersion}/restore', [ProductReviewController::class, 'restore'])
+        ->scopeBindings()
+        ->whereNumber('descriptionVersion')
+        ->middleware('permission:products.review|price_lists.import');
+    Route::get('/products/{product}/source-documents/{document}/text', [ProductReviewController::class, 'sourceText'])
+        ->whereNumber('document')
+        ->middleware('permission:products.review|products.view');
     Route::post('/products/{product}/enrich', [ProductEnrichmentController::class, 'enrichProduct'])
         ->middleware('permission:price_lists.import');
     Route::get('/presta/status', [PrestaShopSearchController::class, 'status'])

@@ -1433,6 +1433,49 @@ function PriceListsHelp() {
             </AppFrame>
           ),
         },
+        {
+          action: 'Opisy do przeglądu',
+          does: 'Zakładka „Do przeglądu” zbiera karty cenników z plików, których opis warto sprawdzić. Powody: „strona bez kodu wyrobu” — na stronie zgadzają się nazwa i producent, ale nie ma kodu, więc to może być inny wariant; „strona niepotwierdzona” — program nie potwierdził, że strona dotyczy tego wyrobu; „nowy opis gorszy od obecnego” i „odrzucona strona” — obecny opis zostaje na karcie, a nowy czeka jako propozycja. „Zatwierdź” zostawia opis (albo wstawia propozycję w miejsce obecnego opisu). „Odrzuć” przy propozycji usuwa samą propozycję — obecny opis zostaje, a strona nie jest blokowana. „Odrzuć” przy opisie z karty oznacza „to cudza strona”: opis znika razem ze zdjęciami i plikami z tej strony (do czasu nowego pobrania wraca poprzedni opis, jeśli był), program od razu pobiera opis ponownie i tej strony już sam nie użyje — zatwierdzenie albo przywrócenie opisu z tej strony zdejmuje blokadę. „Wskaż właściwą stronę” zapisuje adres strony wyrobu i pobiera z niej opis jeszcze raz. W rozwinięciu wiersza widać obecny opis obok propozycji, dowody (co z opisu jest dosłownie na stronie) i historię wersji z przyciskiem „Przywróć”. Przy cenniku w zakładce „Z pliku” widać, ile opisów potwierdzono kodem, ile jest niepewnych, ile kart czeka na przegląd i ile ma zdjęcie.',
+          click: 'Menu „Cenniki” → zakładka „Do przeglądu” (albo „do przeglądu: N” przy cenniku w zakładce „Z pliku”). Adres w kolumnie „Strona źródłowa” otwiera stronę w nowej karcie.',
+          tone: 'amber',
+          screen: (
+            <AppFrame nav="Cenniki">
+              <h1 className="mb-3 text-xl font-semibold">Opisy do przeglądu</h1>
+              <Card className="text-xs">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b bg-slate-50">
+                      <Th>SKU</Th>
+                      <Th>Nazwa</Th>
+                      <Th>Strona źródłowa</Th>
+                      <Th>Powód</Th>
+                      <Th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b align-top">
+                      <td className="p-2 font-mono">CCLIP25</td>
+                      <td className="p-2 text-blue-700">Ochraniacz Coba Clip</td>
+                      <td className="p-2 text-blue-700">coba-europe.com/clip</td>
+                      <td className="p-2">
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900">strona bez kodu wyrobu</span>
+                      </td>
+                      <td className="p-2">
+                        <div className="flex flex-wrap gap-1">
+                          <Mark>
+                            <Btn label="Zatwierdź" />
+                          </Mark>
+                          <Btn label="Odrzuć" color="border" />
+                          <Btn label="Wskaż właściwą stronę" color="border" />
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </Card>
+            </AppFrame>
+          ),
+        },
       ]}
     />
   )

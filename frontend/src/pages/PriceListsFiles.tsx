@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { PriceListsTabs } from '../components/PriceListsTabs'
-import { ApiError, api, can, parseActiveEnrichment, type EnrichmentBatch } from '../lib/api'
+import { ApiError, api, can, canAny, parseActiveEnrichment, type EnrichmentBatch } from '../lib/api'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import { plural } from '../lib/plural'
 import { formatDateTime } from '../lib/priceChange'
@@ -102,6 +102,7 @@ export function PriceListsFiles() {
   const canManageSearchSites = can(user, 'admin.search_sites.manage')
   const canSeeBatches = canEdit || can(user, 'products.view')
   const canSeeB2b = can(user, 'b2b_accounts.view')
+  const canReview = canAny(user, ['products.review', 'price_lists.import'])
 
   const [lists, setLists] = useState<FilePriceList[]>([])
   const [loading, setLoading] = useState(true)
@@ -267,6 +268,7 @@ export function PriceListsFiles() {
                   <th className="p-2 font-semibold">Wersja</th>
                   <th className="p-2 text-right font-semibold">Kart</th>
                   <th className="p-2 font-semibold">Skąd są opisy</th>
+                  <th className="p-2 font-semibold">Pewność opisów i zdjęcia</th>
                   <th className="p-2 font-semibold">Strony cennika</th>
                   <th className="p-2 font-semibold">Pobieranie opisów</th>
                   <th className="p-2" />
@@ -308,6 +310,9 @@ export function PriceListsFiles() {
                             </p>
                           )}
                         </td>
+                        <td className="min-w-[13rem] p-2">
+                          <QualityCell list={list} canReview={canReview} />
+                        </td>
                         <td className="p-2">
                           {list.enrichment_sites.length === 0 ? (
                             <span className="text-slate-400">nie ustawiono</span>
@@ -337,7 +342,7 @@ export function PriceListsFiles() {
                       </tr>
                       {isOpen && (
                         <tr className="border-b bg-slate-50/60">
-                          <td colSpan={7} className="p-3">
+                          <td colSpan={8} className="p-3">
                             <SourcesPanel
                               key={`${list.id}:${list.enrichment_sites_mode}:${list.enrichment_sites.join('\n')}`}
                               list={list}
@@ -361,7 +366,7 @@ export function PriceListsFiles() {
                 })}
                 {visible.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="p-3 text-slate-500">
+                    <td colSpan={8} className="p-3 text-slate-500">
                       Żaden cennik nie pasuje do „{query.trim()}”.
                     </td>
                   </tr>
@@ -405,6 +410,73 @@ function SourcesBar({ sources }: { sources: FilePriceListSources }) {
             </span>
           ) : null,
         )}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Pewność opisów cennika: karty z opisem według werdyktu tożsamości strony źródłowej, karty czekające na przegląd
+ * (link do zakładki „Do przeglądu” z filtrem cennika) i karty ze zdjęciem.
+ */
+function QualityCell({ list, canReview }: { list: FilePriceList; canReview: boolean }) {
+  const identity = list.identity
+  const toReview = (
+    <>
+      do przeglądu: <b className="tabular-nums">{n(list.to_review)}</b>
+    </>
+  )
+
+  return (
+    <div className="space-y-0.5 text-[11px] text-slate-600">
+      {list.described > 0 ? (
+        <p className="flex flex-wrap gap-x-2 gap-y-0.5">
+          <span
+            className="whitespace-nowrap"
+            title="Na stronie, z której pobrano opis, jest kod wyrobu (SKU, EAN albo kod producenta) albo stronę wskazał człowiek."
+          >
+            potwierdzone kodem <b className="tabular-nums text-emerald-700">{n(identity.hard)}</b>
+          </span>
+          <span
+            className="whitespace-nowrap"
+            title="Na stronie zgadzają się nazwa i producent, ale nie ma kodu wyrobu — to może być inny wariant."
+          >
+            niepewne <b className="tabular-nums text-amber-700">{n(identity.soft)}</b>
+          </span>
+          <span
+            className="whitespace-nowrap"
+            title="Program nie potwierdził, że strona dotyczy tego wyrobu (ani kod, ani nazwa z producentem)."
+          >
+            bez potwierdzenia <b className="tabular-nums text-red-700">{n(identity.none)}</b>
+          </span>
+          {identity.unknown > 0 && (
+            <span
+              className="whitespace-nowrap text-slate-400"
+              title="Opisy pobrane, zanim program zaczął sprawdzać stronę źródłową, oraz opisy z B2B."
+            >
+              niesprawdzone {n(identity.unknown)}
+            </span>
+          )}
+        </p>
+      ) : (
+        <p className="text-slate-400">brak opisów</p>
+      )}
+      {list.to_review > 0 &&
+        (canReview ? (
+          <p>
+            <Link
+              to={`/price-lists/review?price_list_id=${list.id}`}
+              className="font-medium text-amber-800 hover:underline"
+              title="Otwórz listę „Do przeglądu” z kartami tego cennika"
+            >
+              {toReview} →
+            </Link>
+          </p>
+        ) : (
+          <p className="text-amber-800">{toReview}</p>
+        ))}
+      <p>
+        ze zdjęciem: <b className="tabular-nums">{n(list.with_image)}</b> z {n(list.cards)}
       </p>
     </div>
   )

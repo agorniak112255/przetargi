@@ -207,7 +207,9 @@ class EnrichProductJob implements ShouldQueue
                 return;
             }
 
-            $enrichment->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE);
+            // Opis gorszy od obecnego albo ze strony odrzuconej przez handlowca zostaje propozycją — pozycja i tak jest
+            // gotowa, ale z komunikatem „Nowy opis czeka w »Do przeglądu«…” zamiast komunikatu karty.
+            $enrichment->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE, $enrichment->lastProposalNote());
             $this->refreshBatchProgress($batch);
         } catch (ProductSourcesNotFoundException $e) {
             // Awaria wyszukiwarki zostawia produkt w „failed” — to błąd do ponowienia,

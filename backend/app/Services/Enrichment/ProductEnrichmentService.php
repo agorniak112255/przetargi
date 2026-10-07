@@ -15,11 +15,13 @@ use App\Models\CatalogSearchSite;
 use App\Models\ManufacturerSite;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductDescriptionVersion;
 use App\Models\ProductDocument;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
+use App\Models\ProductSourceDocument;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
@@ -36,11 +38,13 @@ use App\Support\EnrichmentDescriptionTemplates;
 use App\Support\ManufacturerNormFacts;
 use App\Support\NormCode;
 use App\Support\PpeAssortment;
+use App\Support\ProductCodeMatch;
 use App\Support\ProductDescriptionText;
 use App\Support\ProductNormsColumn;
 use App\Support\ProductSizeVariant;
 use App\Support\RequirementCheck\En388Code;
 use App\Support\Utf8Trim;
+use Carbon\CarbonInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -89,6 +93,9 @@ final class ProductEnrichmentService
         Product::ENRICHMENT_FAILED,
     ];
 
+    /** Początek informacji o propozycji w komunikacie karty (keepAsProposal) — przy kolejnej propozycji zastępowana. */
+    private const PROPOSAL_NOTE_PREFIX = 'Nowy opis czeka w „Do przeglądu”';
+
     /** Tyle roznych norm wyciagnietych z surowego tekstu strony to slowniczek sklepu, nie karta. */
     private const NORMS_GLOSSARY_THRESHOLD = 5;
 
@@ -110,6 +117,26 @@ final class ProductEnrichmentService
      * @var list<string>
      */
     private array $listSourcesManufacturerDomains = [];
+
+    /**
+     * Strony źródła opisów odrzuconych przez handlowca w przeglądzie (DescriptionVersionStore::rejectedUrls) — na czas
+     * jednego enrichProduct, zerowane w finally (worker trzyma serwis). Klucz = adres bez schematu, z hostem małymi
+     * literami, bez ukośnika końcowego i bez parametrów śledzących; wartość = adres porównawczy bez zapytania.
+     * Bez adresu wskazanego przez człowieka (trustedShopUrl) — ten wygrywa z odrzuceniem.
+     *
+     * @var array<string, string>
+     */
+    private array $rejectedSourceKeys = [];
+
+    /** Komunikat o propozycji z ostatniego enrichProduct (opis nie wszedł na kartę, czeka w „Do przeglądu”); null = brak. */
+    private ?string $lastProposalNote = null;
+
+    /**
+     * Decyzja z ostatniego publishDescription (pod blokadą karty); null = zapis porzucony przed decyzją.
+     *
+     * @var array{action: string, review_reason: string|null, reason: string}|null
+     */
+    private ?array $lastRunDecision = null;
 
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
@@ -166,6 +193,35 @@ final class ProductEnrichmentService
     private function descriptionTemplates(): EnrichmentDescriptionTemplateService
     {
         return app(EnrichmentDescriptionTemplateService::class);
+    }
+
+    /*
+     * Etap 1 opisów z cenników (08.10.2026): wersje opisu, werdykt tożsamości źródła, dowody i zapisane źródła — przez
+     * kontener, bo testy budują serwis konstruktorem z jedenastoma argumentami.
+     */
+    private function versions(): DescriptionVersionStore
+    {
+        return app(DescriptionVersionStore::class);
+    }
+
+    private function sourceIdentity(): SourceIdentity
+    {
+        return app(SourceIdentity::class);
+    }
+
+    private function evidence(): EvidenceExtractor
+    {
+        return app(EvidenceExtractor::class);
+    }
+
+    private function sources(): SourceDocumentStore
+    {
+        return app(SourceDocumentStore::class);
+    }
+
+    private function profiles(): ManufacturerProfiles
+    {
+        return app(ManufacturerProfiles::class);
     }
 
     public function enqueueProduct(Product $product, User $user, bool $force = false, bool $overwriteB2bDescription = false): ProductEnrichmentBatch
@@ -488,7 +544,115 @@ final class ProductEnrichmentService
             $this->attemptLog()->addRejections('host wykluczony', $dropped);
         }
 
+        // Te same ścieżki kandydatów (wyniki wyszukiwania, indeks, zmapowane sklepy, otwarty internet, uzupełnienie,
+        // strony cennika, zdjęcia z innych kart) pomijają strony odrzucone przez handlowca — jak host wykluczony.
+        return $this->withoutRejectedSources($out, $product);
+    }
+
+    /**
+     * Klucze stron odrzuconych przez handlowca dla tej karty (DescriptionVersionStore::rejectedUrls) bez adresu
+     * wskazanego przez człowieka (trustedShopUrl) — ręczny adres wygrywa z odrzuceniem.
+     *
+     * @return array<string, string>
+     */
+    private function rejectedSourceKeysFor(Product $product): array
+    {
+        $keys = [];
+        foreach ($this->versions()->rejectedUrls($product) as $url) {
+            if ($product->isTrustedShopUrl($url)) {
+                continue;
+            }
+            [$key, $path] = self::rejectedSourceKey($url);
+            if ($key !== '') {
+                $keys[$key] = $path;
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
+     * Kandydaci na stronę opisu bez stron odrzuconych przez handlowca (po adresie i po adresie po przekierowaniach).
+     * Ręcznie wskazany adres zostaje. Wpis w śladzie przebiegu — widać, że strona była, ale świadomie ją pominięto.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    private function withoutRejectedSources(array $rows, ?Product $product = null): array
+    {
+        if ($this->rejectedSourceKeys === []) {
+            return $rows;
+        }
+        $out = [];
+        $dropped = [];
+        foreach ($rows as $row) {
+            $url = is_array($row) ? trim((string) ($row['url'] ?? '')) : '';
+            $finalUrl = is_array($row) ? trim((string) ($row['final_url'] ?? '')) : '';
+            $rejected = ($url !== '' && $this->isRejectedSourceUrl($url))
+                || ($finalUrl !== '' && $this->isRejectedSourceUrl($finalUrl));
+            if ($rejected && ! ($url !== '' && ($product?->isTrustedShopUrl($url) ?? false))) {
+                $dropped[] = ['url' => $url !== '' ? $url : $finalUrl, 'reason' => CandidateRejection::REJECTED_IN_REVIEW];
+
+                continue;
+            }
+            $out[] = $row;
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->addRejections('pominięto stronę odrzuconą przez handlowca', $dropped);
+        }
+
         return $out;
+    }
+
+    /**
+     * Adres jest stroną odrzuconą przez handlowca: ten sam adres po normalizacji (bez schematu, ukośnika końcowego
+     * i parametrów śledzących), albo ta sama ścieżka, gdy jedna ze stron nie ma zapytania („/karta” = „/karta?wariant=2”).
+     * Dwa różne zapytania tej samej ścieżki to różne strony (sklepy z „index.php?product_id=…”). Wersja językowa tej
+     * samej strony to inny adres — odrzucenie dotyczy dokładnie tej strony.
+     */
+    private function isRejectedSourceUrl(string $url): bool
+    {
+        [$key, $path] = self::rejectedSourceKey($url);
+        if ($key === '') {
+            return false;
+        }
+        foreach ($this->rejectedSourceKeys as $rejectedKey => $rejectedPath) {
+            if ($key === $rejectedKey) {
+                return true;
+            }
+            if ($path === $rejectedPath && ($key === $path || $rejectedKey === $rejectedPath)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Klucz porównania adresu (DescriptionVersionStore::sourceUrlKey — host bez „www.” i „m.” — bez parametrów
+     * śledzących) i sama ścieżka bez zapytania.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private static function rejectedSourceKey(string $url): array
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return ['', ''];
+        }
+        $normalized = DescriptionVersionStore::sourceUrlKey($url);
+        $at = strpos($normalized, '?');
+        if ($at === false) {
+            return [$normalized, $normalized];
+        }
+        $path = substr($normalized, 0, $at);
+        $params = array_values(array_filter(
+            explode('&', substr($normalized, $at + 1)),
+            static fn (string $pair): bool => $pair !== ''
+                && preg_match('/^(?:utm_[^=]*|gclid|gbraid|wbraid|fbclid|msclkid|srsltid|gad_source|_ga|mc_cid|mc_eid)(?:=|$)/i', $pair) !== 1
+        ));
+
+        return [$params === [] ? $path : $path.'?'.implode('&', $params), $path];
     }
 
     /**
@@ -704,7 +868,8 @@ final class ProductEnrichmentService
 
         try {
             $this->enrichProduct($product, $force, $batch->id);
-            $this->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE);
+            // propozycja (opis czeka w „Do przeglądu”) to też koniec pracy — pozycja gotowa, z komunikatem o propozycji
+            $this->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE, $this->lastProposalNote());
             $batch->refresh();
             $batch->update([
                 'message' => 'Gotowe',
@@ -740,12 +905,16 @@ final class ProductEnrichmentService
 
     public function enrichProduct(Product $product, bool $force = false, ?int $batchId = null): void
     {
+        // worker trzyma serwis między zadaniami — komunikat o propozycji należy tylko do tego przebiegu
+        $this->lastProposalNote = null;
         if (! $force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
             return;
         }
 
         $this->assertBatchNotCancelled($batchId);
 
+        // stan karty sprzed przebiegu — propozycja (gorszy opis) przywraca z niego normy, pliki i status
+        $before = $this->versions()->snapshot($product);
         $this->attemptLog()->reset();
         $this->attemptLog()->add('start', trim($product->sku.' · '.$product->name.' · '.$product->manufacturer));
         $product->update([
@@ -773,13 +942,18 @@ final class ProductEnrichmentService
         // pliki karty sprzed przebiegu z force (webFileIds) — ustalane po potwierdzeniu karty, potrzebne też w catch
         $previousWebFiles = null;
         try {
+            // strony przychodzą z kilku wywołań fetch — werdykt tożsamości i zapis źródeł biorą je z dziennika przebiegu
+            // (w try: stopRunLog w finally zamyka dziennik także wtedy, gdy przebieg padnie zaraz na starcie)
+            $this->pages->startRunLog();
+            // Strony odrzucone przez handlowca nie wracają jako źródło opisu (przed bramkami, na każdej ścieżce kandydatów)
+            $this->rejectedSourceKeys = $this->rejectedSourceKeysFor($product);
             $this->listSources = $this->priceListSourcesFor($product);
             // Pamięć SKU niesie opis spoza stron cennika (inna karta tego kodu, wcześniejszy przebieg bez ustawień) —
             // przy stronach cennika przebieg idzie pełną ścieżką.
             if ($this->listSources !== null && ! $force && $product->trustedShopUrl() === null && $this->hasSkuCacheRow($product)) {
                 $this->attemptLog()->add('search', 'strony cennika '.$this->listSources->manufacturer.' — pamięć SKU pominięta');
             }
-            if (! $force && $this->listSources === null && $product->trustedShopUrl() === null && $this->applyFromSkuCache($product)) {
+            if (! $force && $this->listSources === null && $product->trustedShopUrl() === null && $this->applyFromSkuCache($product, $before)) {
                 $this->logEnrichmentTiming($timing, $started, extra: ['from_cache' => true]);
 
                 return;
@@ -801,7 +975,8 @@ final class ProductEnrichmentService
             if ($this->listSources !== null) {
                 [$searchPack, $listSearchErrors] = $this->withPriceListSiteResults($product, $searchPack);
             }
-            $searchResults = $searchPack['results'];
+            // adres z synchronizacji B2B (hintedShopUrl bez zaufania) dochodzi po filtrze hostów — odrzucony też odpada
+            $searchResults = $this->withoutRejectedSources($searchPack['results'], $product);
             $searchEmptyDetail = ($searchPack['errors'] ?? []) !== []
                 ? implode(' | ', array_slice($searchPack['errors'], 0, 2))
                 : 'brak wyników';
@@ -814,7 +989,7 @@ final class ProductEnrichmentService
             // Katalog PDF producenta dopasowany po numerze katalogowym — źródło równorzędne
             // karcie producenta. Marki bez kart HTML per wyrób (SECURA) opisuje wyłącznie on,
             // więc gdy niesie blok tego kodu, brak wyników wyszukiwarki nie kończy przebiegu.
-            $catalogPages = $this->manufacturerCatalogPages($product);
+            $catalogPages = $this->withoutRejectedSources($this->manufacturerCatalogPages($product), $product);
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === [] && $catalogPages === []) {
                 $this->attemptLog()->add('search', $searchEmptyDetail);
@@ -933,7 +1108,7 @@ final class ProductEnrichmentService
             // filtrze stron (tabela rozmiarów przetrwa) i z własnym wpisem w źródłach.
             $catalogPages = array_merge(
                 $catalogPages,
-                $this->manufacturerPdfCardPages($product, (array) ($fetched['document_urls'] ?? []))
+                $this->withoutRejectedSources($this->manufacturerPdfCardPages($product, (array) ($fetched['document_urls'] ?? [])), $product)
             );
             $pageSnippets = $this->withCatalogPages($pageSnippets, $catalogPages, $product, $mfrDomains);
             if ($pageSnippets === []) {
@@ -1209,6 +1384,8 @@ final class ProductEnrichmentService
             $sourceUrls = array_values(array_filter(
                 $sourceUrls,
                 fn (string $url): bool => $this->sourceUrlIsConfirmedCard($url, $pageSnippets, $product)
+                    // model wymienia też adresy, których nie czytał — strona odrzucona przez handlowca nie wraca jako źródło
+                    && ($this->rejectedSourceKeys === [] || $product->isTrustedShopUrl($url) || ! $this->isRejectedSourceUrl($url))
             ));
             // Model wymienia w source_urls także adresy z wyników wyszukiwania, których nie czytał — przy marce
             // „tylko producent” źródłem jest wyłącznie strona z puli (inaczej sklep wracał jako źródło i dawca zdjęć).
@@ -1238,6 +1415,17 @@ final class ProductEnrichmentService
             // konkurencji (regera, Empik), a z samej listy adresów nie dało się tego zobaczyć.
             // Kolejności listy nie ruszamy — z niej wybierane są zdjęcia — zapisujemy samo rozstrzygnięcie.
             [$primarySourceUrl, $primarySourceKind] = $this->primarySource($sourceUrls, $product, $mfrDomains);
+            // Werdykt tożsamości strony głównego źródła (sygnał dla przeglądu, nie bramka): strona z dziennika przebiegu
+            // (tekst surowy, tytuł, mikrodane), zapasowo z puli opisu — karta PDF producenta i blok katalogu nie idą
+            // przez fetch.
+            $runPages = $this->pages->runLog();
+            $identity = $this->sourceIdentity()->judgeCard(
+                $product,
+                [...$runPages, ...$pageSnippets],
+                $primarySourceUrl,
+                $primarySourceKind,
+                $this->profiles()->for($product)?->catalogs ?? [],
+            );
 
             // Zdjęcie z tej samej karty co opis — nie z innej pobranej strony.
             $this->liveProgress()->step('weryfikacja zdjęć');
@@ -1283,7 +1471,12 @@ final class ProductEnrichmentService
             }
             $imageUrls = array_values(array_unique($imageUrls));
 
-            $this->storeManufacturerPageNorms($product, $pageSnippets, $primarySourceUrl, $primarySourceKind);
+            // Wartości, które ten przebieg zapisał na karcie przed decyzją o wersji — propozycja cofa tylko je
+            // (i tylko gdy nikt ich w międzyczasie nie zmienił: synchronizacja B2B, handlowiec).
+            $runWrites = [];
+            if ($this->storeManufacturerPageNorms($product, $pageSnippets, $primarySourceUrl, $primarySourceKind)) {
+                $runWrites['manufacturer_norms'] = $product->manufacturer_norms;
+            }
             $description = $this->alignEn388WithManufacturer($description, $product);
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
@@ -1300,6 +1493,9 @@ final class ProductEnrichmentService
             $extracted = $claimCheck['extracted'];
             $fields = $this->payloadFromExtraction($product, $extracted, $description, $pageSnippets);
             $packaging = $fields['packaging'];
+            // Strony opisu z tekstem surowym (dziennik przebiegu) i po filtrze — do dowodów i do zapisu źródeł
+            $sourcePages = $this->descriptionSourcePages($product, $pageSnippets, $sourceUrls, $runPages);
+            $evidence = $this->evidence()->extract($fields['lists'], $this->evidenceDocs($product, $sourcePages));
 
             $payload = [
                 ...$fields['lists'],
@@ -1321,7 +1517,9 @@ final class ProductEnrichmentService
             // normy z poprzedniego (złego) pobrania na zawsze — AJ GROUP 906, 304/K, 604/K. Poza wzbogacaniem kolumnę
             // piszą tylko opis B2B (karta z nim nie przechodzi tej ścieżki bez potwierdzenia nadpisania) i Presta
             // (nasz własny dawny tekst, wykluczony jako źródło) — w obu przypadkach nowy opis i tak je zastępuje.
-            $this->writeNormsColumn($product, $payload['norms']);
+            if ($this->writeNormsColumn($product, $payload['norms'])) {
+                $runWrites['norms'] = $product->norms;
+            }
 
             $primaryImageUrls = $this->pickPrimaryImageUrls(
                 $imageUrls,
@@ -1340,6 +1538,8 @@ final class ProductEnrichmentService
                 'source_urls' => array_slice($sourceUrls, 0, 3),
             ]);
             $savedImages = $this->images->downloadMany($product, $primaryImageUrls, 1);
+            // zdjęcie z innej karty (tryImagesFromOtherCards) nie pochodzi z żadnej strony opisu — rola „image” w źródłach
+            $imagesFromOtherCards = false;
             $imageFailure = $this->imageFailureSummary($primaryImageUrls);
             // przed tryImagesFromOtherCards — kolejne downloadMany czyści listę
             $imageRetryUrls = $this->images->lastRetryLaterUrls();
@@ -1349,6 +1549,7 @@ final class ProductEnrichmentService
                 if ($manufacturerOnly) {
                     $this->attemptLog()->add('image', 'zdjęcie producenta nie pobrało się — szukam na kartach sklepów');
                 }
+                $imagesFromOtherCards = true;
                 $savedImages = $this->tryImagesFromOtherCards(
                     $product,
                     $searchResults,
@@ -1486,8 +1687,32 @@ final class ProductEnrichmentService
             if ($claimCheck['unverified_claims'] !== []) {
                 $productPayload['unverified_claims'] = $claimCheck['unverified_claims'];
             }
+            // Pochodzenie opisu (etap 1): werdykt tożsamości źródła i dowody wartości krytycznych — tylko na karcie
+            // i w wersji opisu, pamięć SKU dostaje $payload bez nich.
+            $productPayload['identity'] = $identity;
+            $productPayload['evidence'] = $evidence['entries'];
+            $productPayload['evidence_summary'] = ['explicit' => $evidence['explicit'], 'inferred' => $evidence['inferred']];
+            $productPayload['completeness'] = $evidence['completeness'];
+            $storedDescription = mb_substr($description, 0, 10000);
+            $trace = $cachedImageUrls === []
+                ? $this->attemptLog()->snapshot($product)
+                : $this->attemptLog()->snapshot($product, self::TRACE_STEPS_ON_SUCCESS);
+            $candidate = [
+                'identity' => $identity,
+                'evidence_count' => $evidence['explicit'],
+                'primary_source_url' => $primarySourceUrl,
+                'manual_url' => $primarySourceKind === 'manual',
+            ];
+            $versionData = [
+                'description' => $storedDescription,
+                'enrichment_payload' => $productPayload,
+                'enrichment_trace' => $trace,
+                'packaging' => $packaging,
+                'primary_source_url' => $primarySourceUrl,
+                'batch_id' => $batchId,
+            ];
             $saved = [
-                'description' => mb_substr($description, 0, 10000),
+                'description' => $storedDescription,
                 'enrichment_payload' => $productPayload,
                 'enrichment_status' => Product::ENRICHMENT_DONE,
                 'enriched_at' => now(),
@@ -1498,14 +1723,22 @@ final class ProductEnrichmentService
                     : null,
                 // Ślad zapisujemy też po udanym przebiegu (skrócony) — bez niego nie da się
                 // sprawdzić, z której karty powstał opis, a właśnie to zgłasza tester.
-                'enrichment_trace' => $cachedImageUrls === []
-                    ? $this->attemptLog()->snapshot($product)
-                    : $this->attemptLog()->snapshot($product, self::TRACE_STEPS_ON_SUCCESS),
+                'enrichment_trace' => $trace,
             ];
             if ($packaging !== null) {
                 $saved['packaging'] = $packaging;
             }
-            $product->update($saved);
+            // Decyzja i zapis atomowo (publishRun): pod blokadą karty ponowne decide — w międzyczasie inny przebieg mógł
+            // zapisać lepszy opis albo handlowiec odrzucić stronę źródła. Opis gorszy od obecnego (albo ze strony
+            // odrzuconej) zostaje propozycją, a karta wraca do stanu sprzed przebiegu.
+            $version = $this->publishDescription($product, ProductDescriptionVersion::ORIGIN_ENRICHMENT, $candidate, $versionData, $saved, $before, runWrites: $runWrites);
+            if ($version === null) {
+                $this->keepAsProposal($product, $before, $batchId, $versionData, $this->lastRunDecision, $runWrites, $identity, $sourcePages, $primarySourceUrl, $primarySourceKind);
+                $timing['docs_ms'] = $this->elapsedMs($t);
+                $this->logEnrichmentTiming($timing, $started, extra: ['proposal' => true]);
+
+                return;
+            }
             // Nowy opis zapisany — stare zdjęcia i dokumenty z internetu ustępują; te, które przebieg pobrał ponownie
             // (ten sam plik — downloader oddaje istniejący wiersz), zostają.
             $this->dropPreviousWebFiles($product, $previousWebFiles, $savedImages, $savedDocs);
@@ -1522,6 +1755,15 @@ final class ProductEnrichmentService
                 $payload,
                 $cachedImageUrls, // tylko realnie pobrane — nie cache'uj 404
                 $sourceUrls
+            );
+            $this->recordSourceDocuments(
+                $product,
+                $sourcePages,
+                $identity,
+                $primarySourceUrl,
+                $primarySourceKind,
+                $imagesFromOtherCards ? [] : $this->imageSourcePages($descPages, $savedImages),
+                (int) $version->id,
             );
             $timing['docs_ms'] = $this->elapsedMs($t);
             $this->logEnrichmentTiming($timing, $started);
@@ -1574,13 +1816,25 @@ final class ProductEnrichmentService
             throw $e;
         } finally {
             $this->pages->bypassCache(false);
+            $this->pages->stopRunLog();
             $this->liveProgress()->clear();
             // worker kolejki trzyma serwis między zadaniami — kolejna karta nie może dostać stron tego cennika
             $this->listSources = null;
             $this->listSourcesManufacturerDomains = [];
             // kody kart producenta (bramka wariantu) czytane na nowo przy kolejnej karcie — katalog rośnie między zadaniami
             $this->manufacturerCatalogCodes = [];
+            $this->rejectedSourceKeys = [];
         }
+    }
+
+    /**
+     * Komunikat o propozycji z ostatniego enrichProduct: opis powstał, ale nie wszedł na kartę i czeka w „Do przeglądu”
+     * (gorszy od obecnego albo ze strony odrzuconej przez handlowca). null = przebieg bez propozycji. Pozycja partii
+     * zostaje „gotowe”, z tym komunikatem zamiast komunikatu karty.
+     */
+    public function lastProposalNote(): ?string
+    {
+        return $this->lastProposalNote;
     }
 
     private function enrichmentStatusForFailure(Throwable $e): string
@@ -1727,6 +1981,469 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Atomowy zapis nowego opisu (etap 1) — jedno miejsce publikacji pełnego przebiegu i pamięci SKU. Pod blokadą
+     * karty DescriptionVersionStore::publishRun decyduje ponownie (decide) na świeżym stanie karty; przy „publish” zapisuje
+     * wersję published z danymi technicznymi przebiegu (`_version`: pliki z internetu dodane od $before, a gdy przebieg
+     * zapisał normy producenta ($runWrites) — ich wartość sprzed przebiegu i zapisana; odrzucenie wersji w przeglądzie
+     * z nich korzysta) i w tej samej transakcji kartę:
+     * $cardUpdates + description_version_id w payloadzie + powód przeglądu z decyzji. Wyjątek przy zapisie karty cofa
+     * też wersję. Przy „propose” nic nie zapisuje i oddaje null — decyzja w $lastRunDecision (wołający robi propozycję).
+     *
+     * @param  array<string, mixed>  $candidate  jak DescriptionVersionStore::decide
+     * @param  array<string, mixed>  $versionData  pola wersji (DescriptionVersionStore::record)
+     * @param  array<string, mixed>  $cardUpdates  kolumny karty
+     * @param  array<string, mixed>  $before  DescriptionVersionStore::snapshot sprzed przebiegu
+     * @param  (callable(): bool)|null  $stillValid  sprawdzenie pod blokadą przed zapisem karty; false = wersja cofnięta, wynik null
+     * @param  array<string, mixed>  $runWrites  kolumna => wartość zapisana przez ten przebieg przed decyzją (norms, manufacturer_norms)
+     */
+    private function publishDescription(
+        Product $product,
+        string $origin,
+        array $candidate,
+        array $versionData,
+        array $cardUpdates,
+        array $before,
+        ?callable $stillValid = null,
+        array $runWrites = [],
+    ): ?ProductDescriptionVersion {
+        $versionData[DescriptionVersionStore::META_KEY] = $this->versions()->versionMeta($product, $before, $runWrites);
+        $this->lastRunDecision = null;
+        $abandoned = new RuntimeException('karta zmieniona w trakcie przebiegu — opis nie zapisany');
+        try {
+            $result = $this->versions()->publishRun(
+                $product,
+                $candidate,
+                $versionData,
+                function (ProductDescriptionVersion $version, array $decision) use ($product, $cardUpdates, $stillValid, $abandoned): void {
+                    if ($stillValid !== null && ! $stillValid()) {
+                        throw $abandoned;
+                    }
+                    $payload = is_array($cardUpdates['enrichment_payload'] ?? null) ? $cardUpdates['enrichment_payload'] : [];
+                    $payload['description_version_id'] = (int) $version->id;
+                    $product->update([
+                        ...$cardUpdates,
+                        'enrichment_payload' => $payload,
+                        'review_reason' => $decision['review_reason'],
+                        'review_since' => $this->reviewSince($product, $decision['review_reason']),
+                    ]);
+                },
+                $origin,
+            );
+        } catch (Throwable $e) {
+            // publishRun cofnął wersję i zapis karty — model w pamięci trzyma jednak atrybuty z nieudanego update();
+            // bez odświeżenia zapis statusu błędu (catch w enrichProduct) zapisałby je razem z nim
+            try {
+                $product->refresh();
+            } catch (Throwable) {
+                // baza niedostępna — catch w enrichProduct i tak nie zapisze karty
+            }
+            if ($e !== $abandoned) {
+                throw $e;
+            }
+
+            return null;
+        }
+        $this->lastRunDecision = $result['decision'];
+
+        return $result['version'];
+    }
+
+    /**
+     * Nowy opis gorszy od obecnego albo ze strony odrzuconej przez handlowca (DescriptionVersionStore::decide) —
+     * zostaje wersją proposed do przeglądu, a karta wraca do stanu sprzed przebiegu: zdjęcia i pliki pobrane w tym
+     * przebiegu znikają, normy i normy producenta zapisane przez przebieg przed decyzją ($runWrites) oraz status
+     * wracają — każde tylko wtedy, gdy na karcie stoi dalej wartość z tego przebiegu (synchronizacja B2B albo handlowiec
+     * mogli ją w międzyczasie zmienić i wtedy zostaje). Do komunikatu karty dochodzi informacja o propozycji. Opis, ślad
+     * przebiegu i pamięć SKU bez zmian; dochodzi powód przeglądu. Źródła zapisane przy propozycji.
+     *
+     * @param  array{status: string|null, error: string|null, norms: string|null, manufacturer_norms: mixed, packaging: string|null, web_files: array{images: list<int>, documents: list<int>}}  $before
+     * @param  array<string, mixed>  $versionData
+     * @param  array{action: string, review_reason: string|null, reason: string}|null  $decision  decyzja spod blokady (publishRun)
+     * @param  array<string, mixed>  $runWrites  kolumna => wartość zapisana przez ten przebieg (norms, manufacturer_norms)
+     * @param  array<string, mixed>  $identity
+     * @param  list<array<string, mixed>>  $sourcePages
+     */
+    private function keepAsProposal(
+        Product $product,
+        array $before,
+        ?int $batchId,
+        array $versionData,
+        ?array $decision,
+        array $runWrites,
+        array $identity,
+        array $sourcePages,
+        ?string $primarySourceUrl,
+        ?string $primarySourceKind,
+    ): void {
+        // pliki przebiegu znikają razem z propozycją — dane techniczne publikacji (`_version`) jej nie dotyczą
+        unset($versionData[DescriptionVersionStore::META_KEY]);
+        $decision ??= ['action' => 'propose', 'review_reason' => Product::REVIEW_WORSE_VERSION, 'reason' => 'karta zmieniona w trakcie przebiegu'];
+        $version = $this->versions()->record(
+            $product,
+            ProductDescriptionVersion::STATUS_PROPOSED,
+            ProductDescriptionVersion::ORIGIN_ENRICHMENT,
+            [...$versionData, 'review_reason' => $decision['review_reason'], 'reason' => $decision['reason']],
+        );
+        $this->dropWebFilesAddedSince($product, $before['web_files']);
+        $note = self::proposalNote($decision['review_reason']);
+        DB::transaction(function () use ($product, $before, $batchId, $decision, $runWrites, $note): void {
+            /** @var Product|null $current */
+            $current = Product::query()->lockForUpdate()->find($product->id);
+            if ($current === null) {
+                return;
+            }
+            foreach (['norms', 'manufacturer_norms'] as $column) {
+                if (array_key_exists($column, $runWrites) && self::sameColumnValue($column, $current->{$column}, $runWrites[$column])) {
+                    $current->{$column} = $before[$column];
+                }
+            }
+            // „w trakcie” ustawił ten przebieg (albo job tuż przed nim) — inny status to cudza zmiana, zostaje
+            if ($current->enrichment_status === Product::ENRICHMENT_RUNNING) {
+                [$status, $error] = $this->statusBeforeRun($current, $before, $batchId);
+                $current->enrichment_status = $status;
+                $current->enrichment_error = self::withProposalNote($error, $note);
+            }
+            $current->review_reason = $decision['review_reason'];
+            $current->review_since = $this->reviewSince($current, $decision['review_reason']);
+            // przez model — hak saving przelicza indeks wyszukiwania, gdy normy wróciły
+            $current->save();
+        });
+        $product->refresh();
+        $this->lastProposalNote = $note;
+        Log::info('Product description kept as proposal', [
+            'product_id' => $product->id,
+            'sku' => $product->sku,
+            'version_id' => $version->id,
+            'review_reason' => $decision['review_reason'],
+            'reason' => $decision['reason'],
+        ]);
+        $this->recordSourceDocuments($product, $sourcePages, $identity, $primarySourceUrl, $primarySourceKind, [], (int) $version->id);
+    }
+
+    /**
+     * Pamięć SKU nie zapisała opisu (karta chroniona albo zmieniona pod blokadą) — zdjęcia i pliki pobrane z wpisu
+     * znikają, a kolumna norm wraca, jeśli stoi na niej dalej wartość z wpisu. Przebieg idzie dalej pełną ścieżką.
+     *
+     * @param  array<string, mixed>  $before
+     * @param  array<string, mixed>  $runWrites
+     */
+    private function undoSkuCacheWrites(Product $product, array $before, array $runWrites): void
+    {
+        $this->dropWebFilesAddedSince($product, $before['web_files']);
+        if (! array_key_exists('norms', $runWrites)) {
+            return;
+        }
+        DB::transaction(static function () use ($product, $before, $runWrites): void {
+            /** @var Product|null $current */
+            $current = Product::query()->lockForUpdate()->find($product->id);
+            if ($current !== null && self::sameColumnValue('norms', $current->norms, $runWrites['norms'])) {
+                $current->norms = $before['norms'];
+                $current->save();
+            }
+        });
+        $product->refresh();
+    }
+
+    /** Informacja o propozycji dla karty i pozycji partii — z powodem przeglądu. */
+    private static function proposalNote(?string $reviewReason): string
+    {
+        return self::PROPOSAL_NOTE_PREFIX.match ($reviewReason) {
+            Product::REVIEW_REJECTED_SOURCE => ' (strona odrzucona przez handlowca).',
+            Product::REVIEW_WORSE_VERSION => ' (gorszy od obecnego).',
+            default => '.',
+        };
+    }
+
+    /** Komunikat karty z informacją o propozycji: poprzedni komunikat zostaje, wcześniejsza informacja się nie dubluje. */
+    private static function withProposalNote(?string $error, string $note): string
+    {
+        $previous = trim((string) preg_replace('/\s*'.preg_quote(self::PROPOSAL_NOTE_PREFIX, '/').'[^.]*\.?/u', '', (string) $error));
+
+        return mb_substr($previous === '' ? $note : $previous.' '.$note, 0, 2000);
+    }
+
+    /**
+     * Ta sama wartość kolumny karty. manufacturer_norms przez ManufacturerNormFacts::sameFacts — kolumna JSON może
+     * wrócić z bazy z kluczami w innej kolejności (MySQL porządkuje klucze obiektu), a porównanie tekstu JSON dawało
+     * wtedy „inna wartość” dla tej samej, zapisanej przez przebieg. Reszta (tekst) — dosłownie.
+     */
+    private static function sameColumnValue(string $column, mixed $current, mixed $written): bool
+    {
+        if ($column === 'manufacturer_norms') {
+            return is_array($written) && ManufacturerNormFacts::sameFacts($current, $written);
+        }
+
+        return json_encode($current, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) === json_encode($written, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * Strony opisu, z których pochodzi zapisane zdjęcie (rola „image” w zapisie źródeł): adres pliku na liście zdjęć
+     * strony (image_urls, trusted_image_urls), a gdy żadna strona go nie wymienia (adres z odpowiedzi modelu albo z puli
+     * pobrania, wybrany po hoście strony opisu) — strona opisu z tego samego hosta.
+     *
+     * @param  list<array<string, mixed>>  $descPages
+     * @param  list<object>  $savedImages
+     * @return list<array<string, mixed>>
+     */
+    private function imageSourcePages(array $descPages, array $savedImages): array
+    {
+        $urls = [];
+        foreach ($savedImages as $image) {
+            $url = is_string($image->source_url ?? null) ? trim($image->source_url) : '';
+            if ($url !== '') {
+                $urls[$url] = true;
+            }
+        }
+        if ($urls === []) {
+            return [];
+        }
+        $out = [];
+        foreach ($descPages as $page) {
+            foreach ([...(array) ($page['trusted_image_urls'] ?? []), ...(array) ($page['image_urls'] ?? [])] as $url) {
+                if (is_string($url) && isset($urls[$url])) {
+                    $out[] = $page;
+
+                    continue 2;
+                }
+            }
+        }
+        if ($out !== []) {
+            return $out;
+        }
+        foreach ($descPages as $page) {
+            if ($this->imagesOnDescriptionHosts(array_keys($urls), [$page]) !== []) {
+                $out[] = $page;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Status i komunikat karty sprzed przebiegu. Przebieg z kolejki zastaje kartę „w kolejce” albo „w trakcie” — wtedy
+     * stan sprzed kolejki z pozycji partii (jak restoreAfterCancel); bez niego karta z opisem = gotowa, bez = bez opisu.
+     *
+     * @param  array{status: string|null, error: string|null}  $before
+     * @return array{0: string, 1: string|null}
+     */
+    private function statusBeforeRun(Product $product, array $before, ?int $batchId): array
+    {
+        if (in_array($before['status'], self::RESTORABLE_STATUSES, true)) {
+            return [(string) $before['status'], $before['error']];
+        }
+        if ($batchId !== null && self::batchItemsHavePreviousStatus()) {
+            $item = ProductEnrichmentBatchItem::query()
+                ->where('batch_id', $batchId)
+                ->where('product_id', $product->id)
+                ->first(['previous_status', 'previous_error']);
+            if ($item !== null && in_array($item->previous_status, self::RESTORABLE_STATUSES, true)) {
+                return [(string) $item->previous_status, $item->previous_error];
+            }
+        }
+
+        return $product->hasDescriptionText() ? [Product::ENRICHMENT_DONE, null] : [Product::ENRICHMENT_NONE, null];
+    }
+
+    /** Od kiedy karta czeka na przegląd: ten sam powód co dotąd zachowuje datę, nowy liczy się od teraz. */
+    private function reviewSince(Product $product, ?string $reason): ?CarbonInterface
+    {
+        if ($reason === null) {
+            return null;
+        }
+
+        return $product->review_reason === $reason && $product->review_since !== null ? $product->review_since : now();
+    }
+
+    /**
+     * Strony, z których powstał opis: pierwsze pięć stron puli (tyle dostaje model) i strony z listy źródeł, każda
+     * z tekstem surowym z dziennika przebiegu (przed filtrem stron) i po filtrze. Strona spoza fetch (blok katalogu
+     * PDF, karta PDF producenta) nie ma tekstu sprzed filtra — jej tekst w puli jest tekstem źródła.
+     *
+     * @param  list<array<string, mixed>>  $pageSnippets
+     * @param  list<string>  $sourceUrls
+     * @param  list<array<string, mixed>>  $runPages
+     * @return list<array{url: string, final_url: string, title: string, text: string, filtered_text: string, markup_codes: list<mixed>, norm_facts: list<mixed>}>
+     */
+    private function descriptionSourcePages(Product $product, array $pageSnippets, array $sourceUrls, array $runPages): array
+    {
+        $raw = [];
+        foreach ($runPages as $page) {
+            foreach (array_filter([(string) ($page['url'] ?? ''), (string) ($page['final_url'] ?? '')]) as $address) {
+                $raw[Product::normalizeShopUrl($address)] = $page;
+            }
+        }
+        foreach ($runPages as $page) {
+            $address = (string) ($page['url'] ?? '');
+            if ($address !== '') {
+                $raw[Product::normalizeShopUrl($this->identity->preferredLocaleUrl($address, $product))] ??= $page;
+            }
+        }
+        $wanted = [];
+        foreach ($sourceUrls as $url) {
+            if (is_string($url) && trim($url) !== '') {
+                $wanted[Product::normalizeShopUrl($url)] = true;
+            }
+        }
+
+        $out = [];
+        $seen = [];
+        $position = 0;
+        foreach ($pageSnippets as $page) {
+            $url = trim((string) ($page['url'] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+            $key = Product::normalizeShopUrl($url);
+            $localeKey = Product::normalizeShopUrl($this->identity->preferredLocaleUrl($url, $product));
+            $inModelInput = $position++ < 5;
+            if (isset($seen[$key]) || (! $inModelInput && ! isset($wanted[$key]) && ! isset($wanted[$localeKey]))) {
+                continue;
+            }
+            $seen[$key] = true;
+            $rawPage = $raw[$key] ?? $raw[$localeKey] ?? null;
+            $filtered = trim((string) ($page['text'] ?? ''));
+            $rawText = is_array($rawPage) ? trim((string) ($rawPage['text'] ?? '')) : '';
+            $markup = is_array($rawPage['markup_codes'] ?? null) ? $rawPage['markup_codes'] : ($page['markup_codes'] ?? []);
+            $normFacts = is_array($page['norm_facts'] ?? null) ? $page['norm_facts'] : ($rawPage['norm_facts'] ?? []);
+            $out[] = [
+                'url' => $url,
+                'final_url' => (string) ($page['final_url'] ?? ($rawPage['final_url'] ?? '')),
+                'title' => (string) ($rawPage['title'] ?? ($page['title'] ?? '')),
+                'text' => $rawText !== '' ? $rawText : $filtered,
+                'filtered_text' => $filtered,
+                'markup_codes' => is_array($markup) ? array_values($markup) : [],
+                'norm_facts' => is_array($normFacts) ? array_values($normFacts) : [],
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Teksty źródeł dla dowodów (EvidenceExtractor): strony opisu surowe, potem po filtrze, ramki norm stron, normy
+     * producenta zapisane na karcie i atrybuty z cennika — każdy tekst raz (po sha256).
+     *
+     * @param  list<array{text: string, filtered_text: string, norm_facts: list<mixed>}>  $sourcePages
+     * @return list<array{sha256: string, text: string}>
+     */
+    private function evidenceDocs(Product $product, array $sourcePages): array
+    {
+        $docs = [];
+        $add = static function (string $text) use (&$docs): void {
+            $text = trim($text);
+            if ($text !== '') {
+                $docs[hash('sha256', $text)] ??= $text;
+            }
+        };
+        foreach ($sourcePages as $page) {
+            $add($page['text']);
+        }
+        foreach ($sourcePages as $page) {
+            $add($page['filtered_text']);
+        }
+        foreach ($sourcePages as $page) {
+            $add(self::labelValueLines($page['norm_facts']));
+        }
+        $add(self::labelValueLines(ManufacturerNormFacts::rows($product->manufacturer_norms)));
+        $add(self::labelValueLines(is_array($product->price_list_attributes) ? $product->price_list_attributes : []));
+
+        $out = [];
+        foreach ($docs as $sha256 => $text) {
+            $out[] = ['sha256' => (string) $sha256, 'text' => $text];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Pary etykieta–wartość jako wiersze „etykieta: wartość” — ramka norm ({label, value}) albo słownik atrybutów.
+     *
+     * @param  array<mixed>  $rows
+     */
+    private static function labelValueLines(array $rows): string
+    {
+        $lines = [];
+        foreach ($rows as $key => $row) {
+            if (is_array($row) && array_key_exists('label', $row)) {
+                $lines[] = trim((string) $row['label'].(is_scalar($row['value'] ?? null) && (string) $row['value'] !== '' ? ': '.$row['value'] : ''));
+            } elseif (is_scalar($row) && (string) $row !== '') {
+                $lines[] = (is_string($key) ? $key.': ' : '').$row;
+            } elseif (is_array($row) && $row !== []) {
+                $lines[] = (is_string($key) ? $key.': ' : '').json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Zapis źródeł opisu (SourceDocumentStore, przy enrichment.store_sources) przypiętych do wersji opisu. Role: każda
+     * strona — description; strona, z której wzięto zdjęcie — image; główne źródło u producenta z ramką norm (z niej
+     * storeManufacturerPageNorms pisze manufacturer_norms) — norms. Werdykt strony głównego źródła = werdykt karty,
+     * pozostałych liczony osobno. Błąd zapisu źródeł nie cofa zapisanego opisu — trafia do dziennika.
+     *
+     * @param  list<array<string, mixed>>  $sourcePages
+     * @param  array<string, mixed>  $identity
+     * @param  list<array<string, mixed>>  $imagePages
+     */
+    private function recordSourceDocuments(
+        Product $product,
+        array $sourcePages,
+        array $identity,
+        ?string $primarySourceUrl,
+        ?string $primarySourceKind,
+        array $imagePages,
+        int $versionId,
+    ): void {
+        if (! config('enrichment.store_sources', true) || $sourcePages === []) {
+            return;
+        }
+        try {
+            $profile = $this->profiles()->for($product);
+            $primary = $primarySourceUrl !== null && $primarySourceUrl !== '' ? Product::normalizeShopUrl($primarySourceUrl) : null;
+            $imageUrls = [];
+            foreach ($imagePages as $page) {
+                $url = (string) ($page['url'] ?? '');
+                if ($url !== '') {
+                    $imageUrls[Product::normalizeShopUrl($url)] = true;
+                }
+            }
+            $docs = [];
+            foreach ($sourcePages as $page) {
+                $key = Product::normalizeShopUrl($page['url']);
+                $isPrimary = $primary !== null && in_array($primary, [
+                    $key,
+                    Product::normalizeShopUrl($this->identity->preferredLocaleUrl($page['url'], $product)),
+                ], true);
+                $roles = [ProductSourceDocument::ROLE_DESCRIPTION];
+                if (isset($imageUrls[$key])) {
+                    $roles[] = ProductSourceDocument::ROLE_IMAGE;
+                }
+                if ($isPrimary && $primarySourceKind === 'manufacturer' && $page['norm_facts'] !== []) {
+                    $roles[] = ProductSourceDocument::ROLE_NORMS;
+                }
+                $docs[] = [
+                    'url' => $page['url'],
+                    'final_url' => $page['final_url'] !== '' ? $page['final_url'] : null,
+                    'text' => $page['text'],
+                    'filtered_text' => $page['filtered_text'],
+                    'roles' => $roles,
+                    'identity' => $isPrimary ? $identity : $this->sourceIdentity()->judgePage($product, $page, $profile),
+                    'markup_codes' => $page['markup_codes'],
+                    'norm_facts' => $page['norm_facts'],
+                ];
+            }
+            $this->sources()->record($product, $docs, $versionId);
+        } catch (Throwable $e) {
+            Log::warning('Product source documents not stored', [
+                'product_id' => $product->id,
+                'version_id' => $versionId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
      * Zdjęcia znalezione w internecie ustępują nowemu przebiegowi. Zdjęć z witryny dostawcy to nie
      * dotyczy — dokładnie jak przy plikach: packshot producenta przedstawia ten wariant wyrobu,
      * a ponowne wzbogacanie wstawiłoby na jego miejsce zdjęcie wyłowione przy cudzej karcie.
@@ -1787,8 +2504,20 @@ final class ProductEnrichmentService
         $product->unsetRelation('documents');
     }
 
-    private function applyFromSkuCache(Product $product): bool
+    /**
+     * Opis z pamięci SKU. $before = stan karty sprzed przebiegu (DescriptionVersionStore::snapshot) do zapisu wersji;
+     * null = liczony tutaj (wywołanie spoza enrichProduct).
+     *
+     * @param  array<string, mixed>|null  $before
+     */
+    private function applyFromSkuCache(Product $product, ?array $before = null): bool
     {
+        // Opis z bieżącą wersją bazową (etap 1) nie ustępuje pamięci SKU — wpis nie niesie werdyktu ani dowodów, więc
+        // nie da się sprawdzić, czy nie jest gorszy; karta idzie pełną ścieżką z porównaniem wersji.
+        if ($this->versions()->hasProtectedPublished($product)) {
+            return false;
+        }
+        $before ??= $this->versions()->snapshot($product);
         $key = ProductEnrichmentCache::normalizeKey(
             (string) $product->manufacturer,
             (string) $product->sku
@@ -1803,6 +2532,21 @@ final class ProductEnrichmentService
         }
 
         $payload = is_array($cache->enrichment_payload) ? $cache->enrichment_payload : [];
+        // Wpis powstał ze strony, którą handlowiec odrzucił dla tej karty — pełna ścieżka (strona nie wróci jako źródło)
+        if ($this->rejectedSourceKeys !== []) {
+            $cacheSources = [
+                $payload['primary_source_url'] ?? null,
+                ...(is_array($cache->source_urls) ? $cache->source_urls : []),
+                ...(is_array($payload['source_urls'] ?? null) ? $payload['source_urls'] : []),
+            ];
+            foreach ($cacheSources as $url) {
+                if (is_string($url) && trim($url) !== '' && $this->isRejectedSourceUrl($url)) {
+                    $this->attemptLog()->add('search', 'pamięć SKU pominięta — opis ze strony odrzuconej przez handlowca', urls: [$url]);
+
+                    return false;
+                }
+            }
+        }
         // Pewność 0 (albo jej brak) to wpis, w którym model nie dał opisu: przed audytem 22.09.2026
         // opisem zostawał wtedy tekst strony (CAPTCHA, cennik, baner cookies). Taki wpis wracał
         // do karty manual/failed ze statusem „done” — produkt idzie normalną ścieżką.
@@ -1890,10 +2634,23 @@ final class ProductEnrichmentService
         $payload['certificates'] = CertificateLabels::relabel($this->stringList($payload['certificates'] ?? null), $cacheDocs);
 
         // kolumna norm za opisem z cache, jak w pełnym przebiegu — wcześniej ta ścieżka jej nie pisała wcale
-        $this->writeNormsColumn($product, $this->stringList($payload['norms'] ?? null));
+        $runWrites = [];
+        if ($this->writeNormsColumn($product, $this->stringList($payload['norms'] ?? null))) {
+            $runWrites['norms'] = $product->norms;
+        }
         $product->refresh();
+        // Wpis bez werdyktu i dowodów nie nadpisuje chronionego opisu także wtedy, gdy bazę zapisał w międzyczasie inny
+        // proces; pod blokadą zapisu karta musi mieć dalej ten sam opis, co tutaj.
+        $seenDescription = $product->description;
+        if ($this->versions()->hasProtectedPublished($product)) {
+            $this->undoSkuCacheWrites($product, $before, $runWrites);
+
+            return false;
+        }
+        $storedDescription = mb_substr($cacheDescription, 0, 10000);
+        // powód przeglądu dotyczył poprzedniego opisu — nowy (z decyzji pod blokadą) ustawia publishDescription
         $cached = [
-            'description' => mb_substr($cacheDescription, 0, 10000),
+            'description' => $storedDescription,
             'enrichment_payload' => $payload,
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
@@ -1903,7 +2660,26 @@ final class ProductEnrichmentService
         if ($cachePackaging !== null) {
             $cached['packaging'] = $cachePackaging;
         }
-        $product->update($cached);
+        $version = $this->publishDescription(
+            $product,
+            ProductDescriptionVersion::ORIGIN_SKU_CACHE,
+            ['identity' => null, 'evidence_count' => null, 'primary_source_url' => $payload['primary_source_url'] ?? null],
+            [
+                'description' => $storedDescription,
+                'enrichment_payload' => $payload,
+                'packaging' => $cachePackaging,
+            ],
+            $cached,
+            $before,
+            static fn (): bool => Product::query()->whereKey($product->id)->value('description') === $seenDescription,
+        );
+        if ($version === null) {
+            // pod blokadą: opis karty zmieniony w trakcie albo strona źródła wpisu odrzucona — pełna ścieżka z porównaniem
+            $this->attemptLog()->add('search', 'pamięć SKU pominięta — karta zmieniła się w trakcie przebiegu');
+            $this->undoSkuCacheWrites($product, $before, $runWrites);
+
+            return false;
+        }
 
         ReindexProductEmbeddingJob::dispatch($product->id, true);
 
@@ -2324,10 +3100,14 @@ final class ProductEnrichmentService
      */
     private function copyPageMeta(array $from, array $to): array
     {
-        foreach (['option_sizes', 'accessories', 'image_urls', 'trusted_image_urls', 'norm_facts', 'document_urls'] as $key) {
+        foreach (['option_sizes', 'accessories', 'image_urls', 'trusted_image_urls', 'norm_facts', 'document_urls', 'markup_codes'] as $key) {
             if (isset($from[$key]) && is_array($from[$key])) {
                 $to[$key] = $from[$key];
             }
+        }
+        // adres po przekierowaniach — werdykt tożsamości szuka strony źródła także pod nim
+        if (isset($from['final_url']) && is_string($from['final_url']) && $from['final_url'] !== '') {
+            $to['final_url'] = $from['final_url'];
         }
 
         return $to;
@@ -3395,17 +4175,20 @@ final class ProductEnrichmentService
      *
      * @param  list<string>  $norms
      */
-    private function writeNormsColumn(Product $product, array $norms): void
+    /** @return bool kolumna zapisana (false = bez zmiany) */
+    private function writeNormsColumn(Product $product, array $norms): bool
     {
         $column = ProductNormsColumn::fromList($norms);
         if ($product->norms === $column) {
-            return;
+            return false;
         }
         if (trim((string) $product->norms) !== '') {
             $this->attemptLog()->add('desc', 'normy karty: „'.$product->norms.'” → „'.($column ?? 'brak').'”');
         }
         $product->norms = $column;
         $product->save();
+
+        return true;
     }
 
     /**
@@ -4777,7 +5560,9 @@ final class ProductEnrichmentService
     private function keepConfirmedCardPages(Product $product, array $pages): array
     {
         $out = [];
-        foreach ($pages as $page) {
+        // Przed bramkami tożsamości: pobrana strona mogła przyjść innym adresem i przekierować na stronę odrzuconą przez
+        // handlowca (final_url) — kandydatów przed pobraniem filtruje dropBlockedSourceHosts.
+        foreach ($this->withoutRejectedSources($pages, $product) as $page) {
             $url = (string) ($page['url'] ?? '');
             $text = (string) ($page['text'] ?? '');
             $title = (string) ($page['title'] ?? '');
@@ -5583,7 +6368,7 @@ final class ProductEnrichmentService
             return $pageSnippets;
         }
 
-        $pagesJson = json_encode($compact, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $pagesJson = json_encode(self::withoutCodeOnlyMeta($compact), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         try {
             $parsed = $this->llm->chatJsonEnrichment([
@@ -5748,6 +6533,22 @@ SYS,
     }
 
     /**
+     * Strony do polecenia modelu bez pól tylko dla kodu (adres po przekierowaniach i kody z mikrodanych — werdykt
+     * tożsamości, etap 1). copyPageMeta niesie je przez filtr stron, a polecenie zostaje takie jak przed nimi.
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return list<array<string, mixed>>
+     */
+    private static function withoutCodeOnlyMeta(array $pages): array
+    {
+        return array_map(static function (array $page): array {
+            unset($page['final_url'], $page['markup_codes']);
+
+            return $page;
+        }, $pages);
+    }
+
+    /**
      * llama.cpp dzieli kontekst na równoległe sloty, więc jeden prompt ma do dyspozycji
      * ułamek okna modelu. Bez twardego budżetu kilka dłuższych kart daje HTTP 400.
      *
@@ -5840,7 +6641,7 @@ SYS,
         }, array_slice($searchResults, 0, 8));
 
         $sourcesJson = json_encode($compactSources, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $pagesJson = json_encode($compactPages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $pagesJson = json_encode(self::withoutCodeOnlyMeta($compactPages), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         return $this->llm->chatJsonEnrichment([
             [
@@ -5909,10 +6710,10 @@ SYS,
      *
      * @param  list<array<string, mixed>>  $pages
      */
-    private function storeManufacturerPageNorms(Product $product, array $pages, ?string $primarySourceUrl, ?string $primarySourceKind): void
+    private function storeManufacturerPageNorms(Product $product, array $pages, ?string $primarySourceUrl, ?string $primarySourceKind): bool
     {
         if ($primarySourceKind !== 'manufacturer' || $primarySourceUrl === null || $primarySourceUrl === '') {
-            return;
+            return false;
         }
         $sourcePages = array_values(array_filter(
             $pages,
@@ -5925,12 +6726,14 @@ SYS,
         if ($column === null
             || ! ManufacturerNormFacts::replaceableFromWebPage($product->manufacturer_norms)
             || ManufacturerNormFacts::sameFacts($product->manufacturer_norms, $column)) {
-            return;
+            return false;
         }
 
         $product->manufacturer_norms = $column;
         $product->save();
         $this->attemptLog()->add('desc', 'normy z karty producenta: '.implode(', ', ManufacturerNormFacts::norms($column)));
+
+        return true;
     }
 
     /**
@@ -6250,6 +7053,184 @@ SYS,
             'packaging' => $fields['packaging'],
             'dropped' => array_values(array_unique($dropped)),
             'dropped_claims' => array_values(array_unique($droppedClaims)),
+        ];
+    }
+
+    /**
+     * Opis karty z zapisanych źródeł (SourceDocumentStore, etap 1 — w tym etapie wyłącznie tryb cienia:
+     * products:redescribe-from-sources, wersje shadow). Uogólnienie describeFromB2bSources: bez wyszukiwarki, bez
+     * pobierania stron i plików, niczego nie zapisuje. Model dostaje tekst po filtrze stron, gdy był zapisany (jak
+     * w zwykłym przebiegu), inaczej tekst surowy — najwyżej pięć źródeł, z zasadami „tylko źródła”.
+     *
+     * Kontrola jak w zwykłym przebiegu, nie jak przy B2B: zapisane źródła to te same strony z internetu, więc opis
+     * przechodzi isUsableProductDescription, sito norm withoutUnsupportedNormClaims (zdanie albo pozycja listy z kodem
+     * normy spoza źródeł wypada) i dowody (EvidenceExtractor) — tekst surowy pozostaje źródłem prawdy. Werdykt
+     * tożsamości = werdykt zapisany przy stronie głównego źródła (primarySource po adresach źródeł).
+     *
+     * @param  list<SourceDoc|array{url: string, text: string, filtered_text?: string|null, final_url?: string|null, norm_facts?: list<mixed>, markup_codes?: list<mixed>, verdict?: string|null, verdict_reason?: string|null}>  $docs
+     * @return array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, dropped_norm_claims: list<string>, unverified_claims: list<string>}
+     *
+     * @throws StoredSourcesDescriptionRejected
+     */
+    public function describeFromStoredSources(Product $product, array $docs): array
+    {
+        $pages = [];
+        $seen = [];
+        foreach ($docs as $doc) {
+            $page = $doc instanceof SourceDoc ? $this->storedSourcePage($doc) : $this->givenSourcePage($doc);
+            $key = $page !== null ? Product::normalizeShopUrl($page['url']) : '';
+            if ($page !== null && ! isset($seen[$key])) {
+                $seen[$key] = true;
+                $pages[] = $page;
+            }
+        }
+        if ($pages === []) {
+            throw new StoredSourcesDescriptionRejected('brak zapisanych źródeł z tekstem');
+        }
+        $pages = array_slice($pages, 0, 5);
+        $modelPages = array_map(static fn (array $page): array => [
+            'url' => $page['url'],
+            'text' => mb_substr($page['filtered_text'] !== '' ? $page['filtered_text'] : $page['text'], 0, 8000),
+            ...($page['norm_facts'] !== [] ? ['norm_facts' => $page['norm_facts']] : []),
+        ], $pages);
+        $urls = array_column($pages, 'url');
+
+        $list = [];
+        foreach ($urls as $i => $url) {
+            $list[] = ($i + 1).'. '.$url;
+        }
+        $extracted = $this->extractWithLlm($product, [], $modelPages, 'Źródła — wyłącznie te zapisane teksty stron wyrobu, nic spoza nich:'
+            ."\n".implode("\n", $list)
+            ."\n\n".EnrichmentDescriptionTemplates::sourcesOnlyRules(
+                'ZASADY TEGO OPISU — mają pierwszeństwo przed instrukcją rodziny i przed zasadami pisania z polecenia systemowego:'
+            ));
+        $extracted = $this->enrichStructuredFieldsFromPages($extracted, $modelPages);
+
+        $description = ProductDescriptionText::plain($this->modelDescription($extracted));
+        if ($description === '') {
+            throw new StoredSourcesDescriptionRejected($this->composeFullDescription($extracted) !== ''
+                ? 'model nie potwierdził źródeł (confidence 0)'
+                : 'model nie zwrócił opisu');
+        }
+        if (! $this->isUsableProductDescription($description, $product, $urls)) {
+            throw new StoredSourcesDescriptionRejected('opis nie jest opisem tego wyrobu (za krótki, zrzut strony albo bez kodu i modelu)');
+        }
+
+        $extracted = $this->enrichStructuredFieldsFromPages($extracted, $modelPages, $description);
+        $extracted = $this->withoutMissingDataListItems($extracted);
+        $rawPages = array_map(static fn (array $page): array => ['url' => $page['url'], 'text' => $page['text']], $pages);
+        try {
+            $claimCheck = $this->withoutUnsupportedNormClaims($product, $description, $extracted, [...$modelPages, ...$rawPages]);
+        } catch (RuntimeException $e) {
+            throw new StoredSourcesDescriptionRejected($e->getMessage(), 0, $e);
+        }
+        $description = $claimCheck['description'];
+        $fields = $this->payloadFromExtraction($product, $claimCheck['extracted'], $description, $modelPages);
+        $lists = $fields['lists'];
+        $evidence = $this->evidence()->extract($lists, $this->evidenceDocs($product, $pages));
+
+        [$primaryUrl, $primaryKind] = $this->primarySource($urls, $product, []);
+        $primary = null;
+        foreach ($pages as $page) {
+            if ($primaryUrl !== null && Product::normalizeShopUrl($page['url']) === Product::normalizeShopUrl($primaryUrl)) {
+                $primary = $page;
+                break;
+            }
+        }
+        $profile = $this->profiles()->for($product);
+        $identity = [
+            'verdict' => $primary['verdict'] ?? null,
+            'reason' => $primary !== null
+                ? (string) ($primary['verdict_reason'] ?? 'werdykt zapisany przy stronie źródła')
+                : 'karta bez źródła opisu',
+            'key_type' => null,
+            'key' => null,
+            'where' => null,
+            'source_url' => $primaryUrl,
+            'profile' => $profile === null ? null : ($profile->profileKey ?? 'default'),
+        ];
+
+        $payload = [
+            ...$lists,
+            'source_urls' => $urls,
+            'primary_source_url' => $primaryUrl,
+            'primary_source_kind' => $primaryKind,
+            'confidence' => (float) ($extracted['confidence'] ?? 0),
+            'from_cache' => false,
+            'identity' => $identity,
+            'evidence' => $evidence['entries'],
+            'evidence_summary' => ['explicit' => $evidence['explicit'], 'inferred' => $evidence['inferred']],
+            'completeness' => $evidence['completeness'],
+        ];
+        if ($claimCheck['dropped_norm_claims'] !== []) {
+            $payload['dropped_norm_claims'] = $claimCheck['dropped_norm_claims'];
+        }
+        if ($claimCheck['unverified_claims'] !== []) {
+            $payload['unverified_claims'] = $claimCheck['unverified_claims'];
+        }
+
+        return [
+            'description' => mb_substr($description, 0, 10000),
+            'payload' => $payload,
+            'norms' => ProductNormsColumn::fromList($lists['norms']),
+            'packaging' => $fields['packaging'],
+            'dropped_norm_claims' => $claimCheck['dropped_norm_claims'],
+            'unverified_claims' => $claimCheck['unverified_claims'],
+        ];
+    }
+
+    /**
+     * Zapisane źródło z tekstem z dysku „sources”; null, gdy tekstu nie ma (plik usunięty, inny serwer).
+     *
+     * @return array{url: string, final_url: string, title: string, text: string, filtered_text: string, markup_codes: list<mixed>, norm_facts: list<mixed>, verdict: string|null, verdict_reason: string|null}|null
+     */
+    private function storedSourcePage(SourceDoc $doc): ?array
+    {
+        $text = trim((string) $this->sources()->get($doc->sha256));
+        if ($text === '' || trim($doc->url) === '') {
+            return null;
+        }
+        $filtered = $doc->filteredSha256 !== null ? trim((string) $this->sources()->get($doc->filteredSha256)) : '';
+
+        return [
+            'url' => $doc->url,
+            'final_url' => (string) $doc->finalUrl,
+            'title' => '',
+            'text' => $text,
+            'filtered_text' => $filtered,
+            'markup_codes' => $doc->markupCodes,
+            'norm_facts' => $doc->normFacts,
+            'verdict' => $doc->verdict,
+            'verdict_reason' => $doc->verdictReason,
+        ];
+    }
+
+    /**
+     * Źródło podane wprost (url, text i opcjonalnie tekst po filtrze, ramka norm, werdykt).
+     *
+     * @return array{url: string, final_url: string, title: string, text: string, filtered_text: string, markup_codes: list<mixed>, norm_facts: list<mixed>, verdict: string|null, verdict_reason: string|null}|null
+     */
+    private function givenSourcePage(mixed $doc): ?array
+    {
+        if (! is_array($doc)) {
+            return null;
+        }
+        $url = trim((string) ($doc['url'] ?? ''));
+        $text = trim((string) ($doc['text'] ?? ''));
+        if ($url === '' || $text === '') {
+            return null;
+        }
+
+        return [
+            'url' => $url,
+            'final_url' => trim((string) ($doc['final_url'] ?? '')),
+            'title' => (string) ($doc['title'] ?? ''),
+            'text' => $text,
+            'filtered_text' => trim((string) ($doc['filtered_text'] ?? '')),
+            'markup_codes' => is_array($doc['markup_codes'] ?? null) ? array_values($doc['markup_codes']) : [],
+            'norm_facts' => is_array($doc['norm_facts'] ?? null) ? array_values($doc['norm_facts']) : [],
+            'verdict' => is_string($doc['verdict'] ?? null) ? $doc['verdict'] : null,
+            'verdict_reason' => is_string($doc['verdict_reason'] ?? null) ? $doc['verdict_reason'] : null,
         ];
     }
 
@@ -6704,25 +7685,20 @@ SYS,
         return array_values(array_unique($codes));
     }
 
-    /** Kod do porównania: małe litery i cyfry, bez separatorów („PSSBL30-014” → „pssbl30014”). */
+    /** Kod do porównania: małe litery i cyfry, bez separatorów („PSSBL30-014” → „pssbl30014”) — ProductCodeMatch::key. */
     private static function supplementCodeKey(string $code): string
     {
-        return (string) preg_replace('/[^\p{L}\p{N}]+/u', '', mb_strtolower($code));
+        return ProductCodeMatch::key($code);
     }
 
     /**
      * Kod stoi w tekście jako osobny ciąg — między znakami kodu wolno separator („PSSBL30-014”, „TRACPSF”), przed
-     * i za nim nie ma litery ani cyfry (TRACPSF nie trafia w TRACPSFX).
+     * i za nim nie ma litery ani cyfry (TRACPSF nie trafia w TRACPSFX). Reguła wspólna z werdyktem tożsamości
+     * źródła: ProductCodeMatch::textCarries.
      */
     private static function textCarriesCode(string $text, string $key): bool
     {
-        if ($key === '' || $text === '') {
-            return false;
-        }
-        $chars = preg_split('//u', $key, -1, PREG_SPLIT_NO_EMPTY) ?: [];
-        $pattern = implode('[\s._\/-]?', array_map(static fn (string $c): string => preg_quote($c, '/'), $chars));
-
-        return preg_match('/(?<![\p{L}\p{N}])'.$pattern.'(?![\p{L}\p{N}])/iu', $text) === 1;
+        return ProductCodeMatch::textCarries($text, $key);
     }
 
     /**
@@ -6751,22 +7727,13 @@ SYS,
      *   przy PVC/40 „EN 374-1:2016”, a źródło podaje „EN ISO 374-1:2016”. Źródła bywają ze sobą niezgodne (CITRIN:
      *   PDF „A1:2019”, strona sklepu „A1:2018”) — wystarczy, że oznaczenie jest w jednym z nich.
      *   Przedrostek „PN-” zostaje poza dopasowaniem (ta sama norma).
+     * Reguła wspólna z dowodami (EvidenceExtractor): SourceClaims::claims.
      *
      * @return list<string>
      */
     private static function sourceClaims(string $text): array
     {
-        $upper = mb_strtoupper($text);
-        preg_match_all('/(?<![\p{L}\p{N}])(?:[0-5X]{6}|[0-5X]{4}[A-FX]?)(?![\p{L}\p{N}])/u', $upper, $levels);
-        // rok wydania tylko 19xx/20xx: w „EN 388: 4131A” po dwukropku stoją poziomy, nie rok (07.10.2026)
-        preg_match_all('/(?<![\p{L}\p{N}])(?:EN|ISO)(?:\s*ISO)?\s*\d{3,5}(?:-\d+)*(?:\s*:\s*(?:19|20)\d\d(?!\d))?(?:\s*\+\s*A\d+(?:\s*:\s*(?:19|20)\d\d(?!\d))?)?/u', $upper, $norms);
-
-        $claims = array_filter($levels[0], static fn (string $code): bool => preg_match('/^(?:19|20)\d\d$/', $code) !== 1);
-        foreach ($norms[0] as $norm) {
-            $claims[] = self::claimKey($norm);
-        }
-
-        return array_values(array_unique($claims));
+        return SourceClaims::claims($text);
     }
 
     /**
@@ -6876,61 +7843,32 @@ SYS,
      * Normy wymienione w tekście źródeł: numer z częścią („13997”, „374-1”) => wydania podane przy nim. Przedrostki
      * EN / ISO / IEC / PN- i myślnik („EN-388”) nie mają znaczenia — strona angielska pisze „ISO 13997”, sklep
      * „EN 374-1:2016”, a model poprawnie „EN ISO 13997” i „EN ISO 374-1:2016”; wydanie bywa w nawiasie („EN 388 (2016)”).
+     * Reguła wspólna z dowodami: SourceClaims::designations.
      *
      * @return array<string, list<string>>
      */
     private static function normDesignations(string $text): array
     {
-        preg_match_all(
-            '/(?<![\p{L}\p{N}])(?:PN[\s-]*)?(?:EN|ISO|IEC)(?:[\s-]*(?:ISO|IEC))?[\s-]*(\d{3,5}(?:-\d+)*)(?:\s*[:(]\s*((?:19|20)\d\d)(?!\d))?/iu',
-            $text,
-            $matches,
-            PREG_SET_ORDER
-        );
-        $out = [];
-        foreach ($matches as $hit) {
-            $out[$hit[1]] ??= [];
-            if (($hit[2] ?? '') !== '') {
-                $out[$hit[1]][] = $hit[2];
-            }
-        }
-
-        return $out;
+        return SourceClaims::designations($text);
     }
 
     /**
      * Oznaczenie normy z opisu (klucz z sourceClaims, np. „ENISO374-1:2016+A1:2018”) ma pokrycie, gdy źródło wymienia
      * tę normę (numer i część; „EN 374” pokrywa „EN ISO 374-1”), a wydanie — tylko gdy źródło podaje jakiekolwiek
      * wydanie tej normy: strona z samym „EN ISO 20345” nie przeczy „EN ISO 20345:2022”, strona z „:2011” — tak.
+     * Reguła wspólna z dowodami: SourceClaims::designationSupported.
      *
      * @param  array<string, list<string>>  $sourceNorms
      */
     private static function normDesignationSupported(string $claim, array $sourceNorms): bool
     {
-        if (preg_match('/(\d{3,5}(?:-\d+)*)(?::((?:19|20)\d\d))?/', $claim, $m) !== 1) {
-            return true;
-        }
-        $core = $m[1];
-        $edition = $m[2] ?? '';
-        $editions = $sourceNorms[$core] ?? null;
-        if ($editions === null) {
-            foreach ($sourceNorms as $sourceCore => $sourceEditions) {
-                if (str_starts_with((string) $sourceCore, $core.'-')) {
-                    $editions = [...($editions ?? []), ...$sourceEditions];
-                }
-            }
-        }
-        if ($editions === null) {
-            return false;
-        }
-
-        return $edition === '' || $editions === [] || in_array($edition, $editions, true);
+        return SourceClaims::designationSupported($claim, $sourceNorms);
     }
 
     /** Tekst do porównania faktów ze źródłem: wielkie litery, bez białych znaków (PDF łamie „4131 A”, „EN 388 :2016”). */
     private static function claimKey(string $text): string
     {
-        return (string) preg_replace('/\s+/u', '', mb_strtoupper($text));
+        return SourceClaims::key($text);
     }
 
     /**

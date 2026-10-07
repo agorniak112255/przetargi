@@ -47,6 +47,14 @@ return [
             'report' => false,
         ],
 
+        // Teksty stron i PDF-ów użytych do opisu karty (SourceDocumentStore): {sha256}.txt.gz, bez dostępu z sieci.
+        'sources' => [
+            'driver' => 'local',
+            'root' => storage_path('app/sources'),
+            'throw' => false,
+            'report' => false,
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),

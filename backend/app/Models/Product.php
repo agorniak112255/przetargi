@@ -32,6 +32,26 @@ class Product extends Model
     /** Krótszy tekst to etykieta, nie opis wyrobu (zob. hasDescriptionText). */
     public const DESCRIPTION_MIN_CHARS = 24;
 
+    /**
+     * Powody przeglądu opisu (review_reason, 08.10.2026). identity_*: opis zapisany ze strony, która nie potwierdziła
+     * kodu wyrobu (soft — tylko nazwa i producent, none — sama heurystyka); worse_version: nowy przebieg dał opis gorszy
+     * od obecnego i czeka jako propozycja; rejected_source: propozycja ze strony odrzuconej wcześniej w przeglądzie.
+     */
+    public const REVIEW_IDENTITY_SOFT = 'identity_soft';
+
+    public const REVIEW_IDENTITY_NONE = 'identity_none';
+
+    public const REVIEW_WORSE_VERSION = 'worse_version';
+
+    public const REVIEW_REJECTED_SOURCE = 'rejected_source';
+
+    public const REVIEW_REASONS = [
+        self::REVIEW_IDENTITY_SOFT,
+        self::REVIEW_IDENTITY_NONE,
+        self::REVIEW_WORSE_VERSION,
+        self::REVIEW_REJECTED_SOURCE,
+    ];
+
     /** Ile wierszy parametrów wolno wpisać ręcznie na jednej karcie. */
     public const MANUAL_SPECS_MAX_ROWS = 60;
 
@@ -97,6 +117,8 @@ class Product extends Model
         'pack_qty',
         'packaging',
         'shop_source_url',
+        'review_reason',
+        'review_since',
     ];
 
     /**
@@ -176,6 +198,7 @@ class Product extends Model
             'manufacturer_norms' => 'array',
             'enrichment_payload' => 'array',
             'enrichment_trace' => 'array',
+            'review_since' => 'datetime',
         ];
     }
 
@@ -226,6 +249,12 @@ class Product extends Model
     public function shopCards(): HasMany
     {
         return $this->hasMany(ProductShopCard::class);
+    }
+
+    /** Wersje opisu karty (DescriptionVersionStore) — historia zapisów, propozycji i decyzji przeglądu. */
+    public function descriptionVersions(): HasMany
+    {
+        return $this->hasMany(ProductDescriptionVersion::class);
     }
 
     /** Identyfikatory wyrobu ze źródeł cen (EAN, kody) — z pochodzeniem, osobno od SKU i EAN karty. */

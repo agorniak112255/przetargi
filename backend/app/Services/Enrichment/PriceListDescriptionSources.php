@@ -58,6 +58,15 @@ final class PriceListDescriptionSources
     private const MANUAL_KIND = 'manual';
 
     /**
+     * Werdykt tożsamości strony źródłowej opisu (enrichment_payload->identity->verdict, SourceIdentity::judgeCard):
+     * hard — kod wyrobu na stronie, soft — tylko nazwa i producent, none — sama heurystyka. Unknown — karta bez
+     * zapisanego werdyktu (opis sprzed 08.10.2026, opis z B2B, karta bez opisu).
+     */
+    public const IDENTITY_VERDICTS = ['hard', 'soft', 'none'];
+
+    public const IDENTITY_UNKNOWN = 'unknown';
+
+    /**
      * Zapas ponad długość nazwy przy czytaniu początku opisu: Product::descriptionRepeatsName porównuje opis z nazwą
      * (reszta po nazwie < 80 znaków), więc dłuższy opis i tak jest opisem — nie trzeba go czytać w całości.
      */
@@ -78,9 +87,12 @@ final class PriceListDescriptionSources
      *     kind: string|null,
      *     status: string,
      *     enriched_at: int|null,
-     *     hosts_sha1: string|null
+     *     hosts_sha1: string|null,
+     *     identity: string,
+     *     review_reason: string|null
      * }> id karty => źródło opisu; host_position = pozycja hosta adresu źródła na liście cennika (karta z opisem);
-     *    enriched_at = znacznik czasu Unix daty opisu
+     *    enriched_at = znacznik czasu Unix daty opisu; identity = werdykt tożsamości z payloadu (IDENTITY_VERDICTS
+     *    albo IDENTITY_UNKNOWN); review_reason = powód przeglądu opisu (Product::REVIEW_*) albo null
      */
     public function cards(array $ids, ?PriceListSourceSettings $settings): array
     {
@@ -106,6 +118,9 @@ final class PriceListDescriptionSources
                     // pierwszy adres listy źródeł — opisy sprzed pola primary_source_kind (13.09.2026)
                     'enrichment_payload->source_urls[0] as first_source_url',
                     'enrichment_payload->price_list_sources->hosts_sha1 as list_hosts_sha1',
+                    // werdykt tożsamości strony źródłowej (od 08.10.2026) i powód przeglądu opisu
+                    'enrichment_payload->identity->verdict as identity_verdict',
+                    'review_reason',
                 ])
                 // początek opisu wystarczy do miary karty (HEAD_MARGIN); długość nazwy w bajtach (MySQL) ≥ w znakach
                 ->selectRaw('SUBSTR(description, 1, LENGTH(name) + ?) as description_head', [self::HEAD_MARGIN])
@@ -145,6 +160,8 @@ final class PriceListDescriptionSources
                     'enriched_at' => $row->enriched_at !== null ? CarbonImmutable::parse((string) $row->enriched_at)->getTimestamp() : null,
                     // odcisk stron cennika, z którymi powstał opis (ProductEnrichmentService, price_list_sources)
                     'hosts_sha1' => $this->jsonString($row->list_hosts_sha1 ?? null),
+                    'identity' => $this->identityVerdict($row->identity_verdict ?? null),
+                    'review_reason' => $this->jsonString($row->review_reason ?? null),
                 ];
             }
         }
@@ -215,6 +232,14 @@ final class PriceListDescriptionSources
         $probe->setRawAttributes(['name' => (string) ($row->name ?? ''), 'description' => $head]);
 
         return $probe->hasDescriptionText();
+    }
+
+    /** Werdykt z payloadu albo „unknown”: brak klucza, JSON null i wartość spoza listy (nie zgadujemy werdyktu). */
+    private function identityVerdict(mixed $value): string
+    {
+        $verdict = $this->jsonString($value);
+
+        return $verdict !== null && in_array($verdict, self::IDENTITY_VERDICTS, true) ? $verdict : self::IDENTITY_UNKNOWN;
     }
 
     /** Wartość ścieżki JSON: MySQL json_unquote zwraca napis „null” dla JSON null. */

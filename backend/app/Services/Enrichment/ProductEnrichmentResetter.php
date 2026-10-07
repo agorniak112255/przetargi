@@ -12,7 +12,9 @@ use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Support\ProductSearchBlob;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use JsonException;
+use Throwable;
 
 /**
  * Cofnięcie karty do kolejki wzbogacania z kopią zapasową. Opis, cache SKU, zdjęcia, dokumenty
@@ -75,7 +77,64 @@ final class ProductEnrichmentResetter
                 'enrichment_error' => null,
                 'enrichment_trace' => null,
                 'shop_source_url' => null,
+                // powód przeglądu dotyczył usuniętego opisu
+                'review_reason' => null,
+                'review_since' => null,
             ]);
+        });
+    }
+
+    /**
+     * Pliki odrzuconego w przeglądzie opisu (ProductReviewService::reject): wskazane zdjęcia i dokumenty z internetu
+     * razem z plikami na dysku (jak ProductEnrichmentService::clearProductImages / clearProductDocuments — tu bez
+     * kopii zapasowej, więc pliki nie zostają) i wpis pamięci SKU tej karty, który niesie ten sam opis. Tylko pliki
+     * z internetu (z adresem źródła, bez konta B2B — jak deleteWebData): plik z panelu B2B i plik wgrany ręcznie
+     * (bez source_url) zostają zawsze, także gdy trafił na listę identyfikatorów wersji.
+     *
+     * @param  list<int>  $imageIds
+     * @param  list<int>  $documentIds
+     */
+    public function dropRejectedRunFiles(Product $product, array $imageIds, array $documentIds): void
+    {
+        DB::transaction(function () use ($product, $imageIds, $documentIds): void {
+            $key = ProductEnrichmentCache::normalizeKey((string) $product->manufacturer, (string) $product->sku);
+            ProductEnrichmentCache::query()->where('manufacturer', $key['manufacturer'])->where('sku', $key['sku'])->delete();
+
+            $paths = [];
+            if ($imageIds !== []) {
+                $images = ProductImage::query()->where('product_id', $product->id)->whereNull('b2b_account_id')
+                    ->whereNotNull('source_url')->where('source_url', '!=', '')
+                    ->whereIn('id', $imageIds)->get();
+                foreach ($images as $image) {
+                    $paths[] = (string) $image->path;
+                    $image->delete();
+                }
+                if ($images->isNotEmpty()) {
+                    ProductImage::resequence((int) $product->id);
+                    $product->unsetRelation('images');
+                }
+            }
+            if ($documentIds !== []) {
+                $documents = ProductDocument::query()->where('product_id', $product->id)->whereNull('b2b_account_id')
+                    ->whereNotNull('source_url')->where('source_url', '!=', '')
+                    ->whereIn('id', $documentIds)->get();
+                foreach ($documents as $document) {
+                    $paths[] = (string) $document->path;
+                    $document->delete();
+                }
+                $product->unsetRelation('documents');
+            }
+            // pliki na dysku dopiero po zatwierdzeniu transakcji — wycofana decyzja nie zostawia wierszy bez plików
+            $paths = array_values(array_filter($paths, static fn (string $path): bool => $path !== ''));
+            if ($paths !== []) {
+                DB::afterCommit(static function () use ($paths): void {
+                    try {
+                        Storage::disk('public')->delete($paths);
+                    } catch (Throwable) {
+                        // brak pliku na dysku — wiersza już nie ma, nic więcej do zrobienia
+                    }
+                });
+            }
         });
     }
 
@@ -159,8 +218,9 @@ final class ProductEnrichmentResetter
     {
         $key = ProductEnrichmentCache::normalizeKey((string) $product->manufacturer, (string) $product->sku);
         ProductEnrichmentCache::query()->where('manufacturer', $key['manufacturer'])->where('sku', $key['sku'])->delete();
-        ProductImage::query()->where('product_id', $product->id)->whereNotNull('source_url')->where('source_url', '!=', '')->delete();
-        // pliki z paneli B2B zostają — nie pochodzą z internetu i wracają tylko przez pobranie cennika
+        // pliki z paneli B2B (zdjęcia i dokumenty) zostają — nie pochodzą z internetu i wracają tylko przez pobranie cennika
+        ProductImage::query()->where('product_id', $product->id)->whereNull('b2b_account_id')
+            ->whereNotNull('source_url')->where('source_url', '!=', '')->delete();
         ProductDocument::query()->where('product_id', $product->id)->whereNull('b2b_account_id')
             ->whereNotNull('source_url')->where('source_url', '!=', '')->delete();
         ProductAccessory::query()->where('product_id', $product->id)->where('source', ProductAccessory::SOURCE_ENRICHMENT)->delete();

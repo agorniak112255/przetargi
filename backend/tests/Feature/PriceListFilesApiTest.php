@@ -103,7 +103,7 @@ final class PriceListFilesApiTest extends TestCase
         $this->assertSame([
             'id', 'manufacturer', 'version', 'enrichment_sites', 'enrichment_sites_mode', 'enrichment_sites_updated_at',
             'has_b2b_account', 'cards', 'described', 'sources', 'stale', 'queued', 'running', 'failed', 'manual',
-            'batch', 'hosts',
+            'batch', 'hosts', 'identity', 'to_review', 'with_image',
         ], array_keys($row));
         $this->assertSame($list->id, $row['id']);
         $this->assertSame(['sklep-a.pl', 'sklep-b.pl', 'sklep-c.pl'], $row['enrichment_sites']);

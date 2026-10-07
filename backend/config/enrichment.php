@@ -222,6 +222,12 @@ return [
     'manufacturer_first_every_brand' => true,
 
     /*
+    | Zapis tekstów stron użytych do opisu (dysk „sources”, tabela product_source_documents) — audyt „skąd to zdanie”
+    | i opis z zapisanych źródeł bez ponownego szukania. W testach wyłączone (phpunit.xml); testy źródeł włączają.
+    */
+    'store_sources' => (bool) env('ENRICHMENT_STORE_SOURCES', true),
+
+    /*
     | Hosty do zapytań site: (katalog + sklepy, które ten asortyment indeksują).
     | Gdy brak wpisu, bierzemy manufacturer_domains.
     */

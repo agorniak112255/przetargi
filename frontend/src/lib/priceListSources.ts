@@ -26,6 +26,18 @@ export type FilePriceListHost = {
   described_cards: number
 }
 
+/**
+ * Karty z opisem według werdyktu tożsamości strony źródłowej: hard = kod wyrobu na stronie, soft = tylko nazwa
+ * i producent, none = sama heurystyka, unknown = bez zapisanego werdyktu (opis sprzed 08.10.2026, opis z B2B).
+ * Suma = described.
+ */
+export type FilePriceListIdentity = {
+  hard: number
+  soft: number
+  none: number
+  unknown: number
+}
+
 export type FilePriceListBatch = {
   id: number
   status: string
@@ -53,6 +65,11 @@ export type FilePriceList = {
   manual: number
   batch: FilePriceListBatch | null
   hosts: FilePriceListHost[]
+  identity: FilePriceListIdentity
+  /** Karty z powodem przeglądu opisu (lista „Do przeglądu”). */
+  to_review: number
+  /** Karty z co najmniej jednym zdjęciem (z `cards`). */
+  with_image: number
 }
 
 /** GET /price-lists/files */

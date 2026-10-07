@@ -50,6 +50,9 @@ final class CandidateRejection
 
     public const OUTSIDE_LIST_SOURCES = 'outside_list_sources';
 
+    /** Strona źródła opisu odrzuconego przez handlowca w przeglądzie (etap 1 opisów) — nie wraca automatem. */
+    public const REJECTED_IN_REVIEW = 'rejected_in_review';
+
     private const LABELS = [
         self::NOISE_URL => 'adres kontaktu/kuponu, nie karta',
         self::MANUFACTURER_CONFLICT => 'strona innego producenta',
@@ -71,6 +74,7 @@ final class CandidateRejection
         self::BLOCKED_HOST => 'host wykluczony jako źródło',
         self::OTHER_CODE_FAMILY => 'strona producenta wymienia kody innej rodziny',
         self::OUTSIDE_LIST_SOURCES => 'poza stronami cennika (tryb „tylko producent i strony cennika”)',
+        self::REJECTED_IN_REVIEW => 'strona odrzucona przez handlowca',
     ];
 
     public static function label(string $reason): string

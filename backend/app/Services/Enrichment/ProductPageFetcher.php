@@ -43,6 +43,22 @@ final class ProductPageFetcher
      */
     private array $documentLabels = [];
 
+    /**
+     * Najwięcej stron w dzienniku przebiegu. Ponad limit wypada strona z najkrótszym tekstem (przy równych najstarsza),
+     * nie najstarsza: strony producenta przychodzą w przebiegu najwcześniej, a źródło opisu to strona z treścią —
+     * wypchnięcie najstarszych zabierałoby werdyktowi tożsamości właśnie stronę głównego źródła.
+     */
+    private const RUN_LOG_MAX_PAGES = 40;
+
+    /**
+     * Dziennik stron przebiegu wzbogacania (startRunLog … stopRunLog): każda strona oddana przez fetch(), po adresie
+     * (Product::normalizeShopUrl). Strony karty przychodzą z kilku wywołań fetch w ProductEnrichmentService, a werdykt
+     * tożsamości i zapis źródeł potrzebują ich razem. Null = dziennik wyłączony.
+     *
+     * @var array<string, array<string, mixed>>|null
+     */
+    private ?array $runLog = null;
+
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
         private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
@@ -84,6 +100,11 @@ final class ProductPageFetcher
         try {
             $out = $this->fetchInner($results, $sku, $maxPages, $manufacturerDomains);
             $out['rejected'] = CandidateRejection::unique($this->rejections);
+            if ($this->runLog !== null) {
+                foreach ($out['pages'] as $page) {
+                    $this->logRunPage($page);
+                }
+            }
 
             return $out;
         } finally {
@@ -193,6 +214,291 @@ final class ProductPageFetcher
     public function markupNamesOtherProduct(string $html, string $code): bool
     {
         return $this->markupSkuNamesOtherProduct($html, $code);
+    }
+
+    /**
+     * Identyfikatory GŁÓWNEGO wyrobu strony, z rodzajem — do werdyktu tożsamości (SourceIdentity); bramki pobierania
+     * biorą dalej markupSkus. Dosłownie, bez sprowadzania zapisu; gtin8/12/13/14 → gtin.
+     *
+     * - mikrodane: itemprop sku/mpn/gtin* pierwszego węzła itemscope Product/ProductGroup bez nadrzędnego wyrobu,
+     *   z jego offers i hasVariant (<meta content=…> i atrybut content też); węzły wyrobów w nim zagnieżdżone
+     *   (isRelatedTo, isSimilarTo, isAccessoryOrSparePartFor) i kafelki „podobne / klienci kupili” obok — nie;
+     *   itemprop poza każdym itemscope tylko wtedy, gdy na stronie jest jedna taka wartość danego rodzaju;
+     * - klasa body Magento catalog_product_view_sku_* (to zawsze wyrób strony);
+     * - JSON-LD: pierwszy węzeł Product/ProductGroup (kolejność na stronie), jego offers i warianty hasVariant (karta
+     *   rodziny producenta podaje kody rozmiarów i kolorów tylko tam, także jako odnośniki @id) oraz węzły Product
+     *   z isVariantOf wskazującym na niego; pola wyrobów powiązanych nie są czytane;
+     * - data-part (tabela części karty rodziny coba.com — tekst strony ucina tabelę) jako rodzaj „part”: przycisk
+     *   z numerem części bywa też w karuzelach sklepów, więc SourceIdentity liczy go tylko na hoście producenta.
+     *
+     * @return list<array{type: 'sku'|'mpn'|'gtin'|'part', value: string}>
+     */
+    public function markupIdentifiers(string $html): array
+    {
+        $out = [];
+        $add = static function (string $type, mixed $value) use (&$out): void {
+            if (! is_string($value) && ! is_int($value)) {
+                return;
+            }
+            $value = trim(html_entity_decode((string) $value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            $type = str_starts_with(mb_strtolower($type), 'gtin') ? 'gtin' : mb_strtolower($type);
+            if ($value === '' || mb_strlen($value) > 60 || ! in_array($type, ['sku', 'mpn', 'gtin', 'part'], true)) {
+                return;
+            }
+            $out[$type.'|'.$value] = ['type' => $type, 'value' => $value];
+        };
+
+        foreach ($this->mainMicrodataCodes($html) as [$type, $value]) {
+            $add($type, $value);
+        }
+        if (preg_match('#\bcatalog_product_view_sku_([A-Za-z0-9][A-Za-z0-9._\-]{2,40})\b#', $html, $m)) {
+            $add('sku', $m[1]);
+        }
+        if (preg_match_all('#\bdata-part=["\']([A-Za-z0-9][A-Za-z0-9._\-]{2,40})["\']#', $html, $parts)) {
+            foreach ($parts[1] as $part) {
+                $add('part', $part);
+            }
+        }
+        foreach ($this->mainJsonLdCodes($html) as [$type, $value]) {
+            $add($type, $value);
+        }
+
+        return array_values($out);
+    }
+
+    /**
+     * Kody z mikrodanych głównego wyrobu (markupIdentifiers).
+     *
+     * @return list<array{0: string, 1: string}>
+     */
+    private function mainMicrodataCodes(string $html): array
+    {
+        if (preg_match('/\bitemprop\s*=\s*["\']?[^"\'>]*\b(?:sku|mpn|gtin)/i', $html) !== 1) {
+            return [];
+        }
+        $dom = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        try {
+            $loaded = $dom->loadHTML('<?xml encoding="UTF-8">'.$html, LIBXML_NONET | LIBXML_COMPACT | LIBXML_NOERROR | LIBXML_NOWARNING);
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+        }
+        if (! $loaded) {
+            return [];
+        }
+        $xpath = new \DOMXPath($dom);
+        $tokens = static fn (\DOMElement $el, string $attr): array => preg_split('/\s+/', mb_strtolower(trim($el->getAttribute($attr)))) ?: [];
+        $isProduct = static function (\DOMElement $el): bool {
+            return preg_match('#schema\.org/(?:Product|ProductGroup|ProductModel|IndividualProduct|SomeProducts)\b#i', $el->getAttribute('itemtype')) === 1;
+        };
+        $scopeOf = static function (\DOMNode $node): ?\DOMElement {
+            for ($n = $node->parentNode; $n instanceof \DOMElement; $n = $n->parentNode) {
+                if ($n->hasAttribute('itemscope')) {
+                    return $n;
+                }
+            }
+
+            return null;
+        };
+
+        $main = null;
+        foreach ($xpath->query('//*[@itemscope][@itemtype]') ?: [] as $el) {
+            if (! $el instanceof \DOMElement || ! $isProduct($el)) {
+                continue;
+            }
+            $top = true;
+            for ($s = $scopeOf($el); $s !== null; $s = $scopeOf($s)) {
+                if ($isProduct($s)) {
+                    $top = false;
+                    break;
+                }
+            }
+            if ($top) {
+                $main = $el;
+                break;
+            }
+        }
+        // Właściwość należy do wyrobu, gdy najbliższy itemscope to on albo łańcuch offers / hasVariant do niego.
+        $belongsToMain = static function (?\DOMElement $scope) use ($main, $scopeOf, $tokens): bool {
+            while ($main !== null && $scope !== null) {
+                if ($scope->isSameNode($main)) {
+                    return true;
+                }
+                if (array_intersect($tokens($scope, 'itemprop'), ['offers', 'hasvariant']) === []) {
+                    return false;
+                }
+                $scope = $scopeOf($scope);
+            }
+
+            return false;
+        };
+
+        $codes = [];
+        $orphans = [];
+        foreach ($xpath->query('//*[@itemprop]') ?: [] as $el) {
+            if (! $el instanceof \DOMElement) {
+                continue;
+            }
+            $names = array_values(array_filter($tokens($el, 'itemprop'), static fn (string $t): bool => preg_match('/^(?:sku|mpn|gtin(?:8|12|13|14)?)$/', $t) === 1));
+            if ($names === []) {
+                continue;
+            }
+            $value = $el->hasAttribute('content') ? $el->getAttribute('content') : $el->textContent;
+            $value = trim((string) preg_replace('/\s+/u', ' ', $value));
+            if (mb_strlen($value) < 3 || mb_strlen($value) > 60) {
+                continue;
+            }
+            $scope = $scopeOf($el);
+            foreach ($names as $name) {
+                if ($scope === null) {
+                    $orphans[$name][$value] = true;
+                } elseif ($belongsToMain($scope)) {
+                    $codes[] = [$name, $value];
+                }
+            }
+        }
+        foreach ($orphans as $name => $values) {
+            if (count($values) === 1) {
+                $codes[] = [$name, (string) array_key_first($values)];
+            }
+        }
+
+        return $codes;
+    }
+
+    /**
+     * Kody z JSON-LD głównego wyrobu (markupIdentifiers).
+     *
+     * @return list<array{0: string, 1: mixed}>
+     */
+    private function mainJsonLdCodes(string $html): array
+    {
+        if (! preg_match_all('#<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $blocks)) {
+            return [];
+        }
+        $isProduct = static function (mixed $node): bool {
+            if (! is_array($node)) {
+                return false;
+            }
+            $type = $node['@type'] ?? '';
+
+            return array_intersect(is_array($type) ? $type : [$type], ['Product', 'ProductGroup']) !== [];
+        };
+        $products = [];
+        $byId = [];
+        foreach ($blocks[1] as $json) {
+            $data = json_decode(trim((string) $json), true);
+            if (! is_array($data)) {
+                continue;
+            }
+            $nodes = isset($data['@graph']) && is_array($data['@graph']) ? $data['@graph'] : (array_is_list($data) ? $data : [$data]);
+            foreach ($nodes as $node) {
+                if (is_array($node) && is_string($node['@id'] ?? null) && $node['@id'] !== '') {
+                    $byId[$node['@id']] = $node;
+                }
+                if ($isProduct($node)) {
+                    $products[] = $node;
+                }
+            }
+        }
+        if ($products === []) {
+            return [];
+        }
+        $list = static fn (mixed $v): array => is_array($v) ? (array_is_list($v) ? $v : [$v]) : [];
+        $main = $products[0];
+        $mainRefs = array_values(array_filter([
+            is_string($main['@id'] ?? null) ? $main['@id'] : null,
+            is_scalar($main['productGroupID'] ?? null) ? (string) $main['productGroupID'] : null,
+        ], static fn (?string $s): bool => $s !== null && $s !== ''));
+
+        $items = [$main];
+        foreach ($list($main['hasVariant'] ?? null) as $variant) {
+            // wariant jako odnośnik {"@id": …} do węzła w @graph
+            if (is_array($variant) && count($variant) === 1 && is_string($variant['@id'] ?? null)) {
+                $variant = $byId[$variant['@id']] ?? $variant;
+            }
+            $items[] = $variant;
+        }
+        foreach (array_slice($products, 1) as $node) {
+            foreach ($list($node['isVariantOf'] ?? null) as $parent) {
+                $ref = is_array($parent) ? ($parent['@id'] ?? $parent['productGroupID'] ?? null) : $parent;
+                if (is_string($ref) && in_array($ref, $mainRefs, true)) {
+                    $items[] = $node;
+                    break;
+                }
+            }
+        }
+
+        $codes = [];
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $offers = [];
+            foreach ($list($item['offers'] ?? null) as $offer) {
+                // AggregateOffer → offers → Offer
+                $offers = [...$offers, $offer, ...(is_array($offer) ? $list($offer['offers'] ?? null) : [])];
+            }
+            foreach ([$item, ...$offers] as $holder) {
+                if (! is_array($holder)) {
+                    continue;
+                }
+                foreach (['sku', 'mpn', 'gtin', 'gtin8', 'gtin12', 'gtin13', 'gtin14'] as $key) {
+                    $codes[] = [$key, $holder[$key] ?? null];
+                }
+            }
+        }
+
+        return $codes;
+    }
+
+    /**
+     * Włącza dziennik stron przebiegu od zera (runLog) — także gdy poprzedni przebieg nie doszedł do stopRunLog
+     * (wyjątek przed blokiem try w serwisie): strony poprzedniej karty nie przechodzą do następnej.
+     */
+    public function startRunLog(): void
+    {
+        $this->runLog = [];
+    }
+
+    /**
+     * Strony oddane przez fetch() od startRunLog, w kolejności pobrania (ponowne pobranie tego samego adresu
+     * zastępuje wpis i przesuwa go na koniec), najwyżej RUN_LOG_MAX_PAGES — ponad limit wypadają najkrótsze.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function runLog(): array
+    {
+        return array_values($this->runLog ?? []);
+    }
+
+    public function stopRunLog(): void
+    {
+        $this->runLog = null;
+    }
+
+    /** @param  array<string, mixed>  $page */
+    private function logRunPage(array $page): void
+    {
+        $url = (string) ($page['url'] ?? '');
+        if ($url === '' || $this->runLog === null) {
+            return;
+        }
+        $key = Product::normalizeShopUrl($url);
+        unset($this->runLog[$key]);
+        $this->runLog[$key] = $page;
+        while (count($this->runLog) > self::RUN_LOG_MAX_PAGES) {
+            $shortestKey = null;
+            $shortest = PHP_INT_MAX;
+            foreach ($this->runLog as $logKey => $logged) {
+                $length = mb_strlen((string) ($logged['text'] ?? ''));
+                if ($length < $shortest) {
+                    [$shortestKey, $shortest] = [$logKey, $length];
+                }
+            }
+            unset($this->runLog[$shortestKey]);
+        }
     }
 
     /**
@@ -480,7 +786,8 @@ final class ProductPageFetcher
                 if ($optionSizes !== []) {
                     $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
                 }
-                $page = ['url' => $url, 'text' => $text];
+                // czytnik oddaje tekst, nie HTML — bez mikrodanych i bez adresu po przekierowaniu
+                $page = ['url' => $url, 'final_url' => $url, 'text' => $text, 'markup_codes' => []];
                 if ($optionSizes !== []) {
                     $page['option_sizes'] = $optionSizes;
                 }
@@ -753,14 +1060,19 @@ final class ProductPageFetcher
         }
 
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
+            $finalUrl = $response->effectiveUri();
             $page = [
                 'url' => $url,
+                // adres po przekierowaniach (strona z pamięci podręcznej — adres z zapytania)
+                'final_url' => $finalUrl !== null ? (string) $finalUrl : $url,
                 'title' => $title,
                 'text' => mb_substr($text, 0, 12000),
                 'image_urls' => array_values(array_unique($pageImages)),
                 'trusted_image_urls' => array_values(array_unique($pageTrusted)),
                 // pliki tej strony — serwis bierze je tylko ze stron, z których powstał opis (jak zdjęcia)
                 'document_urls' => $pageDocuments,
+                // kody z mikrodanych do werdyktu tożsamości (SourceIdentity)
+                'markup_codes' => $this->markupIdentifiers($html),
             ];
             if ($optionSizes !== []) {
                 $page['option_sizes'] = $optionSizes;

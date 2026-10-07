@@ -8,6 +8,7 @@ use App\Models\CatalogPage;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Models\ProductImage;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountPriceList;
 use App\Services\Enrichment\CatalogSearchHostService;
@@ -105,6 +106,9 @@ final class PriceListFileSources
 
         $currentSha1 = $list->enrichmentHostsSha1();
         $sources = array_fill_keys(PriceListDescriptionSources::SOURCES, 0);
+        // werdykt tożsamości liczony dla kart z opisem — karta bez opisu nie ma czego potwierdzać
+        $identity = array_fill_keys([...PriceListDescriptionSources::IDENTITY_VERDICTS, PriceListDescriptionSources::IDENTITY_UNKNOWN], 0);
+        $toReview = 0;
         $byPosition = [];
         $stale = 0;
         $statuses = [
@@ -118,9 +122,14 @@ final class PriceListFileSources
             if (isset($statuses[$card['status']])) {
                 $statuses[$card['status']]++;
             }
+            // lista „Do przeglądu” obejmuje każdą kartę z powodem (także propozycję przy karcie, której opis zniknął)
+            if ($card['review_reason'] !== null) {
+                $toReview++;
+            }
             if ($card['source'] === PriceListDescriptionSources::SOURCE_NONE) {
                 continue;
             }
+            $identity[$card['identity']]++;
             if ($card['host_position'] !== null) {
                 $byPosition[$card['host_position']] = ($byPosition[$card['host_position']] ?? 0) + 1;
             }
@@ -174,7 +183,31 @@ final class PriceListFileSources
                 'failed' => (int) $batch->failed,
             ],
             'hosts' => $hostRows,
+            // werdykt tożsamości strony źródłowej dla kart z opisem (suma = described)
+            'identity' => $identity,
+            'to_review' => $toReview,
+            'with_image' => $this->cardsWithImage(array_keys($cards)),
         ];
+    }
+
+    /**
+     * Ile kart ma co najmniej jedno zdjęcie — jedno zapytanie na porcję 1000 kart, bez GROUP BY (produkcja: MariaDB
+     * z ONLY_FULL_GROUP_BY).
+     *
+     * @param  list<int>  $ids
+     */
+    private function cardsWithImage(array $ids): int
+    {
+        $count = 0;
+        foreach (array_chunk($ids, 1000) as $chunk) {
+            $count += ProductImage::query()
+                ->whereIntegerInRaw('product_id', $chunk)
+                ->distinct()
+                ->pluck('product_id')
+                ->count();
+        }
+
+        return $count;
     }
 
     /**

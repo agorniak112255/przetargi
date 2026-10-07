@@ -49,6 +49,7 @@ import { PriceLists } from './pages/PriceLists'
 import { PriceListsB2b } from './pages/PriceListsB2b'
 import { PriceListsExcluded } from './pages/PriceListsExcluded'
 import { PriceListsFiles } from './pages/PriceListsFiles'
+import { PriceListsReview } from './pages/PriceListsReview'
 import { Products } from './pages/Products'
 import { Reports } from './pages/Reports'
 import { Substitutes } from './pages/Substitutes'
@@ -322,6 +323,14 @@ export default function App() {
               element={
                 <PermissionGuard permission="price_lists.view">
                   <PriceListsFiles />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="price-lists/review"
+              element={
+                <PermissionGuard anyOf={['products.review', 'price_lists.import']}>
+                  <PriceListsReview />
                 </PermissionGuard>
               }
             />
