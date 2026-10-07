@@ -1,77 +1,57 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { api, can, fetchClientCard, type ClientRecord } from '../lib/api'
 import { fmtDate } from '../lib/campaignFormat'
-import { formatPln } from '../lib/campaigns'
-import { sortDate, sortRows, useTableSort } from '../lib/tableSort'
-import { SortTh } from '../components/CampaignsUi'
+import { formatPln, type PageMeta } from '../lib/campaigns'
+import type { SortDir } from '../lib/tableSort'
+import { Pager, SortTh } from '../components/CampaignsUi'
 import { ClientFields } from '../components/client/ClientFields'
 import { ClientOwnerPicker, type OwnerOption } from '../components/client/ClientOwnerPicker'
 import { nipText } from '../components/client/clientText'
 
-/** Wiersz listy (GET /clients?details=1): pełne dane klienta, liczba przetargów i opiekun w aplikacji. */
+/** Wiersz listy (GET /clients?page=…): pełne dane klienta, liczba przetargów i opiekun w aplikacji. */
 type Client = ClientRecord & {
   tenders_count: number
   owner?: OwnerOption | null
 }
 
+type Option = { value: string; label: string; count: number }
+
+/** Strona listy; summary — liczniki i opcje filtrów z całej listy (ClientList na serwerze). */
+type ClientPage = {
+  data: Client[]
+  meta: PageMeta
+  summary: {
+    total: number
+    xl: number
+    without_manager: number
+    sales_year: number | null
+    cities: Option[]
+    managers: Option[]
+  }
+}
+
 type SortKey = 'name' | 'nip' | 'city' | 'manager' | 'sales' | 'last_sale' | 'tenders'
 type SourceFilter = 'all' | 'xl' | 'manual'
 
-/** Filtr opiekuna: klient bez opiekuna w XL i w panelu. */
+const SORT_KEYS: readonly SortKey[] = ['name', 'nip', 'city', 'manager', 'sales', 'last_sale', 'tenders']
+/** Liczby i daty po kliknięciu najpierw malejąco, teksty rosnąco. */
+const DESC_FIRST: readonly SortKey[] = ['sales', 'last_sale', 'tenders']
+const DEFAULT_SORT: SortKey = 'sales'
+const PER_PAGE_OPTIONS = ['25', '50', '100', '200'] as const
+const DEFAULT_PER_PAGE = '50'
+const SEARCH_DEBOUNCE_MS = 300
+
+/** Filtr opiekuna: klient bez opiekuna w XL i w panelu (ClientList::NO_MANAGER). */
 const NO_MANAGER = '__none'
 
-/** Opiekun z XL, a gdy go brak — opiekun w panelu (jak kolumna „Opiekun”). */
-function managerName(c: Client): string | null {
-  return c.account_manager ?? c.owner?.name ?? null
+function pick<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
+  return value !== null && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
 }
 
-/**
- * Klucz miejscowości do filtra: XL zapisuje tę samą miejscowość różnie („DĄBROWA GÓRNICZA”, „Dąbrowa Górnicza”,
- * „Dabrowa Gornicza”) — wielkie litery bez polskich znaków, jak CustomersReport::cityKey.
- */
-function cityKey(city: string | null): string | null {
-  const trimmed = (city ?? '').trim().replace(/\s+/g, ' ')
-  if (!trimmed) return null
-  return trimmed
-    .toLocaleUpperCase('pl')
-    .replace(/Ł/g, 'L')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-}
-
-type Option = { value: string; label: string; count: number }
-
-/** Opcje miejscowości: na klucz pisownia najczęstsza (remis — z małymi literami, potem z polskimi znakami). */
-function cityOptions(rows: Client[]): Option[] {
-  const groups = new Map<string, Map<string, number>>()
-  for (const c of rows) {
-    const key = cityKey(c.city)
-    if (!key) continue
-    const spelling = (c.city ?? '').trim().replace(/\s+/g, ' ')
-    const spellings = groups.get(key) ?? new Map<string, number>()
-    spellings.set(spelling, (spellings.get(spelling) ?? 0) + 1)
-    groups.set(key, spellings)
-  }
-  const score = (s: string) => (s !== s.toLocaleUpperCase('pl') ? 2 : 0) + (cityKey(s) !== s.toLocaleUpperCase('pl') ? 1 : 0)
-  return [...groups.entries()]
-    .map(([value, spellings]) => {
-      const sorted = [...spellings.entries()].sort((a, b) => b[1] - a[1] || score(b[0]) - score(a[0]))
-      return { value, label: sorted[0][0], count: sorted.reduce((sum, [, n]) => sum + n, 0) }
-    })
-    .sort((a, b) => a.label.localeCompare(b.label, 'pl', { sensitivity: 'base' }))
-}
-
-function managerOptions(rows: Client[]): Option[] {
-  const counts = new Map<string, number>()
-  for (const c of rows) {
-    const name = managerName(c)
-    if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
-  }
-  return [...counts.entries()]
-    .map(([value, count]) => ({ value, label: value, count }))
-    .sort((a, b) => a.label.localeCompare(b.label, 'pl', { sensitivity: 'base' }))
+function defaultDir(key: SortKey): SortDir {
+  return DESC_FIRST.includes(key) ? 'desc' : 'asc'
 }
 
 function salesValue(c: Client): number | null {
@@ -84,36 +64,33 @@ function addressLine(c: Client): string {
   return [street, town].filter(Boolean).join(', ')
 }
 
-function matches(c: Client, q: string): boolean {
-  if (!q) return true
-  const hay = [
-    c.name,
-    c.acronym,
-    c.nip,
-    c.regon,
-    c.city,
-    c.street,
-    c.voivodeship,
-    c.phone,
-    c.phone2,
-    c.account_manager,
-    ...(c.emails ?? []),
-    ...(c.contacts ?? []).flatMap((p) => [p.name, p.email, p.phone, p.mobile]),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLocaleLowerCase('pl')
-  const digits = q.replace(/\D+/g, '')
-  return q
-    .toLocaleLowerCase('pl')
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((word) => hay.includes(word)) || (digits.length >= 5 && (c.nip ?? '').replace(/\D+/g, '').includes(digits))
-}
-
 export function Clients() {
-  const [rows, setRows] = useState<Client[]>([])
-  const [loaded, setLoaded] = useState(false)
+  const [params, setParams] = useSearchParams()
+  const q = params.get('q') ?? ''
+  const source = pick<SourceFilter>(params.get('source'), ['all', 'xl', 'manual'], 'all')
+  const cityFilter = params.get('city') ?? ''
+  const managerFilter = params.get('manager') ?? ''
+  const sortKey = pick<SortKey>(params.get('sort'), SORT_KEYS, DEFAULT_SORT)
+  const dir = pick<SortDir>(params.get('dir'), ['asc', 'desc'], defaultDir(sortKey))
+  const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1)
+  const perPage = pick(params.get('per_page'), PER_PAGE_OPTIONS, DEFAULT_PER_PAGE)
+
+  const apiQuery = useMemo(() => {
+    const qs = new URLSearchParams()
+    qs.set('page', String(page))
+    qs.set('per_page', perPage)
+    if (q.trim()) qs.set('q', q.trim())
+    if (source !== 'all') qs.set('source', source)
+    if (cityFilter) qs.set('city', cityFilter)
+    if (managerFilter) qs.set('manager', managerFilter)
+    qs.set('sort', sortKey)
+    qs.set('dir', dir)
+    return qs.toString()
+  }, [page, perPage, q, source, cityFilter, managerFilter, sortKey, dir])
+
+  const [result, setResult] = useState<ClientPage | null>(null)
+  const [loading, setLoading] = useState(false)
+  const seq = useRef(0)
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [nip, setNip] = useState('')
@@ -121,31 +98,100 @@ export function Clients() {
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
-  const [q, setQ] = useState('')
-  const [source, setSource] = useState<SourceFilter>('all')
-  const [cityFilter, setCityFilter] = useState('')
-  const [managerFilter, setManagerFilter] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
   const navigate = useNavigate()
   const { user } = useAuth()
   const canManage = can(user, 'clients.manage')
   // lista osób do wyboru opiekuna — raz na wizytę, z karty klienta (serwer podaje ją tylko przy clients.manage)
   const ownerOptions = useRef<Promise<OwnerOption[]> | null>(null)
-  const [sort, toggleSort] = useTableSort<SortKey>(['sales', 'last_sale', 'tenders'], { key: 'sales', dir: 'desc' })
 
-  async function load() {
-    try {
-      setRows(await api<Client[]>('/clients?details=1'))
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać klientów')
-    } finally {
-      setLoaded(true)
+  // Pole wyszukiwania: wpis od razu w polu, do adresu (i zapytania) po 300 ms bez pisania — jak Zapasy.
+  const [searchInput, setSearchInput] = useState(q)
+  const pushedSearch = useRef(q)
+
+  /** Zmiana filtra = strona 1 (chyba że keepPage); pusta wartość usuwa parametr z adresu. */
+  const setFilters = useCallback(
+    (patch: Record<string, string | null>, opts: { keepPage?: boolean; replace?: boolean } = {}) => {
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          for (const [k, v] of Object.entries(patch)) {
+            if (v === null || v === '') next.delete(k)
+            else next.set(k, v)
+          }
+          if (!opts.keepPage) next.delete('page')
+          return next
+        },
+        { replace: opts.replace },
+      )
+    },
+    [setParams],
+  )
+
+  // Adres zmieniony z zewnątrz (wstecz w przeglądarce, „Wyczyść filtry”) — pole idzie za nim.
+  useEffect(() => {
+    if (q !== pushedSearch.current) {
+      pushedSearch.current = q
+      setSearchInput(q)
     }
-  }
+  }, [q])
+
+  useEffect(() => {
+    if (searchInput === pushedSearch.current) return
+    const t = window.setTimeout(() => {
+      pushedSearch.current = searchInput
+      setFilters({ q: searchInput }, { replace: true })
+    }, SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [searchInput, setFilters])
+
+  const load = useCallback(async () => {
+    const my = ++seq.current
+    setLoading(true)
+    setErr('')
+    try {
+      const res = await api<ClientPage>(`/clients?${apiQuery}`)
+      // szybkie klikanie filtrów — spóźniona odpowiedź nie nadpisuje nowszej
+      if (my !== seq.current) return
+      setResult(res)
+    } catch (ex) {
+      if (my === seq.current) setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać klientów')
+    } finally {
+      if (my === seq.current) setLoading(false)
+    }
+  }, [apiQuery])
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
+
+  // Strona za końcem listy (np. link sprzed nocnego odczytu z XL) — wróć na ostatnią istniejącą.
+  useEffect(() => {
+    const m = result?.meta
+    if (result && result.data.length === 0 && m && m.current_page > 1 && m.current_page > m.last_page) {
+      setFilters({ page: m.last_page > 1 ? String(m.last_page) : null }, { keepPage: true, replace: true })
+    }
+  }, [result, setFilters])
+
+  function clickSort(key: SortKey) {
+    const nextDir: SortDir = key === sortKey ? (dir === 'asc' ? 'desc' : 'asc') : defaultDir(key)
+    setFilters({ sort: key === DEFAULT_SORT ? null : key, dir: nextDir === defaultDir(key) ? null : nextDir })
+  }
+
+  function goToPage(n: number) {
+    setFilters({ page: n > 1 ? String(n) : null }, { keepPage: true })
+  }
+
+  function clearFilters() {
+    setParams((prev) => {
+      const next = new URLSearchParams()
+      for (const keep of ['sort', 'dir', 'per_page']) {
+        const v = prev.get(keep)
+        if (v) next.set(keep, v)
+      }
+      return next
+    })
+  }
 
   function loadOwnerOptions(clientId: number): Promise<OwnerOption[]> {
     ownerOptions.current ??= fetchClientCard(clientId).then((card) => card.owner_options ?? [])
@@ -193,48 +239,21 @@ export function Clients() {
     }
   }
 
-  const xlCount = rows.filter((c) => c.xl_gid != null).length
-  const salesYear = rows.find((c) => c.sales_year != null)?.sales_year ?? null
-  const cities = useMemo(() => cityOptions(rows), [rows])
-  const managers = useMemo(() => managerOptions(rows), [rows])
-  const withoutManager = rows.filter((c) => managerName(c) == null).length
-  const visible = useMemo(() => {
-    const query = q.trim()
-    const filtered = rows.filter(
-      (c) =>
-        (source === 'all' || (source === 'xl') === (c.xl_gid != null)) &&
-        (!cityFilter || cityKey(c.city) === cityFilter) &&
-        (!managerFilter || (managerFilter === NO_MANAGER ? managerName(c) == null : managerName(c) === managerFilter)) &&
-        matches(c, query),
-    )
-    return sortRows(filtered, sort, (c, key) => {
-      switch (key) {
-        case 'name':
-          return c.name
-        case 'nip':
-          return c.nip
-        case 'city':
-          return c.city
-        case 'manager':
-          return managerName(c)
-        case 'sales':
-          return salesValue(c)
-        case 'last_sale':
-          return sortDate(c.last_sale_at)
-        case 'tenders':
-          return c.tenders_count
-      }
-    })
-  }, [rows, q, source, cityFilter, managerFilter, sort])
+  const rows = result?.data ?? []
+  const meta = result?.meta ?? null
+  const summary = result?.summary ?? null
+  const salesYear = summary?.sales_year ?? null
+  const filtered = Boolean(q || source !== 'all' || cityFilter || managerFilter)
+  const sort = { key: sortKey, dir }
 
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Klienci</h1>
-          {loaded && (
+          {summary && (
             <p className="text-xs text-slate-500">
-              {rows.length} klientów, w tym {xlCount} z ERP XL
+              {summary.total} klientów, w tym {summary.xl} z ERP XL
               {salesYear ? ` — zakupy netto za ${salesYear} r., odświeżane co noc` : ''}
             </p>
           )}
@@ -298,14 +317,14 @@ export function Clients() {
         <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
           <input
             type="search"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Szukaj: nazwa, NIP, miasto, telefon, e-mail, osoba…"
             className="w-full max-w-md rounded border border-slate-300 px-2 py-1.5"
           />
           <select
             value={source}
-            onChange={(e) => setSource(e.target.value as SourceFilter)}
+            onChange={(e) => setFilters({ source: e.target.value === 'all' ? null : e.target.value })}
             className="rounded border border-slate-300 px-2 py-1.5"
             aria-label="Źródło klienta"
           >
@@ -315,12 +334,13 @@ export function Clients() {
           </select>
           <select
             value={cityFilter}
-            onChange={(e) => setCityFilter(e.target.value)}
+            onChange={(e) => setFilters({ city: e.target.value })}
             className="max-w-[14rem] rounded border border-slate-300 px-2 py-1.5"
             aria-label="Miejscowość"
           >
             <option value="">Wszystkie miejscowości</option>
-            {cities.map((o) => (
+            {cityFilter && !summary?.cities.some((o) => o.value === cityFilter) && <option value={cityFilter}>{cityFilter}</option>}
+            {(summary?.cities ?? []).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label} ({o.count})
               </option>
@@ -328,59 +348,78 @@ export function Clients() {
           </select>
           <select
             value={managerFilter}
-            onChange={(e) => setManagerFilter(e.target.value)}
+            onChange={(e) => setFilters({ manager: e.target.value })}
             className="max-w-[14rem] rounded border border-slate-300 px-2 py-1.5"
             aria-label="Opiekun"
           >
             <option value="">Wszyscy opiekunowie</option>
-            {withoutManager > 0 && <option value={NO_MANAGER}>Bez opiekuna ({withoutManager})</option>}
-            {managers.map((o) => (
+            {summary && summary.without_manager > 0 && (
+              <option value={NO_MANAGER}>Bez opiekuna ({summary.without_manager})</option>
+            )}
+            {managerFilter && managerFilter !== NO_MANAGER && !summary?.managers.some((o) => o.value === managerFilter) && (
+              <option value={managerFilter}>{managerFilter}</option>
+            )}
+            {(summary?.managers ?? []).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label} ({o.count})
               </option>
             ))}
           </select>
-          {(cityFilter || managerFilter || source !== 'all' || q) && (
+          {(filtered || searchInput) && (
             <button
               type="button"
               onClick={() => {
-                setQ('')
-                setSource('all')
-                setCityFilter('')
-                setManagerFilter('')
+                setSearchInput('')
+                clearFilters()
               }}
               className="text-blue-700 hover:underline"
             >
               Wyczyść filtry
             </button>
           )}
-          <span className="text-slate-500">
-            {visible.length === rows.length ? `${rows.length} pozycji` : `${visible.length} z ${rows.length}`}
-          </span>
+          {meta && summary && (
+            <span className="text-slate-500">{filtered ? `${meta.total} z ${summary.total}` : `${meta.total} pozycji`}</span>
+          )}
+          <label className="ml-auto inline-flex items-center gap-1 text-slate-500">
+            <select
+              className="rounded border border-slate-300 bg-white px-1.5 py-1"
+              value={perPage}
+              onChange={(e) => setFilters({ per_page: e.target.value === DEFAULT_PER_PAGE ? null : e.target.value })}
+              title="Ile klientów na stronie"
+            >
+              {PER_PAGE_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            na stronie
+          </label>
         </div>
-        <div className="overflow-x-auto">
+        <Pager meta={meta} disabled={loading} onPage={goToPage} />
+        <div className={`overflow-x-auto ${loading && result ? 'opacity-60' : ''}`}>
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b bg-slate-50">
-                <SortTh label="Nazwa" k="name" sort={sort} onSort={toggleSort} />
-                <SortTh label="NIP" k="nip" sort={sort} onSort={toggleSort} />
-                <SortTh label="Adres" k="city" sort={sort} onSort={toggleSort} />
+                <SortTh label="Nazwa" k="name" sort={sort} onSort={clickSort} />
+                <SortTh label="NIP" k="nip" sort={sort} onSort={clickSort} />
+                <SortTh label="Adres" k="city" sort={sort} onSort={clickSort} />
                 <th className="p-2">Telefon</th>
                 <th className="p-2">E-mail</th>
-                <SortTh label="Opiekun" k="manager" sort={sort} onSort={toggleSort} />
+                <SortTh label="Opiekun" k="manager" sort={sort} onSort={clickSort} />
                 <SortTh
                   label={salesYear ? `Zakupy netto ${salesYear}` : 'Zakupy netto'}
                   k="sales"
                   sort={sort}
-                  onSort={toggleSort}
+                  onSort={clickSort}
                   align="right"
                 />
-                <SortTh label="Ostatnia faktura" k="last_sale" sort={sort} onSort={toggleSort} />
-                <SortTh label="Przetargi" k="tenders" sort={sort} onSort={toggleSort} align="right" />
+                <SortTh label="Ostatnia faktura" k="last_sale" sort={sort} onSort={clickSort} />
+                <SortTh label="Przetargi" k="tenders" sort={sort} onSort={clickSort} align="right" />
               </tr>
             </thead>
             <tbody>
-              {visible.map((c) => {
+              {rows.map((c) => {
                 const isOpen = expanded === c.id
                 const emails = c.emails ?? []
                 return (
@@ -434,13 +473,18 @@ export function Clients() {
                                 owner={c.owner ?? null}
                                 canManage={canManage}
                                 loadOptions={() => loadOwnerOptions(c.id)}
-                                onSaved={(saved) =>
-                                  setRows((list) =>
-                                    list.map((row) =>
-                                      row.id === c.id ? { ...row, owner_id: saved.owner_id, owner: saved.owner ?? null } : row,
-                                    ),
+                                onSaved={(saved) => {
+                                  setResult((prev) =>
+                                    prev && {
+                                      ...prev,
+                                      data: prev.data.map((row) =>
+                                        row.id === c.id ? { ...row, owner_id: saved.owner_id, owner: saved.owner ?? null } : row,
+                                      ),
+                                    },
                                   )
-                                }
+                                  // liczniki opiekunów w filtrze liczy serwer
+                                  void load()
+                                }}
                               />
                             }
                           />
@@ -450,16 +494,24 @@ export function Clients() {
                   </Fragment>
                 )
               })}
-              {loaded && visible.length === 0 && (
+              {result && rows.length === 0 && (
                 <tr>
                   <td colSpan={9} className="p-4 text-center text-slate-500">
-                    {rows.length === 0 ? 'Brak klientów.' : 'Brak klientów pasujących do wyszukiwania.'}
+                    {summary?.total === 0 ? 'Brak klientów.' : 'Brak klientów pasujących do wyszukiwania.'}
+                  </td>
+                </tr>
+              )}
+              {!result && loading && (
+                <tr>
+                  <td colSpan={9} className="p-4 text-center text-slate-500">
+                    Wczytywanie klientów…
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        <Pager meta={meta} disabled={loading} onPage={goToPage} />
       </div>
     </div>
   )

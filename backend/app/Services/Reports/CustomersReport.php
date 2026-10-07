@@ -7,6 +7,7 @@ namespace App\Services\Reports;
 use App\Models\ErpItemLink;
 use App\Models\User;
 use App\Services\Erp\ErpItemCards;
+use App\Support\CityName;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
@@ -36,9 +37,6 @@ final class CustomersReport
     private const NO_OPERATOR = '(brak)';
 
     private const CHUNK = 1000;
-
-    /** Polskie wielkie litery → bez znaków diakrytycznych (klucz miasta liczony po mb_strtoupper). */
-    private const POLISH_UPPER = ['Ą' => 'A', 'Ć' => 'C', 'Ę' => 'E', 'Ł' => 'L', 'Ń' => 'N', 'Ó' => 'O', 'Ś' => 'S', 'Ź' => 'Z', 'Ż' => 'Z'];
 
     /** @return array<string, mixed> */
     public function build(User $user, array $params = []): array
@@ -160,7 +158,7 @@ final class CustomersReport
 
                     $city = trim((string) $row->city);
                     if ($city !== '') {
-                        $key = $this->cityKey($city);
+                        $key = CityName::key($city);
                         $cityCounts[$key] = ($cityCounts[$key] ?? 0) + 1;
                         $spellings[$key][$city] = ($spellings[$key][$city] ?? 0) + 1;
                     }
@@ -189,7 +187,7 @@ final class CustomersReport
 
         $cities = [];
         foreach ($cityCounts as $key => $count) {
-            $cities[] = ['city' => $this->displaySpelling($spellings[$key]), 'customers' => $count];
+            $cities[] = ['city' => CityName::displaySpelling($spellings[$key]), 'customers' => $count];
         }
         usort($cities, static fn (array $a, array $b): int => [$b['customers'], $a['city']] <=> [$a['customers'], $b['city']]);
         $cities = array_slice($cities, 0, self::CITIES_LIMIT);
@@ -216,36 +214,6 @@ final class CustomersReport
         }
 
         return true;
-    }
-
-    /**
-     * Klucz scalania miasta: wielkie litery bez polskich znaków („Kraków”, „Krakow”, „KRAKÓW ” → KRAKOW).
-     * Skrótów („GŁOGÓW MŁP.”) nie rozwijamy — nie zgadujemy.
-     */
-    private function cityKey(string $city): string
-    {
-        return strtr(mb_strtoupper(trim($city), 'UTF-8'), self::POLISH_UPPER);
-    }
-
-    /**
-     * Wyświetlana pisownia miasta: najczęstsza; remis — wolimy zapis z polskimi znakami, potem nie w całości
-     * wielkimi literami, potem alfabet.
-     *
-     * @param  array<string, int>  $spellings
-     */
-    private function displaySpelling(array $spellings): string
-    {
-        $best = null;
-        foreach ($spellings as $spelling => $count) {
-            $spelling = (string) $spelling;
-            $upper = mb_strtoupper($spelling, 'UTF-8');
-            $rank = [$count, strtr($upper, self::POLISH_UPPER) !== $upper ? 1 : 0, $spelling !== $upper ? 1 : 0];
-            if ($best === null || $rank > $best[1] || ($rank === $best[1] && strcmp($spelling, $best[0]) < 0)) {
-                $best = [$spelling, $rank];
-            }
-        }
-
-        return $best[0] ?? '';
     }
 
     /**

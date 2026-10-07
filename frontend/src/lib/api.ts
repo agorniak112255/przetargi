@@ -2310,7 +2310,7 @@ export function globalSearch(q: string, signal?: AbortSignal): Promise<GlobalSea
 /** Osoba kontaktowa z ERP XL (clients.contacts). */
 export type ClientContact = { name?: string; position?: string; email?: string; phone?: string; mobile?: string }
 
-/** Klient z zakładki Klienci (GET /clients?details=1 — pełne dane; ręczny albo z ERP XL). */
+/** Klient z zakładki Klienci (GET /clients?page=… albo ?details=1 — pełne dane; ręczny albo z ERP XL). */
 export type ClientRecord = {
   id: number
   name: string
