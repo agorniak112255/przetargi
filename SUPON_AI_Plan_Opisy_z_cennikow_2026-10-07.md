@@ -205,3 +205,5 @@ w zapytaniach, teksty z dysku po jednym. Model lokalny: najwyżej 4 zapytania na
 ## 5. Stan
 - Etap 0: wdrożony 07.10.2026 (30d73e8, build c1a0501); `products:repair-cancelled-status` (151 kart) i
   `products:restore-norms-column` (146 kart) wykonane na produkcji.
+- Etap 1: kod ec452c9 + build 3a09c52 (07.10.2026 wieczór), dwa przeglądy kodu, pełny pakiet 7373. Pomiar werdyktu: Coba zła grupa 1/23 twardy (właściwy wyrób), dobre 173/182, MAPA 147/147, krzyżowo 0 fałszywych. Po wdrożeniu: products:baseline-versions dla cenników 14, 12, 1, 3, 2 (podgląd → --apply). Pełne ponowne pobranie złych cenników — po etapie 2 (opis wspólny dla modelu).
+
