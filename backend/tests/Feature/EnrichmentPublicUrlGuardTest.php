@@ -30,6 +30,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 /**
@@ -209,6 +210,46 @@ final class EnrichmentPublicUrlGuardTest extends TestCase
 
         $this->assertSame($small, $fetch('https://sklep.example.com/robots.txt', 8, 1));
         $this->assertSame('', $fetch('https://bomba.example.com/robots.txt', 8, 1));
+    }
+
+    public function test_sitemap_curl_fallback_inflates_gzip_within_limit(): void
+    {
+        // streamFromCurl: .xml.gz z systemowego curla — dotąd gzdecode bez limitu
+        $indexer = app(CatalogSitemapIndexer::class);
+        $gunzip = (new \ReflectionMethod($indexer, 'gunzipWithinLimit'))->getClosure($indexer);
+        $xml = '<?xml version="1.0"?><urlset>'.str_repeat('<url><loc>https://sklep.example.com/p</loc></url>', 2000).'</urlset>';
+
+        $this->assertSame($xml, $gunzip((string) gzencode($xml), 1_000_000, 'https://sklep.example.com/sitemap.xml.gz'));
+        // ponad limit: początek mapy (pełne wpisy z niego wyciągnie drainLocations), nie cała bomba
+        $bomb = (string) gzencode(str_repeat($xml, 400), 9);
+        $this->assertLessThan(2_000_000, strlen($bomb));
+        $this->assertSame(substr(str_repeat($xml, 400), 0, 1_000_000), $gunzip($bomb, 1_000_000, 'https://sklep.example.com/sitemap.xml.gz'));
+        // uszkodzony gzip: to, co się rozpakowało (wywołujący zostaje wtedy przy surowej treści, jak dotąd)
+        $this->assertSame('', $gunzip("\x1f\x8b".'nie gzip', 1_000_000, 'https://sklep.example.com/sitemap.xml.gz'));
+    }
+
+    public function test_sitemap_curl_is_stopped_when_its_output_file_exceeds_the_limit(): void
+    {
+        // curl --compressed zapisuje treść już rozpakowaną, a --max-filesize liczy bajty z sieci — limit pilnuje pliku
+        $indexer = app(CatalogSitemapIndexer::class);
+        $run = (new \ReflectionMethod($indexer, 'runWithinFileLimit'))->getClosure($indexer);
+        $path = (string) tempnam(sys_get_temp_dir(), 'smap-test');
+        $writer = 'for ($i = 0; $i < 200; $i++) { file_put_contents($argv[1], str_repeat("A", 1 << 20), FILE_APPEND); usleep(10000); }';
+
+        try {
+            $started = microtime(true);
+            $this->assertFalse($run(new Process([PHP_BINARY, '-r', $writer, $path]), $path, 3_000_000));
+            // przerwany w trakcie, nie po zapisaniu 200 MB
+            $this->assertLessThan(5.0, microtime(true) - $started);
+            clearstatcache(true, $path);
+            $this->assertLessThan(50_000_000, (int) filesize($path));
+
+            file_put_contents($path, '');
+            $this->assertTrue($run(new Process([PHP_BINARY, '-r', 'file_put_contents($argv[1], "<urlset/>");', $path]), $path, 3_000_000));
+            $this->assertFalse($run(new Process([PHP_BINARY, '-r', 'exit(6);']), $path, 3_000_000));
+        } finally {
+            @unlink($path);
+        }
     }
 
     public function test_pooled_response_cut_by_size_limit_is_not_a_page(): void

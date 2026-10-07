@@ -1128,8 +1128,8 @@ final class CatalogSitemapIndexer
                 && $this->emitHtmlCatalogLocations($body, $onLocation, $url);
         }
         if (str_starts_with($body, "\x1f\x8b")) {
-            $decoded = @gzdecode($body);
-            $body = is_string($decoded) && $decoded !== '' ? $decoded : $body;
+            $decoded = $this->gunzipWithinLimit($body, self::CURL_MAX_BYTES, $url);
+            $body = $decoded !== '' ? $decoded : $body;
         }
 
         $this->drainLocations($body, $onLocation);
@@ -1195,8 +1195,7 @@ final class CatalogSitemapIndexer
                 $command[] = $hopUrl;
                 $process = new Process($command);
                 $process->setTimeout($left + 5);
-                $process->run();
-                if (! $process->isSuccessful()) {
+                if (! $this->runWithinFileLimit($process, $tmp, self::CURL_MAX_BYTES)) {
                     return null;
                 }
                 $ok = true;
@@ -1215,6 +1214,62 @@ final class CatalogSitemapIndexer
         @unlink($head);
 
         return $body !== '' ? $body : null;
+    }
+
+    /**
+     * Uruchamia curl i przerywa go, gdy plik wyjściowy przekroczy limit. --max-filesize liczy bajty z sieci, a
+     * --compressed zapisuje treść już rozpakowaną — bomba gzip z 20 MB zapisałaby gigabajty na dysk (curl na serwerze,
+     * 7.74, sprawdza --max-filesize tylko z Content-Length). Sprawdzane co 10 ms: ponad limit dochodzi tyle, ile curl
+     * zapisze do zatrzymania (na Windows ~100 MB, plik kasowany zaraz potem); pliku ponad limit nie czytamy.
+     *
+     * @return bool zakończony powodzeniem i w limicie
+     */
+    private function runWithinFileLimit(Process $process, string $path, int $maxBytes): bool
+    {
+        $process->start();
+        while ($process->isRunning()) {
+            $process->checkTimeout();
+            clearstatcache(true, $path);
+            if ((int) @filesize($path) > $maxBytes) {
+                $process->stop(0);
+
+                return false;
+            }
+            usleep(10_000);
+        }
+        clearstatcache(true, $path);
+
+        return $process->isSuccessful() && (int) @filesize($path) <= $maxBytes;
+    }
+
+    /**
+     * Mapa .gz rozpakowana z limitem (bomba gzip): wejście po 1 kB, więc kawałek wyjścia ma najwyżej ~1 MB; ponad limit
+     * zostaje początek, jak przy mapie czytanej strumieniem (readLocations). Uszkodzony gzip — to, co się rozpakowało.
+     */
+    private function gunzipWithinLimit(string $gzip, int $maxBytes, string $url): string
+    {
+        $inflate = inflate_init(ZLIB_ENCODING_GZIP);
+        if ($inflate === false) {
+            return '';
+        }
+        $out = '';
+        for ($offset = 0, $length = strlen($gzip); $offset < $length; $offset += 1024) {
+            $plain = @inflate_add($inflate, substr($gzip, $offset, 1024));
+            if ($plain === false) {
+                break;
+            }
+            if (strlen($out) + strlen($plain) > $maxBytes) {
+                Log::info('Sitemap larger than limit — reading stopped', ['url' => $url]);
+
+                return $out.substr($plain, 0, $maxBytes - strlen($out));
+            }
+            $out .= $plain;
+            if (inflate_get_status($inflate) === ZLIB_STREAM_END) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     /**
