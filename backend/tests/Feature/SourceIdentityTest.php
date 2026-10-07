@@ -298,6 +298,137 @@ final class SourceIdentityTest extends TestCase
         $this->assertSame('none', $this->identity()->judgePage($dispenser, ['url' => $ownShop, 'text' => 'Dozownik'], null)['verdict']);
     }
 
+    public function test_aj_group_labelled_short_model_number_is_hard_only_with_exact_boundary(): void
+    {
+        // pros.pl zapisuje model w adresie i tytule jako „model 103”; liczba na początku segmentu to numer wpisu sklepu
+        $own = $this->judge($this->ajGroup('103', 'Kurtka wodoochronna zapinana na zamek + stójka z polarem'),
+            'https://pros.pl/pl/odziez-wodoochronna-standard/62-kurtka-z-zamkiem-model-103.html', 'Kurtka z zamkiem model 103, PROS', '');
+        $this->assertSame(['hard', 'sku', '103', 'url'], [$own['verdict'], $own['key_type'], $own['key'], $own['where']]);
+
+        // karta 102 „Kurtka wodoochronna kangurka” ze źródłem płaszcza 1102 — „102-” to numer wpisu, 102 ≠ 1102
+        $coat = $this->judge($this->ajGroup('102', 'Kurtka wodoochronna kangurka'),
+            'https://pros.pl/pl/odziez-wodoochronna-ostrzegawcza/102-plaszcz-model-1102.html', 'Płaszcz model 1102', 'Płaszcz model 1102',
+            [['type' => 'sku', 'value' => '1102-00122-48/XS'], ['type' => 'sku', 'value' => '1102'], ['type' => 'mpn', 'value' => '1102']]);
+        $this->assertNotSame('hard', $coat['verdict']);
+
+        // dalszy numer albo przyrostek po ukośniku za kodem to inny model
+        $this->assertNotSame('hard', $this->judge($this->ajGroup('104', 'Kombinezon wodoochronny Standard'),
+            'https://pros.pl/pl/odziez/241-kombinezon-ocieplany.html', 'Kombinezon ocieplany model 104/1 OC', '')['verdict']);
+        $this->assertNotSame('hard', $this->judge($this->ajGroup('333', 'Fartuch Rybacki Extreme'),
+            'https://pros.pl/pl/pros-extreme/247-fartuch-rybacki.html', 'Fartuch rybacki model 333/WZ', '')['verdict']);
+        // mikrodane głównego wyrobu podają tylko dłuższy kod z literą — etykieta w adresie nie wystarcza
+        $this->assertNotSame('hard', $this->judge($this->ajGroup('001', 'Spodnie wodoochronne ogrodniczki Standard'),
+            'https://pros.pl/pl/odziez/71-spodnie-ogrodniczki-wzmocnione-model-001-max.html', 'Spodnie ogrodniczki wzmocnione model 001 MAX', '',
+            [['type' => 'sku', 'value' => '001 MAX'], ['type' => 'mpn', 'value' => '001 MAX']])['verdict']);
+        // bez mikrodanych (pole sku to numer wpisu „71”): znacznik wariantu w tytule, w adresie kod nie zamyka nazwy
+        $this->assertNotSame('hard', $this->judge($this->ajGroup('001', 'Spodnie wodoochronne ogrodniczki Standard'),
+            'https://pros.pl/pl/odziez/71-spodnie-ogrodniczki-wzmocnione-model-001-max.html', 'Spodnie ogrodniczki wzmocnione model 001 MAX, PROS', '',
+            [['type' => 'sku', 'value' => '71']])['verdict']);
+        // marka za numerem to nie znacznik wariantu
+        $this->assertSame('hard', $this->judge($this->ajGroup('616', 'Kurtka wodoochronna 3/4'),
+            'https://pros.pl/en/waterproof-standard-clothing/219-jacket.html', 'Jacket model 616 PROS, waterproof', '')['verdict']);
+    }
+
+    public function test_labelled_short_code_on_foreign_host_needs_card_brand(): void
+    {
+        $product = $this->ajGroup('103', 'Kurtka wodoochronna zapinana na zamek');
+
+        $this->assertNotSame('hard', $this->judge($product, 'https://sklep.example/kurtka-model-103.html', 'Kurtka model 103', 'PROS kurtka')['verdict']);
+        $this->assertSame('hard', $this->judge($product, 'https://sklep.example/kurtka-pros-model-103.html', 'Kurtka model 103', '')['verdict']);
+        // tekst sklepu nigdy, także z etykietą
+        $this->assertNotSame('hard', $this->judge($product, 'https://sklep.example/kurtka-pros.html', 'Kurtka PROS', 'Kurtka PROS model 103')['verdict']);
+    }
+
+    public function test_short_code_in_manufacturer_markup_needs_it_in_address_or_title(): void
+    {
+        // bemoregreen.eu: mikrodane „BEMOREGREEN-901” (nazwa witryny + model), tytuł „KURTKA MĘSKA 901”, bez etykiety
+        $jacket = $this->judge($this->ajGroup('901', 'KURTKA MĘSKA'), 'https://bemoregreen.eu/pl/kurtka/1-kurtka-meska-901.html',
+            'Be More Green - KURTKA MĘSKA 901 - BeMoreGreen', '', [['type' => 'sku', 'value' => 'BEMOREGREEN-901-00001'], ['type' => 'mpn', 'value' => 'BEMOREGREEN-901']]);
+        $this->assertSame(['hard', 'markup'], [$jacket['verdict'], $jacket['where']]);
+
+        // pole sku bywa numerem wpisu (226 tylko na początku segmentu adresu) — to nie kod wyrobu
+        $this->assertNotSame('hard', $this->judge($this->ajGroup('226', 'Zacisk do rękawic'),
+            'https://pros.pl/pl/fartuchy-wodoochronne/226-zacisk-do-rekawic-model-048tpu.html', 'Zacisk do rękawic model 048/TPU', '',
+            [['type' => 'sku', 'value' => '226'], ['type' => 'mpn', 'value' => '226']])['verdict']);
+    }
+
+    public function test_aj_group_combination_code_in_manufacturer_markup_is_the_model(): void
+    {
+        $product = $this->ajGroup('SB01 STRONG', 'Spodniobuty STRONG 1000 g/m2 w kolorze czerwonym');
+        $markup = [['type' => 'sku', 'value' => 'SB01 STRONG-00113-39'], ['type' => 'mpn', 'value' => 'SB01 STRONG RED']];
+
+        $own = $this->judge($product, 'https://pros.pl/pl/spodniobuty-i-wodery/222-spodniobuty-strong-red-sb01.html', 'Spodniobuty PROS STRONG RED', '', $markup);
+        $this->assertSame(['hard', 'markup'], [$own['verdict'], $own['where']]);
+        $this->assertNotSame('hard', $this->judge($product, 'https://sklep.example/spodniobuty-strong-red.html', 'Spodniobuty PROS STRONG RED', '', $markup)['verdict'],
+            'końcówka kombinacji to zapis strony producenta, nie sklepu');
+    }
+
+    public function test_secura_brand_and_number_from_card_name_is_not_a_key(): void
+    {
+        // „marka numer” z nazwy karty nie jest kluczem: części do półmaski noszą tę samą parę („Zawór wydechowy SECURA
+        // 3000”, „SECURA 3000 - nagłowie”, „Filtry do półmasek - SECURA 3100”) — SECURA potwierdza katalog PDF
+        $maskPage = 'https://www.securabc.com/pl/polmaska-wielokrotnego-uzytku-secura/21-secura-3100.html';
+        $markup = [['type' => 'sku', 'value' => '21'], ['type' => 'mpn', 'value' => '21']];
+        $cards = [
+            'S56T1SM0' => 'Półmaska SECURA 3100 (nagłowie trzyczęściowe)',
+            'S5621210' => 'Zawór wydechowy SECURA 3100',
+            'S5632300' => 'Filtr SECURA 3100 A2',
+            'S5621300' => 'Nagłowie tekstylne kompletne do półmaski SECURA 3100',
+        ];
+        foreach ($cards as $sku => $name) {
+            $verdict = $this->judge(new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'SECURA']), $maskPage, 'SECURA 3100', '', $markup);
+            $this->assertNotSame('hard', $verdict['verdict'], $name);
+        }
+    }
+
+    public function test_labelled_short_codes_need_profile_flag_and_no_unit_price_or_law_after(): void
+    {
+        $reis = fn (string $sku, string $title): ?string => $this->judge(
+            new Product(['sku' => $sku, 'name' => 'Wyrób REIS', 'manufacturer' => 'REIS']), 'https://sklep.example/reis-wyrob', $title, '')['verdict'];
+
+        $this->assertNotSame('hard', $reis('100', 'Rękawice REIS opak. nr 100 szt'));
+        $this->assertNotSame('hard', $reis('300', 'Ręcznik REIS nr 300 g/m2'));
+        $this->assertNotSame('hard', $reis('103', 'Apteczka REIS zgodna z art. 103 kodeksu pracy'));
+        // bez flagi profilu nawet czysta etykieta i 3-znakowy kod nie są kluczem
+        $this->assertNotSame('hard', $reis('A12', 'Okulary REIS model A12'));
+        $this->assertNotSame('hard', $this->judge(new Product(['sku' => '450', 'name' => 'Okulary', 'manufacturer' => 'UVEX']),
+            'https://sklep.example/okulary-uvex-ref-450.html', 'Okulary UVEX ref 450', '')['verdict']);
+
+        // przy fladze (AJ GROUP) jednostka, cena i przepis za liczbą też wykluczają
+        $aj = fn (string $sku, string $title): ?string => $this->judge($this->ajGroup($sku, 'Wyrób'), 'https://sklep.example/pros-wyrob', $title, '')['verdict'];
+        $this->assertNotSame('hard', $aj('100', 'Rękawice PROS opak. nr 100 szt'));
+        $this->assertNotSame('hard', $aj('103', 'Apteczka PROS zgodna z art. 103 kodeksu pracy'));
+        $this->assertNotSame('hard', $aj('103', 'Kurtka PROS model 103,50 zł'));
+        // kod krótszy niż 3 znaki nigdy
+        $this->assertNotSame('hard', $this->judge($this->ajGroup('08', 'Fartuch'), 'https://pros.pl/pl/fartuchy/203-fartuch-model-08.html', 'Fartuch model 08', '')['verdict']);
+    }
+
+    public function test_variant_marker_after_labelled_code_is_checked_on_multibyte_titles(): void
+    {
+        // 40 bajtów za kodem tnie „ż” w połowie — dotąd preg_match /u zwracał false i znacznik „MAX” przechodził
+        $title = 'Spodnie PROS model 001 MAX '.str_repeat('ż', 30);
+
+        $this->assertNotSame('hard', $this->judge($this->ajGroup('001', 'Spodnie wodoochronne ogrodniczki Standard'), 'https://pros.pl/pl/odziez/71-spodnie.html', $title, '')['verdict']);
+    }
+
+    public function test_manufacturer_markup_short_code_is_not_confirmed_by_price_in_title(): void
+    {
+        $verdict = $this->judge($this->ajGroup('103', 'Kurtka wodoochronna'), 'https://pros.pl/pl/odziez/62-kurtka.html', 'Kurtka PROS — teraz 103 zł', '',
+            [['type' => 'sku', 'value' => '103'], ['type' => 'mpn', 'value' => '103']]);
+
+        $this->assertNotSame('hard', $verdict['verdict']);
+    }
+
+    public function test_labelled_short_code_counts_in_title_but_not_in_manufacturer_text(): void
+    {
+        $product = new Product(['sku' => '6036', 'name' => 'Plaster Cederroth Salvequick', 'manufacturer' => 'Cederroth']);
+
+        $this->assertSame('hard', $this->judge($product, 'https://www.cederroth.com/pl/products/plaster/', 'Plaster Salvequick REF: 6036', '')['verdict']);
+        // strony zestawów i dozowników wymieniają w treści „REF: …” wkładów (pomiar CEDERROTH 07.10.2026)
+        $this->assertNotSame('hard', $this->judge($product, 'https://www.cederroth.com/pl/products/automat-na-plastry-salvequick/', 'Automat na plastry',
+            "Automat na plastry Salvequick\nWkłady: Plaster plastikowy REF: 6036")['verdict']);
+    }
+
     /**
      * @param  list<array{type: string, value: string}>  $markup
      * @return array<string, mixed>
@@ -314,6 +445,11 @@ final class SourceIdentityTest extends TestCase
     private function coba(string $sku, string $name): Product
     {
         return new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Coba']);
+    }
+
+    private function ajGroup(string $sku, string $name): Product
+    {
+        return new Product(['sku' => $sku, 'name' => $name, 'manufacturer' => 'AJ GROUP']);
     }
 
     private function identifier(Product $product, string $type, string $value, string $brand): void

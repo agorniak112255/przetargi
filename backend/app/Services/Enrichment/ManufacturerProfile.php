@@ -32,7 +32,25 @@ final class ManufacturerProfile
         /** końcówka „-5” w kodzie cennika = „05” doklejone na stronie (0 = bez tej reguły) */
         public readonly int $dashSuffixPad = 0,
         public readonly array $variantSuffixes = [],
+        /** wzorzec końcówki kodu kombinacji w mikrodanych strony producenta („103-00033-48/XS” = model 103) */
+        public readonly ?string $combinationSuffix = null,
+        /** krótki kod (także krótszy niż min_length, od 3 znaków) liczy się z etykietą „model 103” / „REF: 6036” */
+        public readonly bool $labelledShortCodes = false,
     ) {}
+
+    /**
+     * Kod z mikrodanych strony producenta bez końcówki kombinacji (kolor, rozmiar) według profilu; bez wzorca — bez
+     * zmian.
+     */
+    public function withoutCombinationSuffix(string $code): string
+    {
+        if ($this->combinationSuffix === null) {
+            return $code;
+        }
+        $stripped = trim((string) preg_replace($this->combinationSuffix, '', $code));
+
+        return $stripped !== '' ? $stripped : $code;
+    }
 
     /**
      * Adres na hoście producenta z profilu (host równy albo poddomena — jak ManufacturerDomainResolver::hostMatchesAny).
