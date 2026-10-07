@@ -187,7 +187,7 @@ final class ErpClientImportTest extends TestCase
         $this->assertSame(0, Artisan::call('erp:clients', ['--dry-run' => true]));
         $this->assertSame(0, Client::query()->count());
         $output = Artisan::output();
-        $this->assertStringContainsString('[bez zapisu] Rok 2026, próg 3 000,00 zł: kontrahentów od progu 1; nowych 1', $output);
+        $this->assertStringContainsString('[bez zapisu] Rok 2026, próg 100,00 zł: kontrahentów od progu 1; nowych 1', $output);
         $this->assertStringContainsString('nie ma prawa odczytu pól: regon', $output);
 
         $this->assertSame(0, Artisan::call('erp:clients', ['--min' => '10000']));

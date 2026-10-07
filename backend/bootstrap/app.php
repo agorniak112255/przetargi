@@ -58,7 +58,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // Kampanie: kontrahenci XL z e-mailami i tym, co kupowali (FS/PA z 24 mies.) — też tylko w nocy
         $schedule->command('erp:customers')->dailyAt('03:10')->withoutOverlapping(60)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
-        // zakładka Klienci: kontrahenci z zakupami w bieżącym roku od 3000 zł netto (karta, osoby, opiekun) — jedno
+        // zakładka Klienci: kontrahenci z zakupami w bieżącym roku od 100 zł netto (karta, osoby, opiekun) — jedno
         // zapytanie sumujące i odczyt kart wybranych, kilka sekund
         $schedule->command('erp:clients')->dailyAt('03:20')->withoutOverlapping(30)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));

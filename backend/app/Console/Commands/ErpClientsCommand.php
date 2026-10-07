@@ -13,7 +13,7 @@ class ErpClientsCommand extends Command
 {
     protected $signature = 'erp:clients
         {--year= : rok zakupów (domyślnie bieżący)}
-        {--min=3000 : próg zakupów netto w zł (FS + PA + FSE minus korekty)}
+        {--min=100 : próg zakupów netto w zł (FS + PA + FSE + WZ bez faktury minus korekty)}
         {--dry-run : tylko policz, bez zapisu}';
 
     protected $description = 'Zakładka Klienci: kontrahenci ERP XL z zakupami w roku od progu — pełna karta, osoby kontaktowe, opiekun (XL tylko czytany)';
