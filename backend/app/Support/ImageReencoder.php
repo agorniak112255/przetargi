@@ -39,13 +39,45 @@ final class ImageReencoder
         if (! self::fitsInMemory($info[0], $info[1])) {
             throw ValidationException::withMessages([$field => ['Obrazek ma za dużo pikseli ('.$info[0].'×'.$info[1].') — zmniejsz go przed wgraniem.']]);
         }
-        $bytes = (string) file_get_contents($path);
-        $source = @imagecreatefromstring($bytes);
-        if (! $source instanceof GdImage) {
+        $encoded = self::encode((string) file_get_contents($path), $info[2], $maxWidth);
+        if ($encoded === null) {
             throw ValidationException::withMessages([$field => [self::NOT_IMAGE]]);
         }
 
-        $alpha = self::hasAlpha($info[2], $bytes, $source);
+        return $encoded;
+    }
+
+    /**
+     * To samo dla bajtów spoza formularza (zdjęcie z serwera dostawcy). null = to nie obrazek JPG/PNG/GIF/WEBP,
+     * dłuższy bok ponad $maxSourceSide albo za dużo pikseli na pamięć.
+     *
+     * @return array{bytes: string, mime: string, extension: string, width: int, height: int}|null
+     */
+    public static function fromBytes(string $bytes, int $maxWidth, int $maxSourceSide): ?array
+    {
+        $info = $bytes !== '' ? @getimagesizefromstring($bytes) : false;
+        if ($info === false
+            || ! in_array($info[2], [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_GIF, IMAGETYPE_WEBP], true)
+            || $info[0] < 1 || $info[1] < 1
+            || max($info[0], $info[1]) > $maxSourceSide
+            || ! self::fitsInMemory($info[0], $info[1])) {
+            return null;
+        }
+
+        return self::encode($bytes, $info[2], $maxWidth);
+    }
+
+    /**
+     * @return array{bytes: string, mime: string, extension: string, width: int, height: int}|null
+     */
+    private static function encode(string $bytes, int $type, int $maxWidth): ?array
+    {
+        $source = @imagecreatefromstring($bytes);
+        if (! $source instanceof GdImage) {
+            return null;
+        }
+
+        $alpha = self::hasAlpha($type, $bytes, $source);
         $width = imagesx($source);
         $height = imagesy($source);
         $outWidth = min($width, $maxWidth);
@@ -105,13 +137,29 @@ final class ImageReencoder
      */
     private static function hasAlpha(int $type, string $bytes, GdImage $image): bool
     {
+        if ($type === IMAGETYPE_GIF) {
+            return imagecolortransparent($image) >= 0;
+        }
+
+        return self::hasAlphaHeader($type, $bytes);
+    }
+
+    /**
+     * Przezroczystość PNG albo WEBP z samego nagłówka pliku (bez dekodowania); inne formaty — false.
+     */
+    public static function hasAlphaChannel(string $bytes): bool
+    {
+        $info = $bytes !== '' ? @getimagesizefromstring($bytes) : false;
+
+        return $info !== false && self::hasAlphaHeader($info[2], $bytes);
+    }
+
+    private static function hasAlphaHeader(int $type, string $bytes): bool
+    {
         if ($type === IMAGETYPE_PNG) {
             $colorType = strlen($bytes) > 25 ? ord($bytes[25]) : 0;
 
             return $colorType === 4 || $colorType === 6 || str_contains(substr($bytes, 0, (int) strpos($bytes.'IDAT', 'IDAT')), 'tRNS');
-        }
-        if ($type === IMAGETYPE_GIF) {
-            return imagecolortransparent($image) >= 0;
         }
         if ($type === IMAGETYPE_WEBP && strlen($bytes) > 25) {
             $chunk = substr($bytes, 12, 4);

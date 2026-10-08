@@ -23,6 +23,8 @@ use App\Services\B2b\B2bShopFieldNormSource;
 use App\Services\B2b\B2bShopFieldSource;
 use App\Services\B2b\VmFootwearB2bClient;
 use App\Services\B2b\VmFootwearB2bConnector;
+use App\Services\B2b\VmFootwearSharePoint;
+use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -50,6 +52,12 @@ final class VmFootwearConnectorTest extends TestCase
 
     private const PASSWORD = 'dobre-haslo';
 
+    private const SHARE_HOST = 'vmtest-my.sharepoint.com';
+
+    private const SHARE_LINK = 'https://vmtest-my.sharepoint.com/:f:/g/personal/share_vmtest/ToKeN123';
+
+    private const SHARE_ROOT = '/personal/share_vmtest/Documents/Sortiment';
+
     /** @var array<string, list<array<string, mixed>>> dział → wyroby */
     private array $sections = [];
 
@@ -70,6 +78,21 @@ final class VmFootwearConnectorTest extends TestCase
     private int $pages = 0;
 
     private int $perPage = 2;
+
+    /** Link „Do pobrania” na stronie głównej (null = brak przycisku). */
+    private ?string $shareLink = null;
+
+    /** @var array<string, array<string, string>> folder SharePointu (dział/folder modelu) → plik → bajty */
+    private array $shareFiles = [];
+
+    /** SharePoint odmawia (link wygasł). */
+    private bool $shareDenied = false;
+
+    /** Ciasteczko FedAuth, które SharePoint teraz przyjmuje (zmiana = wygaśnięcie poprzedniego). */
+    private string $shareCookie = 'fed1';
+
+    /** @var list<string> pobrane pliki SharePointu */
+    private array $shareDownloads = [];
 
     protected function setUp(): void
     {
@@ -329,7 +352,169 @@ final class VmFootwearConnectorTest extends TestCase
         }
     }
 
+    public function test_background_free_png_from_the_share_goes_before_the_shop_photo_and_a_second_run_downloads_nothing(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addShoe();
+        $this->shareLink = self::SHARE_LINK;
+        $this->shareFiles = [
+            'obuv - shoes/9100-O6_TESTOWO' => [
+                '9100-O6 TESTOWO_bottom.png' => self::png(400, 200, 0x112233),
+                '9100-O6 TESTOWO_image_01.png' => self::png(400, 250),
+                // pomylony folder: plik innego modelu nie należy do karty
+                '9200-S3 OBCY_01.png' => self::png(300, 200, 0xAA0000),
+            ],
+            'rukavice - gloves/7000_RUKAVICE' => ['7000.png' => self::png(100, 100)],
+        ];
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $this->assertSame(1, $result['created'], implode(' | ', $result['errors']));
+        $card = Product::query()->where('sku', '9100-O6')->sole();
+        $images = ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->get();
+        $this->assertSame([
+            'https://'.self::SHARE_HOST.'/personal/share_vmtest/Documents/Sortiment/obuv%20-%20shoes/9100-O6_TESTOWO/9100-O6%20TESTOWO_image_01.png',
+            'https://'.self::SHARE_HOST.'/personal/share_vmtest/Documents/Sortiment/obuv%20-%20shoes/9100-O6_TESTOWO/9100-O6%20TESTOWO_bottom.png',
+            'https://pl.b2b.vmfootwear.cz/image/aa11',
+        ], $images->pluck('source_url')->all());
+        $this->assertTrue($images[0]->is_primary);
+        $this->assertStringEndsWith('.png', (string) $images[0]->path);
+        $stored = imagecreatefromstring((string) Storage::disk('public')->get((string) $images[0]->path));
+        $this->assertSame(127, imagecolorsforindex($stored, imagecolorat($stored, 0, 0))['alpha'], 'tło PNG zostaje przezroczyste');
+        $this->assertSame(['obuv - shoes/9100-O6_TESTOWO/9100-O6 TESTOWO_image_01.png', 'obuv - shoes/9100-O6_TESTOWO/9100-O6 TESTOWO_bottom.png'], $this->shareDownloads);
+
+        $before = $this->snapshot();
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $this->assertSame(1, $second['unchanged'], implode(' | ', $second['errors']));
+        $this->assertSame($before, $this->snapshot());
+        $this->assertCount(2, $this->shareDownloads, 'drugi przebieg nie pobiera PNG ponownie');
+    }
+
+    public function test_card_with_the_shop_photo_from_earlier_runs_gets_the_png_as_main_and_keeps_the_shop_photo(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addShoe();
+        $this->fakeSite();
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+        $card = Product::query()->where('sku', '9100-O6')->sole();
+        $shop = ProductImage::query()->where('product_id', $card->id)->sole();
+        $this->assertTrue($shop->is_primary);
+
+        $this->shareLink = self::SHARE_LINK;
+        $this->shareFiles = ['obuv - shoes/9100-O6_TESTOWO' => ['9100_O6.png' => self::png(400, 250)]];
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $images = ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->get();
+        $this->assertCount(2, $images);
+        $this->assertStringEndsWith('/9100_O6.png', (string) $images[0]->source_url);
+        $this->assertTrue($images[0]->is_primary);
+        $this->assertSame($shop->id, $images[1]->id, 'zdjęcie ze sklepu zostaje, na końcu galerii');
+        $this->assertFalse($images[1]->is_primary);
+    }
+
+    public function test_share_unavailable_in_a_later_run_leaves_the_gallery_untouched(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addShoe();
+        $this->shareLink = self::SHARE_LINK;
+        $this->shareFiles = ['obuv - shoes/9100-O6_TESTOWO' => ['9100_O6.png' => self::png(400, 250)]];
+        $this->fakeSite();
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+        $before = $this->snapshot();
+
+        $this->shareDenied = true;
+        $connector = $this->connectorWithShare();
+        $products = iterator_to_array($connector->products(), false);
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $this->assertSame([], $connector->imageUrls($products[0]), 'bez PNG żadnych zdjęć — inaczej zdjęcie sklepu wróciłoby na miejsce 0');
+        $this->assertStringContainsString('galerie kart bez zmian', implode("\n", $connector->runSummary()));
+        $this->assertStringNotContainsString('ToKeN123', implode("\n", $connector->runSummary()), 'link udostępnienia nie trafia do dziennika');
+        $this->assertSame($before, $this->snapshot());
+    }
+
+    public function test_without_the_download_link_the_shop_photo_is_used_as_before(): void
+    {
+        $this->addShoe();
+        $this->fakeSite();
+        $connector = $this->connectorWithShare();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertSame(['https://pl.b2b.vmfootwear.cz/image/aa11'], $connector->imageUrls($products[0]));
+        $this->assertStringContainsString('brak linku „Do pobrania”', implode("\n", $connector->runSummary()));
+    }
+
+    public function test_png_of_another_version_is_used_and_listed_in_the_summary(): void
+    {
+        $this->addShoe();
+        $this->shareLink = self::SHARE_LINK;
+        $this->shareFiles = ['obuv - shoes/9100-O2_TESTOWO' => ['9100-O2 TESTOWO_01.png' => self::png(300, 200)]];
+        $this->fakeSite();
+        $connector = $this->connectorWithShare();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $urls = $connector->imageUrls($products[0]);
+        $this->assertCount(2, $urls);
+        $this->assertStringEndsWith('/9100-O2%20TESTOWO_01.png', $urls[0]);
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringContainsString('Zdjęcia bez tła innej wersji modelu: 1, np. 9100-O6 ← 9100-O2 TESTOWO_01.png', $summary);
+        $this->assertStringContainsString('z kodem karty 0, bez PNG 0', $summary);
+    }
+
+    public function test_large_png_is_made_smaller_and_keeps_its_transparency(): void
+    {
+        $this->addShoe();
+        $this->shareLink = self::SHARE_LINK;
+        $this->shareFiles = ['obuv - shoes/9100-O6_TESTOWO' => ['9100_O6.png' => self::png(3000, 1500)]];
+        $this->fakeSite();
+        $connector = $this->connectorWithShare();
+        $products = iterator_to_array($connector->products(), false);
+
+        $image = $connector->imageAt($connector->imageUrls($products[0])[0]);
+
+        $this->assertNotNull($image);
+        $this->assertSame('image/png', $image->mime);
+        $size = getimagesizefromstring($image->bytes);
+        $this->assertSame([2000, 1000], [$size[0], $size[1]]);
+        $gd = imagecreatefromstring($image->bytes);
+        $this->assertSame(127, imagecolorsforindex($gd, imagecolorat($gd, 0, 0))['alpha']);
+        $this->assertSame(0, imagecolorsforindex($gd, imagecolorat($gd, 1000, 500))['alpha']);
+    }
+
+    public function test_expired_share_cookie_is_renewed_once(): void
+    {
+        $this->addShoe();
+        $this->shareLink = self::SHARE_LINK;
+        $this->shareFiles = ['obuv - shoes/9100-O6_TESTOWO' => ['9100_O6.png' => self::png(300, 200)]];
+        $this->fakeSite();
+        $sharePoint = new VmFootwearSharePoint(0, static function (int $ms): void {});
+        $connector = new VmFootwearB2bConnector($this->client(), $sharePoint);
+        $connector->login();
+        $products = iterator_to_array($connector->products(), false);
+        $url = $connector->imageUrls($products[0])[0];
+
+        // ciasteczko FedAuth wygasło: atrapa wymaga teraz nowego
+        $this->shareCookie = 'fed2';
+
+        $this->assertNotNull($connector->imageAt($url));
+    }
+
     // ---- pomocnicze ----
+
+    private function connectorWithShare(): VmFootwearB2bConnector
+    {
+        $connector = new VmFootwearB2bConnector($this->client(), new VmFootwearSharePoint(0, static function (int $ms): void {}));
+        $connector->login();
+
+        return $connector;
+    }
 
     private function client(): VmFootwearB2bClient
     {
@@ -432,6 +617,9 @@ final class VmFootwearConnectorTest extends TestCase
     {
         Http::fake(function (Request $request) {
             $url = $request->url();
+            if (parse_url($url, PHP_URL_HOST) === self::SHARE_HOST) {
+                return $this->sharePointResponse($request);
+            }
             $path = (string) parse_url($url, PHP_URL_PATH);
             $query = (string) parse_url($url, PHP_URL_QUERY);
             preg_match('/PHPSESSID=([\w-]+)/', $request->header('Cookie')[0] ?? '', $m);
@@ -478,7 +666,11 @@ final class VmFootwearConnectorTest extends TestCase
             }
 
             if ($path === '/') {
-                return Http::response(self::page(self::menu(array_keys($this->sections)), true), 200, ['Content-Type' => 'text/html; charset=utf-8']);
+                $download = $this->shareLink !== null
+                    ? '<a href="'.$this->shareLink.'" target="_blank" class="card btn-dark"><i class="fas fa-file-download"></i><h3>Do pobrania</h3></a>'
+                    : '';
+
+                return Http::response(self::page(self::menu(array_keys($this->sections)).$download, true), 200, ['Content-Type' => 'text/html; charset=utf-8']);
             }
             if (preg_match('#^/([a-z]+)/(\d*)$#', $path, $s) === 1 && isset($this->sections[$s[1]])) {
                 return Http::response(self::page($this->listPage($s[1], $s[2] === '' ? 1 : (int) $s[2]), true), 200, ['Content-Type' => 'text/html; charset=utf-8']);
@@ -612,6 +804,71 @@ final class VmFootwearConnectorTest extends TestCase
             .'<ul class="nav nav-tabs border-light" role="tablist"><li class="nav-item"><a class="nav-link" href="#param_1">Właściwości</a></li><li class="nav-item"><a class="nav-link" href="#param_3">Parametry biznesowe</a></li></ul>'
             .'<div class="tab-content"><div class="tab-pane fade active show" id="param_1" role="tabpanel"><h3 class="h6 mb-3">Właściwości</h3><div class="row"><div class="col-lg-3 col-sm-6"><ul class="list-unstyled fs-sm mb-0">'.$properties.'</ul></div></div></div>'
             .'<div class="tab-pane fade " id="param_3" role="tabpanel"><h3 class="h6 mb-3">Parametry biznesowe</h3><div class="row"><div class="col-lg-3 col-sm-6"><ul class="list-unstyled fs-sm mb-0">'.$business.'</ul></div></div></div></div>';
+    }
+
+    /**
+     * Atrapa udostępnienia SharePoint: link → 302 z ciasteczkiem FedAuth i folderem w „id”; REST Folders/Files
+     * i $value tylko z ciasteczkiem (bez niego 403, jak na żywo 08.10.2026).
+     */
+    private function sharePointResponse(Request $request): PromiseInterface
+    {
+        $path = rawurldecode((string) parse_url($request->url(), PHP_URL_PATH));
+        if (str_starts_with($path, '/:f:/')) {
+            if ($this->shareDenied) {
+                return Http::response('Access denied', 403);
+            }
+
+            return Http::response('', 302, [
+                'Location' => 'https://'.self::SHARE_HOST.'/personal/share_vmtest/_layouts/15/onedrive.aspx?id='.rawurlencode(self::SHARE_ROOT).'&ga=1',
+                'Set-Cookie' => 'FedAuth='.$this->shareCookie.'; path=/; secure; HttpOnly',
+            ]);
+        }
+        if (! str_contains($request->header('Cookie')[0] ?? '', 'FedAuth='.$this->shareCookie)) {
+            return Http::response('{"error":"Access denied"}', 403);
+        }
+        if (preg_match("#/_api/web/GetFolderByServerRelativeUrl\\('(.+)'\\)/(Folders|Files)$#", $path, $m) === 1) {
+            $folder = substr(str_replace("''", "'", $m[1]), strlen(self::SHARE_ROOT) + 1);
+            $value = [];
+            if ($m[2] === 'Folders') {
+                foreach (array_keys($this->shareFiles) as $key) {
+                    [$section, $name] = explode('/', $key, 2);
+                    if ($section === $folder) {
+                        $value[$name] = ['Name' => $name, 'ItemCount' => count($this->shareFiles[$key])];
+                    }
+                }
+            } else {
+                foreach ($this->shareFiles[$folder] ?? [] as $name => $bytes) {
+                    $value[] = ['Name' => $name, 'Length' => strlen($bytes), 'ServerRelativeUrl' => self::SHARE_ROOT.'/'.$folder.'/'.$name];
+                }
+            }
+
+            return Http::response(['value' => array_values($value)]);
+        }
+        if (preg_match("#/_api/web/GetFileByServerRelativeUrl\\('(.+)'\\)/\\\$value$#", $path, $m) === 1) {
+            $file = substr(str_replace("''", "'", $m[1]), strlen(self::SHARE_ROOT) + 1);
+            $this->shareDownloads[] = $file;
+            $folder = dirname($file);
+
+            return isset($this->shareFiles[$folder][basename($file)])
+                ? Http::response($this->shareFiles[$folder][basename($file)], 200, ['Content-Type' => 'application/octet-stream'])
+                : Http::response('not found', 404);
+        }
+
+        return Http::response('not found', 404);
+    }
+
+    /** PNG z przezroczystym tłem i nieprzezroczystym prostokątem pośrodku. */
+    private static function png(int $width, int $height, int $colour = 0x3366CC): string
+    {
+        $image = imagecreatetruecolor($width, $height);
+        imagealphablending($image, false);
+        imagesavealpha($image, true);
+        imagefill($image, 0, 0, imagecolorallocatealpha($image, 0, 0, 0, 127));
+        imagefilledrectangle($image, intdiv($width, 4), intdiv($height, 4), intdiv($width * 3, 4), intdiv($height * 3, 4), $colour);
+        ob_start();
+        imagepng($image, null, 1);
+
+        return (string) ob_get_clean();
     }
 
     private static function jpeg(string $seed): string

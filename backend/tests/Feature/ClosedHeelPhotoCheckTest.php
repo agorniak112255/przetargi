@@ -89,6 +89,43 @@ final class ClosedHeelPhotoCheckTest extends TestCase
         $this->assertSame(ProductVisualFeatureCheck::PROMPT_VERSION, $check->prompt_version);
     }
 
+    public function test_transparent_png_goes_to_the_model_on_a_white_background(): void
+    {
+        $card = $this->sandal('S-PNG', 'Sandał ochronny S1 P ESD.');
+        $image = $this->supplierImage($card);
+        // PNG bez tła (jak z SharePointu VM Footwear): przezroczyste piksele mają kolor czarny
+        $png = imagecreatetruecolor(400, 300);
+        imagealphablending($png, false);
+        imagesavealpha($png, true);
+        imagefill($png, 0, 0, imagecolorallocatealpha($png, 0, 0, 0, 127));
+        imagefilledrectangle($png, 100, 50, 300, 250, 0x202020);
+        ob_start();
+        imagepng($png);
+        Storage::disk('public')->put((string) $image->path, (string) ob_get_clean());
+
+        $sent = [];
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(function (array $messages) use (&$sent): array {
+            $sent[] = $messages;
+            app(AiServedProviderTally::class)->recordJsonOrigin(['model' => 'vision-test', 'provider' => null, 'profile' => 'Obraz', 'fallback' => false]);
+
+            return ['back' => 'full', 'strap_behind_heel' => false, 'shoe_visible' => true, 'what_i_see' => 'zamknięty tył'];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $result = app(ProductVisualFeatureCheck::class)->checkClosedHeel($card);
+
+        $this->assertNull($result['skip']);
+        $this->assertCount(2, $sent);
+        $url = collect($sent[0])->flatMap(static fn (array $m): array => is_array($m['content'] ?? null) ? $m['content'] : [])
+            ->firstWhere('type', 'image_url')['image_url']['url'] ?? '';
+        $this->assertStringStartsWith('data:image/jpeg;base64,', $url);
+        $sentImage = imagecreatefromstring((string) base64_decode(substr($url, strlen('data:image/jpeg;base64,'))));
+        $corner = imagecolorsforindex($sentImage, imagecolorat($sentImage, 0, 0));
+        $this->assertGreaterThan(240, $corner['red'] + 0, 'tło białe, nie czarne');
+        $this->assertGreaterThan(240, $corner['green'] + 0);
+    }
+
     public function test_card_with_heel_wording_is_not_sent_to_the_model(): void
     {
         $card = $this->sandal('S-2', 'Sandał z zabudowaną piętą.');

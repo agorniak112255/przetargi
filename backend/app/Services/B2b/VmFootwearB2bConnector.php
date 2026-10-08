@@ -7,6 +7,7 @@ namespace App\Services\B2b;
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
+use App\Support\ImageReencoder;
 use DOMDocument;
 use DOMElement;
 use DOMNode;
@@ -40,6 +41,11 @@ use RuntimeException;
  * tabelki nie trafiają: tabelka zasila wyszukiwanie tekstowe, a wiersz „ESD … nie” dałby trafienie na „ESD” wyrobowi
  * bez ESD (pełna lista Tak/Nie zostaje w karcie technicznej PDF). Pliki: „Karta techniczna” (PDF generowany przez
  * sklep z danych strony, bez ceny), instrukcja i deklaracja zgodności; zdjęcie — jedno na model, w pełnym rozmiarze.
+ *
+ * Zdjęcia bez tła (od 08.10.2026): link „Do pobrania” ze strony głównej prowadzi do folderu producenta na SharePoincie
+ * (VmFootwearSharePoint) z PNG bez tła. Ujęcia PNG kodu karty idą w galerii przed zdjęciem ze sklepu; gdy kodu karty
+ * nie ma, a są PNG innej wersji tego modelu (karta 6655-O6, zdjęcie 6655-O2) — też je bierzemy (decyzja właściciela
+ * 08.10.2026), z listą takich kart w podsumowaniu przebiegu. Zdjęcie ze sklepu zostaje na karcie, na końcu galerii.
  */
 final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource
 {
@@ -65,6 +71,15 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
     private const MAX_LIST_PAGES = 100;
 
     private const PROGRESS_EVERY = 50;
+
+    /** Dłuższy bok PNG z SharePointu na karcie — kolejne próby, gdy plik po zmniejszeniu nadal za duży. */
+    private const SHAREPOINT_IMAGE_SIDES = [2000, 1400];
+
+    /** Większe pliki zmniejszamy nawet przy tej szerokości (zapis zdjęć karty przyjmuje do 5 MB). */
+    private const SHAREPOINT_IMAGE_BYTES = 4_500_000;
+
+    /** Dłuższy bok, którego już nie dekodujemy (pamięć GD). */
+    private const SHAREPOINT_SOURCE_SIDE = 10_000;
 
     private const DOCUMENT_ORDER = [
         ProductDocument::KIND_DATASHEET => 0,
@@ -94,7 +109,30 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
     /** @var (callable(string): void)|null */
     private $listProgress = null;
 
-    public function __construct(private readonly VmFootwearB2bClient $client) {}
+    /** Link „Do pobrania” ze strony głównej sklepu (folder producenta na SharePoincie). */
+    private ?string $shareLink = null;
+
+    /** @var list<array{folder: string, name: string, path: string, size: int}>|null null = PNG niedostępne w tym przebiegu */
+    private ?array $pngIndex = null;
+
+    /** @var list<string> */
+    private array $pngOtherVersion = [];
+
+    private int $pngExact = 0;
+
+    private int $pngMissing = 0;
+
+    /**
+     * SharePoint z linkiem „Do pobrania”, ale chwilowo niedostępny: przebieg nie podaje żadnych zdjęć. Z samym
+     * zdjęciem sklepu synchronizacja nadałaby mu miejsce 0 w galerii (stampGalleryImage) i jako starszy wiersz
+     * wyprzedziłby PNG z poprzednich przebiegów — zdjęcie główne karty skakałoby przy każdej awarii.
+     */
+    private bool $galleryFrozen = false;
+
+    public function __construct(
+        private readonly VmFootwearB2bClient $client,
+        private readonly ?VmFootwearSharePoint $sharePoint = null,
+    ) {}
 
     public static function key(): string
     {
@@ -123,7 +161,10 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
 
     public static function forAccount(B2bAccount $account, int $delayMs): self
     {
-        return new self(new VmFootwearB2bClient((string) $account->username, (string) $account->password, $delayMs));
+        return new self(
+            new VmFootwearB2bClient((string) $account->username, (string) $account->password, $delayMs),
+            new VmFootwearSharePoint($delayMs),
+        );
     }
 
     public function onListProgress(callable $callback): void
@@ -144,6 +185,12 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
         $this->codeMismatch = [];
         $this->cards = 0;
         $this->withPrice = 0;
+        $this->shareLink = null;
+        $this->pngIndex = null;
+        $this->pngOtherVersion = [];
+        $this->pngExact = 0;
+        $this->pngMissing = 0;
+        $this->galleryFrozen = false;
 
         if (! $this->client->isLoggedIn()) {
             $this->client->login();
@@ -152,6 +199,7 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
         $rows = $this->listRows();
         $this->total = count($rows);
         $this->summary[] = 'Lista VM Footwear: '.count($rows).' modeli';
+        $this->pngIndex = $this->loadPngIndex();
 
         $done = 0;
         $seenCodes = [];
@@ -185,6 +233,12 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
         }
         if ($this->codeMismatch !== []) {
             $lines[] = 'Kod na liście inny niż na stronie wyrobu (wzięty ze strony wyrobu): '.self::listing($this->codeMismatch);
+        }
+        if ($this->pngIndex !== null) {
+            $lines[] = 'Zdjęcia bez tła (SharePoint VM): z kodem karty '.$this->pngExact.', bez PNG '.$this->pngMissing;
+            if ($this->pngOtherVersion !== []) {
+                $lines[] = 'Zdjęcia bez tła innej wersji modelu: '.self::listing($this->pngOtherVersion);
+            }
         }
 
         return $lines;
@@ -269,6 +323,9 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
 
     public function imageAt(string $url): ?B2bRemoteImage
     {
+        if ($this->sharePoint !== null && $this->sharePoint->isFileUrl($url)) {
+            return $this->sharePointImage($url);
+        }
         $file = $this->client->fileBytes($url);
         if ($file['bytes'] === '' || ! str_starts_with($file['mime'], 'image/')) {
             return null;
@@ -433,7 +490,9 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
     private function listRows(): array
     {
         $started = microtime(true);
-        $sections = self::parseMenu($this->client->homePage());
+        $home = $this->client->homePage();
+        $this->shareLink = VmFootwearSharePoint::shareLinkFrom($home);
+        $sections = self::parseMenu($home);
         if ($sections === []) {
             throw new RuntimeException('Strona główna '.VmFootwearB2bClient::HOST.' bez działów w menu — zmiana sklepu?');
         }
@@ -505,6 +564,7 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
         $this->cards++;
 
         $sizes = array_values(array_filter(array_column($page['sizes'], 'label'), static fn (string $label): bool => $label !== ''));
+        $images = $this->galleryFrozen ? [] : [...$this->pngUrls($code), ...$page['images']];
 
         return new B2bRemoteProduct(
             remoteId: $code,
@@ -523,12 +583,103 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
                 'properties' => $page['properties'],
                 'business' => $page['business'],
                 'documents' => $page['documents'],
-                'images' => $page['images'],
+                'images' => $images,
             ],
             availability: self::availabilityText($page['sizes'], $page['availability']),
             variantSummary: $sizes !== [] ? 'Rozmiary: '.implode(', ', $sizes) : null,
             identifiers: [new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MANUFACTURER_CODE, value: $code, field: 'Kod produktu')],
         );
+    }
+
+    /**
+     * Spis PNG z folderu „Do pobrania” (SharePoint producenta). Błąd = przebieg bez zdjęć bez tła, z powodem
+     * w podsumowaniu — zdjęcie ze sklepu zostaje, a karta nie traci nic z tego, co ma.
+     *
+     * @return list<array{folder: string, name: string, path: string, size: int}>|null
+     */
+    private function loadPngIndex(): ?array
+    {
+        if ($this->sharePoint === null) {
+            return null;
+        }
+        if ($this->shareLink === null) {
+            $this->summary[] = 'Zdjęcia bez tła (SharePoint VM): na stronie głównej sklepu brak linku „Do pobrania”';
+
+            return null;
+        }
+        $this->progress('Zdjęcia bez tła VM Footwear: spis folderów SharePointu');
+        try {
+            $this->sharePoint->open($this->shareLink);
+            $index = $this->sharePoint->pngIndex();
+        } catch (RuntimeException $e) {
+            $this->galleryFrozen = true;
+            $this->summary[] = 'Zdjęcia bez tła (SharePoint VM) niedostępne: '.$e->getMessage().' — galerie kart bez zmian w tym przebiegu';
+
+            return null;
+        }
+        $this->summary[] = 'Zdjęcia bez tła (SharePoint VM): '.count($index).' plików PNG';
+
+        return $index;
+    }
+
+    /**
+     * Adresy PNG bez tła dla kodu karty, w kolejności galerii (przed zdjęciem ze sklepu).
+     *
+     * @return list<string>
+     */
+    private function pngUrls(string $code): array
+    {
+        if ($this->pngIndex === null || $this->sharePoint === null) {
+            return [];
+        }
+        $match = VmFootwearSharePoint::imagesFor($code, $this->pngIndex);
+        if ($match['paths'] === []) {
+            $this->pngMissing++;
+
+            return [];
+        }
+        if ($match['exact']) {
+            $this->pngExact++;
+        } else {
+            $this->pngOtherVersion[] = $code.' ← '.basename($match['paths'][0]);
+        }
+
+        return array_map(fn (string $path): string => $this->sharePoint->fileUrl($path), $match['paths']);
+    }
+
+    /**
+     * PNG z SharePointu. Pliki producenta mają do 6000×4000 px i 11 MB (zapis zdjęć karty przyjmuje do 5 MB) —
+     * większe niż SHAREPOINT_IMAGE_SIDES[0] (dłuższy bok) albo SHAREPOINT_IMAGE_BYTES zmniejszamy z zachowaniem
+     * przezroczystości.
+     */
+    private function sharePointImage(string $url): ?B2bRemoteImage
+    {
+        $file = $this->sharePoint?->fileBytes($url);
+        if ($file === null) {
+            return null;
+        }
+        $bytes = $file['bytes'];
+        $size = @getimagesizefromstring($bytes);
+        if (! is_array($size)) {
+            return null;
+        }
+        [$width, $height] = [(int) $size[0], (int) $size[1]];
+        if (max($width, $height) <= self::SHAREPOINT_IMAGE_SIDES[0] && strlen($bytes) <= self::SHAREPOINT_IMAGE_BYTES) {
+            return new B2bRemoteImage(bytes: $bytes, mime: $file['mime'], sourceUrl: $url);
+        }
+        // dłuższy bok do 2000 px; gdy plik nadal za duży (szum, pion) — mniej
+        foreach (self::SHAREPOINT_IMAGE_SIDES as $side) {
+            $targetWidth = max(1, (int) floor($width * min(1, $side / max($width, $height))));
+            $smaller = ImageReencoder::fromBytes($bytes, $targetWidth, self::SHAREPOINT_SOURCE_SIDE);
+            if ($smaller === null) {
+                throw new RuntimeException('PNG '.$width.'×'.$height.' nie dał się zmniejszyć (za duży na pamięć albo uszkodzony): '.$url);
+            }
+            if (strlen($smaller['bytes']) <= self::SHAREPOINT_IMAGE_BYTES) {
+                return new B2bRemoteImage(bytes: $smaller['bytes'], mime: $smaller['mime'], sourceUrl: $url);
+            }
+        }
+
+        throw new RuntimeException('PNG '.$width.'×'.$height.' po zmniejszeniu do '.self::SHAREPOINT_IMAGE_SIDES[array_key_last(self::SHAREPOINT_IMAGE_SIDES)].' px nadal ponad '.(self::SHAREPOINT_IMAGE_BYTES / 1_000_000).' MB: '.$url);
     }
 
     /**

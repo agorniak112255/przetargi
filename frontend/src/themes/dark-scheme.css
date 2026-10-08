@@ -90,6 +90,9 @@
   @layer utilities {
     /* Białe tła → powierzchnia szablonu (--color-white zostaje biały dla text-white) */
     :where(:root[data-scheme="dark"]) .bg-white { background-color: var(--t-surface); }
+    /* Zdjęcia kart w oryginale (…/storage/products/…): PNG bez tła (np. VM Footwear) — czarny but na ciemnej
+       powierzchni znikał. Białe pod obrazkiem, jak w jasnym motywie i w ofercie. Specyficzność (0,1,1) > .bg-white. */
+    :where(:root[data-scheme="dark"]) img[src*="/storage/products/"] { background-color: #fff; }
     :where(:root[data-scheme="dark"]) .bg-white\/60 { background-color: color-mix(in oklab, var(--t-surface) 60%, transparent); }
     :where(:root[data-scheme="dark"]) .bg-white\/80 { background-color: color-mix(in oklab, var(--t-surface) 80%, transparent); }
     :where(:root[data-scheme="dark"]) .bg-white\/90 { background-color: color-mix(in oklab, var(--t-surface) 90%, transparent); }

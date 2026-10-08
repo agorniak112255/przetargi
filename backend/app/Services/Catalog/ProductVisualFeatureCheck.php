@@ -10,6 +10,8 @@ use App\Models\ProductVisualCheck;
 use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductImageWhiteTrim;
+use App\Support\ImageReencoder;
 use App\Support\PpeAssortment;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -34,9 +36,13 @@ final class ProductVisualFeatureCheck
 
     private const IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'];
 
+    /** Dłuższy bok zdjęcia z przezroczystością po położeniu na białe tło. */
+    private const FLATTENED_SIDE = 1600;
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly PpeAssortment $assortment,
+        private readonly ProductImageWhiteTrim $whiteTrim,
     ) {}
 
     /**
@@ -88,6 +94,15 @@ final class ProductVisualFeatureCheck
         $image = $plan['image'];
         $bytes = (string) Storage::disk('public')->get((string) $image->path);
         $mime = strtolower((string) (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes));
+        // PNG bez tła (np. VM Footwear z SharePointu): przezroczyste piksele mają kolor czarny, a model dostaje obraz
+        // bez kanału alfa — czarny but na czarnym tle. Kładziemy go na białe tło, jak widzi go człowiek.
+        if (in_array($mime, ['image/png', 'image/webp'], true) && ImageReencoder::hasAlphaChannel($bytes)) {
+            $flat = $this->whiteTrim->toJpeg($bytes, self::FLATTENED_SIDE);
+            if ($flat === null) {
+                return ['check' => null, 'skip' => 'nie udało się położyć przezroczystego zdjęcia na białe tło', 'attempted' => false];
+            }
+            [$bytes, $mime] = [$flat, 'image/jpeg'];
+        }
         if ($bytes === '' || strlen($bytes) > self::MAX_IMAGE_BYTES || ! in_array($mime, self::IMAGE_MIME, true)) {
             return ['check' => null, 'skip' => 'zdjęcie w nieobsługiwanym formacie albo za duże', 'attempted' => false];
         }
