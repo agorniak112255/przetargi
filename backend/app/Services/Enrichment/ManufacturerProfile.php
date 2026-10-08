@@ -36,6 +36,10 @@ final class ManufacturerProfile
         public readonly ?string $combinationSuffix = null,
         /** krótki kod (także krótszy niż min_length, od 3 znaków) liczy się z etykietą „model 103” / „REF: 6036” */
         public readonly bool $labelledShortCodes = false,
+        /** grupowanie kart w model (opis wspólny): null = karta jest modelem; 'name_stem' = ProductModelKey */
+        public readonly ?string $modelGroup = null,
+        /** od ilu kart modelu w partii lider dostaje notę modelu w poleceniu */
+        public readonly int $modelMinMembers = 2,
     ) {}
 
     /**

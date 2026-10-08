@@ -362,6 +362,51 @@ final class ProductEnrichmentApiTest extends TestCase
             ->assertJsonFragment(['id' => $batch->id, 'status' => 'running']);
     }
 
+    /** Etap 2: liczniki modeli partii z pozycji — model gotowy, gdy żadna jego pozycja nie czeka ani nie trwa; bez kluczy null. */
+    public function test_batch_payload_counts_models_from_items(): void
+    {
+        $user = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($user);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS, 'scope_id' => $user->id, 'total' => 4, 'done' => 2, 'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING, 'created_by' => $user->id, 'force' => false,
+        ]);
+        $items = [
+            ['coba|AF|orthomat standard', ProductEnrichmentBatchItem::STATUS_DONE],
+            ['coba|AF|orthomat standard', ProductEnrichmentBatchItem::STATUS_QUEUED],
+            ['coba|CC|krata grp uchwyt', ProductEnrichmentBatchItem::STATUS_DONE],
+            [null, ProductEnrichmentBatchItem::STATUS_RUNNING],
+        ];
+        foreach ($items as $i => [$key, $status]) {
+            $product = $this->makeProduct(['sku' => 'MOD-'.$i]);
+            ProductEnrichmentBatchItem::query()->create([
+                'batch_id' => $batch->id, 'product_id' => $product->id, 'sku' => $product->sku, 'name' => $product->name,
+                'status' => $status, 'model_key' => $key, 'model_leader_id' => $product->id,
+            ]);
+        }
+        $plain = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS, 'scope_id' => $user->id, 'total' => 1, 'done' => 0, 'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_QUEUED, 'created_by' => $user->id, 'force' => false,
+        ]);
+        $plainProduct = $this->makeProduct(['sku' => 'PLAIN-1']);
+        ProductEnrichmentBatchItem::query()->create([
+            'batch_id' => $plain->id, 'product_id' => $plainProduct->id, 'sku' => $plainProduct->sku, 'name' => $plainProduct->name,
+            'status' => ProductEnrichmentBatchItem::STATUS_QUEUED,
+        ]);
+
+        $this->getJson("/api/product-enrichment-batches/{$batch->id}")
+            ->assertOk()
+            ->assertJsonPath('models_total', 3)
+            ->assertJsonPath('models_done', 1);
+        $this->getJson("/api/product-enrichment-batches/{$plain->id}")
+            ->assertOk()
+            ->assertJsonPath('models_total', null)
+            ->assertJsonPath('models_done', null);
+        $active = collect($this->getJson('/api/product-enrichment-batches/active')->assertOk()->json('batches'))->keyBy('id');
+        $this->assertSame([3, 1], [$active[$batch->id]['models_total'], $active[$batch->id]['models_done']]);
+        $this->assertNull($active[$plain->id]['models_total']);
+    }
+
     public function test_job_counts_already_manual_product_and_closes_batch(): void
     {
         $product = $this->makeProduct([

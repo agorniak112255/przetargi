@@ -197,3 +197,44 @@ Nie robić: przełączania `describeFromStoredSources` do głównej ścieżki; g
 profilu Ansella (etap 4); scalania kart fizycznie, zmian w `ProductSizeMergeService`/`collapseSamePriceVariants`/tabeli
 wariantów; zmian nazw i SKU; zmian bramek, reguł `decide`, ścieżek B2B, słownictwa `SourceClaimGuard`; kolumn
 w `products`; zbiorczego endpointu przeglądu; nowej infrastruktury zdjęć; edytora profili w panelu.
+
+## 6. Stan po wdrożeniu kodu i dwóch przeglądach (08.10.2026)
+Części A–D zrobione; dwa niezależne przeglądy kodu (rdzeń + zadania; narzędzia + komendy + panel) i drugi przegląd
+samych poprawek. Odstępstwa od zamrożonego kontraktu (wszystkie z testami):
+- `ModelImagePicker::pickFor(Product, array $memberColours, array $pageImageUrls, array $leaderImages, ?string $modelStem)`
+  — zbiory kolorów (`ColourWords::allInName/allInUrl/sameSet`), karta dwubarwna ≠ jednobarwna; adres z galerii lidera
+  tylko ze słowem rdzenia modelu w nazwie pliku (galeria to wszystkie `<img>` ze stron lidera, także cudzych wyrobów).
+  `PriceListCardFacts::for()` zwraca dodatkowo `colours`.
+- Rodzina z SKU z literowym przyrostkiem po cyfrach („ST/B1”): ST010001 ≠ ST010001B1 (nitryl), SS070002MN ≠ SS070002B1M,
+  SS070002FN ≠ SS070002B1F; „C” po cyfrze i „-N” nie liczą się. Strażnik rdzenia: litera typu i numer modelu na końcu
+  nazwy nie są rozmiarem („Uchwyt typu L” ≠ „typu M”, „Model 5” ≠ „Model 10”).
+- Członek: strony tylko z adresów WERSJI lidera (nie z całej historii `product_source_documents`); lider z propozycją →
+  członek bez plików i bez kopii `manufacturer_norms`; z atrybutów lidera odpadają `rozmiar` i `kod_producenta`; linie
+  `specs` lidera z etykietą obecną w faktach cennika członka odpadają; `evidence_count` tylko z dowodów ze stron, fakty
+  z cennika osobno w `evidence_summary.price_list`; werdykt bez stron = `none` (nie null); kopia norm producenta bez
+  `source.identity` lidera (`copied_from_product_id`; przy twardym werdykcie klucz członka).
+- Reguła koloru w `pickPrimaryImageUrls` tylko dla marek z `model.group` i zbiorami (inaczej regresja dla odzieży
+  dwubarwnej Portwest/Mascot/JHK i plików „white-background”).
+- `ApplyModelDescriptionJob`: `timeout` 420 (< `retry_after` 480), atomowe przejęcie pozycji `queued` (ponowienie
+  przejmuje tylko porzucone `running`); `EnrichProductJob::handOverModel` i sweeper zabitego lidera biorą najpierw
+  `ProductDescriptionVersion::latestOfRun(lider, partia)` — sztafeta dopiero bez wersji; lider z pozycją „running”
+  i kartą poza przebiegiem = zabity.
+- `products:queue-enrichment` tnie porcje całymi modelami; podgląd „zostanie zleconych” liczy tak jak kolejka;
+  kolejność z force = NAJNOWSZY `enriched_at` w modelu (model tknięty idzie na koniec).
+- „Do przeglądu”: lista sortowana grupami modelu (po najnowszym `review_since` grupy); „Zastosuj do N kart modelu”
+  tylko gdy wszystkie karty grupy mają opis z tej samej karty lidera (inaczej uwaga „opisy z różnych stron — decyzje
+  per karta”).
+- `products:rollback-batch --apply`: wspólna `RunEffectsReverter` (ta sama co „Odrzuć”) usuwa pliki z `_version` wersji
+  i cofa normy producenta, powód przeglądu z wersji źródłowej; odmowa dla partii w toku; plików skasowanych przez
+  przebieg z force wycofanie nie przywraca (uwaga w podglądzie). `--out` komend tworzy katalog.
+
+Zostawione na później (z przeglądów): `handOverOrphanedModelMembers` skanuje `jobs` per członek przy każdym odpytaniu
+panelu; `contextFor`/`models_total` po kluczu, a `models_queued` po grupach (rozjazd tylko przy podgrupach z ręcznym
+adresem); normy `runWrites` członka nie są cofane w `catch`/anulowaniu; podwójne propozycje przy ponowieniu; lider bez
+faktów z cennika a członkowie z nimi (niespójne specs w modelu); „Uchwyt T5” vs „T8” jeden rdzeń (T5 = znacznik
+rozmiaru); „stalowy” w słowniku kolorów (też materiał); „Ciemny Szary” → „Kolor: Szary”; „5 L”/„1 kg” w „Wymiary”;
+CCLIP25/LCLIP25/MCLIP25 w innej rodzinie niż -38/-50; podgrupy z ręcznym adresem mają wspólny `model_key`; klucz
+ucięty do 160 znaków; członek bez koloru w nazwie kopiuje zdjęcie lidera mimo innego koloru w SKU (COBAGRiP pasy);
+`previousPublished` przy tej samej treści cofa się dalej; `CompareCardsCommand` tylko średnik i dopasowanie po numerze
+karty; `ProductWebFileCopier` zostawia plik bez wiersza przy wyjątku `create()`; pominięty członek nie ponawia
+nieudanego pobrania zdjęcia; `PriceListFileSources::modelCount` bez skrótu dla marek bez grupowania.

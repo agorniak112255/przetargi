@@ -43,6 +43,12 @@ class ProductEnrichmentBatchItem extends Model
         'message',
         'previous_status',
         'previous_error',
+        // opis wspólny dla modelu (etap 2): klucz modelu, lider grupy (lider ma własne id), wersja opisu lidera
+        // i znacznik przejęcia pozycji członka (uuid zadania ApplyModelDescriptionJob, stały między próbami)
+        'model_key',
+        'model_leader_id',
+        'model_leader_version_id',
+        'model_claim_uuid',
     ];
 
     public function batch(): BelongsTo

@@ -7,13 +7,16 @@ namespace App\Jobs;
 use App\Exceptions\EnrichmentCancelledException;
 use App\Exceptions\ProductSourcesNotFoundException;
 use App\Exceptions\TavilyQuotaExceededException;
+use App\Jobs\Concerns\RefreshesBatchProgress;
 use App\Models\Product;
+use App\Models\ProductDescriptionVersion;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentSlots;
+use App\Services\Enrichment\ModelGroupPlanner;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\TavilyQuotaGuard;
 use Illuminate\Bus\Queueable;
@@ -29,6 +32,7 @@ class EnrichProductJob implements ShouldQueue
     use Dispatchable;
     use InteractsWithQueue;
     use Queueable;
+    use RefreshesBatchProgress;
     use SerializesModels;
 
     public int $tries = 3;
@@ -97,6 +101,8 @@ class EnrichProductJob implements ShouldQueue
                 'Produkt miał już opis',
             );
             $this->refreshBatchProgress($batch);
+            // lider pominięty bez przebiegu — bez wersji z tego zadania członkowie modelu dostają kolejnego lidera
+            $this->handOverModelSafely($batch, null);
 
             return;
         }
@@ -115,18 +121,55 @@ class EnrichProductJob implements ShouldQueue
         }
 
         try {
-            $this->enrich($enrichment, $aiSettings, $product, $batch);
+            $settled = $this->enrich($enrichment, $aiSettings, $product, $batch);
         } finally {
             $slot->release();
         }
+        if ($settled) {
+            // po zwolnieniu slotu LLM: wersja lidera → opis członków bez modelu językowego, brak wersji → sztafeta
+            $this->handOverModelSafely($batch, $this->versionOfRun($enrichment));
+        }
     }
 
+    /**
+     * Przekazanie modelu nie może wywrócić rozliczonego lidera: wyjątek w nim (zakleszczenie przy zapisie pozycji
+     * członków, błąd kolejki) ponawiałby zadanie, które już zamknęło pozycję — drugie „done” bez force, drugie
+     * wywołanie modelu z force. Harmonogram (handOverOrphanedModelMembers) dokończy przekazanie po swoim progu.
+     */
+    private function handOverModelSafely(ProductEnrichmentBatch $batch, ?ProductDescriptionVersion $version): void
+    {
+        try {
+            $this->handOverModel($batch, $version);
+        } catch (Throwable $e) {
+            Log::warning('Model handover after leader run failed', [
+                'product_id' => $this->productId,
+                'batch_id' => $this->batchId,
+                'version_id' => $version?->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Wersja opisu (zapis albo propozycja) z przebiegu tego zadania — null, gdy przebieg jej nie dał. Osobna metoda,
+     * żeby test zadania mógł ją podstawić: serwis jest klasą final, atrapa częściowa nie wchodzi w grę.
+     */
+    protected function versionOfRun(ProductEnrichmentService $enrichment): ?ProductDescriptionVersion
+    {
+        return $enrichment->lastRunVersion();
+    }
+
+    /**
+     * @return bool czy pozycja partii tej karty doszła do stanu końcowego (done/failed/manual/skipped) — wtedy
+     *              członkowie jej modelu dostają opis albo kolejnego lidera; false, gdy zadanie wróciło do kolejki
+     *              (czekanie na wyszukiwarkę), partia została przerwana albo kartę opisuje inne zadanie
+     */
     private function enrich(
         ProductEnrichmentService $enrichment,
         AiSettingsService $aiSettings,
         Product $product,
         ProductEnrichmentBatch $batch,
-    ): void {
+    ): bool {
         $claimed = Product::query()
             ->whereKey($product->id)
             ->where('enrichment_status', Product::ENRICHMENT_QUEUED)
@@ -156,7 +199,10 @@ class EnrichProductJob implements ShouldQueue
                         : 'Produkt miał już opis',
                 );
                 $this->refreshBatchProgress($batch);
-            } elseif ($status === Product::ENRICHMENT_FAILED) {
+
+                return true;
+            }
+            if ($status === Product::ENRICHMENT_FAILED) {
                 $enrichment->markBatchItem(
                     $batch,
                     false,
@@ -165,9 +211,11 @@ class EnrichProductJob implements ShouldQueue
                     (string) $product->fresh()?->enrichment_error,
                 );
                 $this->refreshBatchProgress($batch);
+
+                return true;
             }
 
-            return;
+            return false;
         }
 
         $product->refresh();
@@ -204,19 +252,21 @@ class EnrichProductJob implements ShouldQueue
                 $this->abandonCancelled($product);
                 $this->delete();
 
-                return;
+                return false;
             }
 
             // Opis gorszy od obecnego albo ze strony odrzuconej przez handlowca zostaje propozycją — pozycja i tak jest
             // gotowa, ale z komunikatem „Nowy opis czeka w »Do przeglądu«…” zamiast komunikatu karty.
             $enrichment->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE, $enrichment->lastProposalNote());
             $this->refreshBatchProgress($batch);
+
+            return true;
         } catch (ProductSourcesNotFoundException $e) {
             // Awaria wyszukiwarki zostawia produkt w „failed” — to błąd do ponowienia,
             // a nie karta, której nie ma i którą trzeba opisać ręcznie.
             $outage = $product->fresh()?->enrichment_status === Product::ENRICHMENT_FAILED;
             if ($outage && $useDuckDuckGo && $this->waitForSearchBackend($enrichment, $product, $batch, $e->getMessage())) {
-                return;
+                return false;
             }
             $enrichment->markBatchItem(
                 $batch,
@@ -228,13 +278,55 @@ class EnrichProductJob implements ShouldQueue
                 mb_substr($e->getMessage(), 0, 500),
             );
             $this->refreshBatchProgress($batch);
+
+            return true;
         } catch (EnrichmentCancelledException $e) {
             $this->abandonCancelled($product);
             $this->delete();
+
+            return false;
         } catch (TavilyQuotaExceededException $e) {
             TavilyQuotaGuard::block($e->getMessage());
             $this->recordItemFailure($product, $batch, $e->getMessage(), 'Limit Tavily — zatrzymano batch');
             $this->delete();
+
+            return true;
+        }
+    }
+
+    /**
+     * Opis wspólny dla modelu (etap 2 opisów z cenników): karta w partii bywa liderem grupy modelu — członkowie mają
+     * pozycje partii „queued” bez własnych zadań. Lider z wersją opisu → członkowie dostają ją bez modelu językowego
+     * (ApplyModelDescriptionJob; numer wersji zapisany w ich pozycjach, żeby zabity worker nie zostawił ich bez
+     * podstawy). Lider bez wersji (brak źródeł, błąd, pominięty, wyczerpane próby) → sztafeta: kolejny członek zostaje
+     * liderem i idzie do prefetchu. Karta bez grupy (marka bez profilu grupowania) nie ma członków — nic się nie dzieje.
+     * Przerwana partia: członków przywraca anulowanie (restoreAfterCancel), nie sztafeta.
+     *
+     * Bez wersji w ręku najpierw wersja z tej partii (ProductDescriptionVersion::latestOfRun): przebieg lidera mógł
+     * zapisać opis, zanim zadanie padło (wyjątek po zapisie, np. w recordSourceDocuments; limit czasu; zabity worker)
+     * — ponowienie trafia wtedy w kartę „done” bez wersji z własnego przebiegu, a failed() dostaje świeży serwis.
+     * Sztafeta w tym miejscu dawała drugie wywołanie modelu: lider z opisem A, członkowie z opisem B.
+     */
+    private function handOverModel(ProductEnrichmentBatch $batch, ?ProductDescriptionVersion $version): void
+    {
+        $planner = app(ModelGroupPlanner::class);
+        $members = $planner->membersOf($this->batchId, $this->productId);
+        if ($members === [] || $batch->refresh()->isCancelled()) {
+            return;
+        }
+        $version ??= ProductDescriptionVersion::latestOfRun($this->productId, $this->batchId);
+        if ($version !== null) {
+            ProductEnrichmentBatchItem::query()
+                ->where('batch_id', $this->batchId)
+                ->whereIn('product_id', $members)
+                ->update(['model_leader_version_id' => (int) $version->id]);
+            ApplyModelDescriptionJob::dispatch($this->batchId, $this->productId, (int) $version->id);
+
+            return;
+        }
+        $next = $planner->nextLeader($this->batchId, $this->productId);
+        if ($next !== null) {
+            PrefetchProductSourcesJob::dispatch($next, $this->batchId, $this->force);
         }
     }
 
@@ -316,18 +408,11 @@ class EnrichProductJob implements ShouldQueue
             $message,
             'Błąd: '.mb_substr($message, 0, 200),
         );
-    }
-
-    private function refreshBatchProgress(ProductEnrichmentBatch $batch): void
-    {
-        $batch->refresh();
-        $processed = $batch->done + $batch->failed;
-        $done = $processed >= $batch->total;
-        $batch->update([
-            'message' => "OK {$batch->done} · błędy {$batch->failed} · pozostało ".max(0, $batch->total - $processed),
-            'current_sku' => $done ? null : $batch->current_sku,
-            'current_name' => $done ? null : $batch->current_name,
-        ]);
+        // lider padł ostatecznie (wyczerpane próby, limit czasu) — failed() dostaje świeżą instancję serwisu, więc
+        // lastRunVersion() nic nie wie o przebiegu; wersję zapisaną przed padnięciem znajduje handOverModel (latestOfRun)
+        if ($batch !== null) {
+            $this->handOverModelSafely($batch, null);
+        }
     }
 
     /** Karta wraca do stanu sprzed kolejki (pozycja partii), a nie do „błąd: Anulowano” — zob. restoreAfterCancel. */

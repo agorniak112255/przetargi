@@ -107,10 +107,17 @@ final class ProductReviewApiTest extends TestCase
 
         $first = $response->json('data.0');
         $this->assertArrayNotHasKey('description', $first);
-        $this->assertSame(['version_id' => $worsePublished->id, 'identity_verdict' => 'hard', 'evidence_count' => 4, 'primary_source_url' => 'https://coba.com/c-2'], $first['published']);
+        $this->assertSame([
+            'version_id' => $worsePublished->id, 'identity_verdict' => 'hard', 'evidence_count' => 4, 'primary_source_url' => 'https://coba.com/c-2',
+            'description_sha1' => $worsePublished->description_sha1,
+        ], $first['published']);
+        $this->assertSame(40, strlen((string) $worsePublished->description_sha1));
         $this->assertSame('https://sklep.pl/p', $first['proposal']['primary_source_url']);
         $this->assertSame($proposal->id, $first['proposal']['version_id']);
         $this->assertSame('soft', $first['proposal']['identity_verdict']);
+        // skrót tekstu propozycji — podstawa „Zastosuj do N kart modelu” (ten sam tekst na kartach grupy)
+        $this->assertSame($proposal->description_sha1, $first['proposal']['description_sha1']);
+        $this->assertNotSame($first['published']['description_sha1'], $first['proposal']['description_sha1']);
 
         $second = $response->json('data.1');
         $this->assertSame($coba->id, $second['price_list_id']);
@@ -127,6 +134,58 @@ final class ProductReviewApiTest extends TestCase
 
         $this->getJson('/api/product-reviews?reason=cokolwiek')->assertUnprocessable();
         $this->getJson('/api/product-reviews?per_page=201')->assertUnprocessable();
+    }
+
+    /**
+     * Etap 2: wiersz niesie model karty — klucz w locie z sku, nazwy i producenta, liczba kart modelu w wybranym zbiorze
+     * (przed stronicowaniem) i lider, od którego karta dostała opis wspólny; marka bez grupowania → null.
+     */
+    public function test_list_rows_carry_model_key_count_in_review_and_leader(): void
+    {
+        $coba = $this->list('Coba');
+        $leader = $this->card($coba, 'AF060001', ['name' => 'Orthomat Standard Szary 0.6m x 0.9m', 'review_reason' => Product::REVIEW_IDENTITY_SOFT, 'review_since' => now()->subDays(2)]);
+        $member = $this->card($coba, 'AF060002', ['name' => 'Orthomat Standard Czarny 0.9m x 1.5m', 'review_reason' => Product::REVIEW_IDENTITY_SOFT, 'review_since' => now()->subDay(),
+            'enrichment_payload' => ['model_group' => ['key' => 'coba|AF|orthomat standard', 'leader_product_id' => $leader->id, 'shared' => true]]]);
+        $other = $this->card($coba, 'CCLIP25', ['name' => 'Akcesoria Krata GRP - Uchwyt typu C - 25mm', 'review_reason' => Product::REVIEW_WORSE_VERSION, 'review_since' => now()]);
+        $mapa = $this->card($this->list('MAPA'), 'M-1', ['review_reason' => Product::REVIEW_IDENTITY_NONE, 'review_since' => now()]);
+
+        $rows = collect($this->getJson('/api/product-reviews?per_page=2')->assertOk()->json('data'))->keyBy('product_id');
+
+        // strona ma 2 wiersze, a licznik modelu liczy cały zbiór
+        $this->assertSame([$mapa->id, $other->id], $rows->keys()->all());
+        $this->assertNull($rows[$mapa->id]['model']);
+        $this->assertSame(1, $rows[$other->id]['model']['in_review']);
+        // rdzeń bez wymiaru (reguły rdzenia: ProductModelKeyTest)
+        $this->assertStringStartsWith('Akcesoria Krata GRP', $rows[$other->id]['model']['stem']);
+        $this->assertStringNotContainsString('25mm', $rows[$other->id]['model']['stem']);
+
+        $rows = collect($this->getJson('/api/product-reviews?reason='.Product::REVIEW_IDENTITY_SOFT)->assertOk()->json('data'))->keyBy('product_id');
+        $this->assertSame($rows[$leader->id]['model']['key'], $rows[$member->id]['model']['key']);
+        $this->assertSame('Orthomat Standard', $rows[$leader->id]['model']['stem']);
+        $this->assertSame(2, $rows[$leader->id]['model']['in_review']);
+        $this->assertNull($rows[$leader->id]['model']['shared_from']);
+        $this->assertSame($leader->id, $rows[$member->id]['model']['shared_from']);
+    }
+
+    public function test_list_keeps_cards_of_one_model_adjacent_and_counts_whole_set(): void
+    {
+        $coba = $this->list('Coba');
+        // karty jednego modelu rozdzielone w czasie kartą innego modelu i kartą bez modelu
+        $older = $this->card($coba, 'AF060001', ['name' => 'Orthomat Standard Szary 0.6m x 0.9m', 'review_reason' => Product::REVIEW_IDENTITY_SOFT, 'review_since' => now()->subDays(3)]);
+        $other = $this->card($coba, 'CCLIP25', ['name' => 'Akcesoria Krata GRP - Uchwyt typu C - 25mm', 'review_reason' => Product::REVIEW_WORSE_VERSION, 'review_since' => now()->subDays(2)]);
+        $between = $this->card($this->list('MAPA'), 'M-1', ['review_reason' => Product::REVIEW_IDENTITY_NONE, 'review_since' => now()->subDays(2)->addHour()]);
+        $newer = $this->card($coba, 'AF060002', ['name' => 'Orthomat Standard Czarny 0.9m x 1.5m', 'review_reason' => Product::REVIEW_IDENTITY_SOFT, 'review_since' => now()->subDay()]);
+        $latest = $this->card($this->list('MAPA'), 'M-2', ['review_reason' => Product::REVIEW_IDENTITY_NONE, 'review_since' => now()]);
+
+        $ids = fn (string $query): array => array_column($this->getJson('/api/product-reviews'.$query)->assertOk()->json('data'), 'product_id');
+        // grupa modelu stoi tam, gdzie jej najnowszy powód, w grupie najnowszy pierwszy; karty bez modelu po swoim review_since
+        $this->assertSame([$latest->id, $newer->id, $older->id, $between->id, $other->id], $ids(''));
+        // stronicowanie tnie listę w tym porządku, a licznik modelu liczy cały zbiór
+        $page = $this->getJson('/api/product-reviews?per_page=2')->assertOk()->json();
+        $this->assertSame([$latest->id, $newer->id], array_column($page['data'], 'product_id'));
+        $this->assertSame(2, $page['data'][1]['model']['in_review']);
+        $this->assertSame(5, $page['meta']['total']);
+        $this->assertSame([$older->id, $between->id], $ids('?per_page=2&page=2'));
     }
 
     public function test_approve_worse_version_publishes_proposal_and_second_click_changes_nothing(): void

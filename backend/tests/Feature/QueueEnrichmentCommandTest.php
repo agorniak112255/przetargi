@@ -11,6 +11,7 @@ use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Models\ProductEnrichmentBatchItem;
 use App\Models\User;
 use App\Services\Enrichment\ProductEnrichmentService;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -181,6 +182,69 @@ final class QueueEnrichmentCommandTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_DONE, $otherList->fresh()?->enrichment_status);
     }
 
+    /** Etap 2 (pilotaż modeli): --force z --id= bierze także karty z gotowym opisem, pomija karty w kolejce, partia z force. */
+    public function test_force_with_ids_requeues_described_cards_with_force(): void
+    {
+        $done = (int) Product::query()->where('sku', '9310+')->value('id');
+        $none = (int) Product::query()->where('sku', '9914')->value('id');
+        $queued = $this->ansellCard('A-QUEUED', Product::ENRICHMENT_QUEUED, null);
+
+        $this->artisan('products:queue-enrichment', ['--id' => [$done, $none, $queued->id], '--force' => true])
+            ->expectsOutputToContain('Do pobrania opisu: 2 kart — ponowne pobranie (force), także z gotowym opisem')
+            ->expectsOutputToContain('Podgląd')
+            ->assertSuccessful();
+        $this->assertSame(0, ProductEnrichmentBatch::query()->count());
+
+        $this->artisan('products:queue-enrichment', ['--id' => [$done, $none, $queued->id], '--force' => true, '--apply' => true])
+            ->expectsOutputToContain('Zlecono pobranie opisu: 2 kart w 1 partiach')
+            ->assertSuccessful();
+
+        $batch = ProductEnrichmentBatch::query()->sole();
+        $this->assertTrue((bool) $batch->force);
+        Queue::assertPushed(PrefetchProductSourcesJob::class, 2);
+        foreach ([$done, $none] as $id) {
+            Queue::assertPushed(PrefetchProductSourcesJob::class, static fn (PrefetchProductSourcesJob $job): bool => $job->productId === $id && $job->force);
+        }
+    }
+
+    /**
+     * Etap 2: porcje partii całymi modelami — model Coby o trzech kartach przy limicie 2 nie trafia do dwóch partii
+     * (dwaj liderzy, dwa opisy): pierwsza grupa większa niż limit wchodzi cała, następny model zaczyna nową partię;
+     * zadanie dostaje tylko lider każdej partii.
+     */
+    public function test_apply_cuts_batches_by_whole_models(): void
+    {
+        config()->set('manufacturer_profiles.profiles.coba.model', ['group' => 'name_stem', 'min_members' => 2]);
+        $orthomat = [
+            $this->cobaCard('AF060001', 'Orthomat Standard Czarny 0.6m x 0.9m'),
+            $this->cobaCard('AF060002', 'Orthomat Standard Szary 0.9m x 1.5m'),
+            $this->cobaCard('AF060003', 'Orthomat Standard Czarny 0.9m x 18.3m'),
+        ];
+        $deckplate = [
+            $this->cobaCard('DP010001', 'Deckplate Czarny 0.6m x 0.9m'),
+            $this->cobaCard('DP010002', 'Deckplate Czarny 0.9m x 1.5m'),
+        ];
+
+        $this->artisan('products:queue-enrichment', ['--manufacturer' => 'Coba'])
+            ->expectsOutputToContain('Do pobrania opisu: 5 kart — 2 partii po 2')
+            ->assertSuccessful();
+        $this->artisan('products:queue-enrichment', ['--manufacturer' => 'Coba', '--apply' => true])
+            ->expectsOutputToContain('Zlecono pobranie opisu: 5 kart w 2 partiach')
+            ->assertSuccessful();
+
+        $batches = ProductEnrichmentBatch::query()->orderBy('id')->get();
+        $this->assertSame([3, 2], $batches->map(static fn (ProductEnrichmentBatch $b): int => (int) $b->total)->all());
+        foreach ([[$batches[0], $orthomat], [$batches[1], $deckplate]] as [$batch, $cards]) {
+            $items = ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->orderBy('product_id')->get();
+            $this->assertSame(array_map(static fn (Product $c): int => $c->id, $cards), $items->map(static fn (ProductEnrichmentBatchItem $i): int => (int) $i->product_id)->all());
+            $this->assertSame([$cards[0]->id], $items->map(static fn (ProductEnrichmentBatchItem $i): int => (int) $i->model_leader_id)->unique()->values()->all());
+        }
+        Queue::assertPushed(PrefetchProductSourcesJob::class, 2);
+        foreach ([$orthomat[0], $deckplate[0]] as $leader) {
+            Queue::assertPushed(PrefetchProductSourcesJob::class, static fn (PrefetchProductSourcesJob $job): bool => $job->productId === $leader->id);
+        }
+    }
+
     public function test_enriched_before_rejects_unreadable_date(): void
     {
         $this->artisan('products:queue-enrichment', ['--manufacturer' => '3M', '--enriched-before' => 'wczoraj-ish'])
@@ -213,6 +277,19 @@ final class QueueEnrichmentCommandTest extends TestCase
         $this->artisan('products:queue-enrichment')
             ->expectsOutputToContain('Podaj --manufacturer= albo --category=')
             ->assertFailed();
+    }
+
+    private function cobaCard(string $sku, string $name): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => 'Coba',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
     }
 
     private function ansellCard(string $sku, string $status, ?string $enrichedAt): Product

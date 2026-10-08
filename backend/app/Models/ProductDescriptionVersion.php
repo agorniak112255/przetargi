@@ -49,6 +49,9 @@ class ProductDescriptionVersion extends Model
 
     public const ORIGIN_STORED_SOURCES = 'stored_sources';
 
+    /** opis członka modelu przepisany z wersji lidera (etap 2; lider w enrichment_payload.model_group) */
+    public const ORIGIN_MODEL_SHARED = 'model_shared';
+
     public const ORIGINS = [
         self::ORIGIN_ENRICHMENT,
         self::ORIGIN_SKU_CACHE,
@@ -56,6 +59,7 @@ class ProductDescriptionVersion extends Model
         self::ORIGIN_REVIEW_APPROVE,
         self::ORIGIN_LEGACY_BASELINE,
         self::ORIGIN_STORED_SOURCES,
+        self::ORIGIN_MODEL_SHARED,
     ];
 
     public const DECISION_APPROVED = 'approved';
@@ -120,5 +124,21 @@ class ProductDescriptionVersion extends Model
     public function decider(): BelongsTo
     {
         return $this->belongsTo(User::class, 'decided_by');
+    }
+
+    /**
+     * Najnowsza wersja z przebiegu karty w partii (zapis albo propozycja; także zapis już zastąpiony kolejnym) —
+     * podstawa opisu członków modelu, gdy zadanie lidera nie zdążyło jej przekazać (ponowienie po wyjątku, limit czasu,
+     * zabity worker). Odrzucona propozycja nie wraca jako podstawa.
+     */
+    public static function latestOfRun(int $productId, int $batchId): ?self
+    {
+        return self::query()
+            ->where('product_id', $productId)
+            ->where('batch_id', $batchId)
+            ->whereIn('status', [self::STATUS_PUBLISHED, self::STATUS_PROPOSED, self::STATUS_SUPERSEDED])
+            ->whereNotNull('description')
+            ->orderByDesc('id')
+            ->first();
     }
 }

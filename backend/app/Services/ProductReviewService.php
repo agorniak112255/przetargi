@@ -15,9 +15,11 @@ use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDescriptionSource;
 use App\Services\Campaigns\SmtpHostGuard;
 use App\Services\Enrichment\DescriptionVersionStore;
+use App\Services\Enrichment\ModelKey;
 use App\Services\Enrichment\ProductEnrichmentResetter;
 use App\Services\Enrichment\ProductEnrichmentService;
-use App\Support\ManufacturerNormFacts;
+use App\Services\Enrichment\ProductModelKey;
+use App\Services\Enrichment\RunEffectsReverter;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Support\Facades\DB;
@@ -45,12 +47,18 @@ final class ProductReviewService
         private readonly B2bDescriptionSource $b2bDescriptions,
         private readonly ProductEnrichmentResetter $resetter,
         private readonly SmtpHostGuard $hosts,
+        private readonly ProductModelKey $modelKeys,
+        private readonly RunEffectsReverter $runEffects,
     ) {}
 
     /**
      * Karty cenników z plików (sloty „file”, PriceListCards) z powodem przeglądu. Bez kolumny description — źródło,
      * werdykt i dowody ścieżkami JSON. Liczniki jak filtry z sąsiednim wymiarem: by_reason w wybranym cenniku,
      * by_price_list przy wybranym powodzie — liczone w PHP (bez GROUP BY po złączeniach, ONLY_FULL_GROUP_BY).
+     *
+     * Wiersz niesie model karty (etap 2: klucz liczony w locie z sku, nazwy i producenta; in_review = ile kart tego
+     * modelu jest w wybranym zbiorze przed stronicowaniem; shared_from = lider, od którego karta dostała opis) — front
+     * grupuje sąsiednie wiersze modelu i daje „Zastosuj do N kart modelu” jako sekwencję decyzji per karta.
      *
      * @param  array{price_list_id?: int|null, reason?: string|null}  $filters
      * @return array{data: list<array<string, mixed>>, meta: array{total: int, page: int, per_page: int}, counts: array{by_reason: array<string, int>, by_price_list: list<array{id: int, manufacturer: string, count: int}>}}
@@ -95,6 +103,7 @@ final class ProductReviewService
                 'enrichment_payload->primary_source_kind as primary_source_kind',
                 'enrichment_payload->identity as identity',
                 'enrichment_payload->evidence_summary as evidence_summary',
+                'enrichment_payload->model_group->leader_product_id as model_leader_product_id',
             ])
             ->chunkById(self::CHUNK, function ($chunk) use ($listOf, $listFilter, $reasonFilter, &$byReason, &$byList, &$rows): void {
                 foreach ($chunk as $row) {
@@ -110,16 +119,41 @@ final class ProductReviewService
                         $byList[$listId] = ($byList[$listId] ?? 0) + 1;
                         if ($listFilter === 0 || $listId === $listFilter) {
                             $row->price_list_id = $listId;
+                            $row->model = $this->modelKeyOf($row);
                             $rows[] = $row;
                         }
                     }
                 }
             }, 'id');
 
-        // najnowsze powody pierwsze; review_since z bazy to napis „Y-m-d H:i:s” — porównanie napisów wystarcza
-        usort($rows, static fn (object $a, object $b): int => [(string) ($b->review_since ?? ''), (int) $b->id]
-            <=> [(string) ($a->review_since ?? ''), (int) $a->id]);
+        // Karty jednego modelu obok siebie (front grupuje tylko sąsiednie wiersze o tym samym kluczu): grupa = klucz
+        // modelu, karta bez modelu to własna grupa. Grupy po najnowszym powodzie w grupie (remis: najwyższy numer karty
+        // w grupie — jak dotąd między pojedynczymi kartami), w grupie najnowszy powód pierwszy; karty bez modelu
+        // przeplatają się z grupami według własnego review_since. review_since z bazy to napis „Y-m-d H:i:s” —
+        // porównanie napisów wystarcza.
+        $rankOf = static fn (object $row): array => [(string) ($row->review_since ?? ''), (int) $row->id];
+        $groupOf = static fn (object $row): string => $row->model instanceof ModelKey ? 'model:'.$row->model->key : 'card:'.(int) $row->id;
+        $groupRank = [];
+        foreach ($rows as $row) {
+            $group = $groupOf($row);
+            if (! isset($groupRank[$group]) || $rankOf($row) > $groupRank[$group]) {
+                $groupRank[$group] = $rankOf($row);
+            }
+        }
+        usort($rows, static function (object $a, object $b) use ($rankOf, $groupOf, $groupRank): int {
+            $groupA = $groupOf($a);
+            $groupB = $groupOf($b);
+
+            return $groupA === $groupB ? $rankOf($b) <=> $rankOf($a) : $groupRank[$groupB] <=> $groupRank[$groupA];
+        });
         $total = count($rows);
+        // karty modelu w całym wybranym zbiorze, nie tylko na tej stronie
+        $inReview = [];
+        foreach ($rows as $row) {
+            if ($row->model instanceof ModelKey) {
+                $inReview[$row->model->key] = ($inReview[$row->model->key] ?? 0) + 1;
+            }
+        }
         $pageRows = array_slice($rows, ($page - 1) * $perPage, $perPage);
 
         $manufacturers = $byList === [] ? [] : PriceList::query()->whereIn('id', array_keys($byList))->pluck('manufacturer', 'id')->all();
@@ -131,10 +165,26 @@ final class ProductReviewService
             <=> [mb_strtolower($b['manufacturer']), $b['id']]);
 
         return [
-            'data' => $this->presentRows($pageRows),
+            'data' => $this->presentRows($pageRows, $inReview),
             'meta' => ['total' => $total, 'page' => $page, 'per_page' => $perPage],
             'counts' => ['by_reason' => $byReason, 'by_price_list' => $countsByList],
         ];
+    }
+
+    /**
+     * Klucz modelu karty z kolumn wiersza listy (sku, nazwa, producent) — bez wczytywania modelu Product dla całego
+     * zbioru kart z powodem. Null: marka bez profilu grupowania albo pusty rdzeń nazwy.
+     */
+    private function modelKeyOf(object $row): ?ModelKey
+    {
+        $probe = new Product;
+        $probe->setRawAttributes([
+            'sku' => (string) ($row->sku ?? ''),
+            'name' => (string) ($row->name ?? ''),
+            'manufacturer' => (string) ($row->manufacturer ?? ''),
+        ]);
+
+        return $this->modelKeys->for($probe);
     }
 
     /**
@@ -265,7 +315,8 @@ final class ProductReviewService
      *
      * Odrzucenie opisu z karty („to cudza strona”): wersja → rejected z zablokowanym adresem (rejectedUrls), z karty
      * znikają zdjęcia i pliki z internetu dodane przez jej przebieg i wpis pamięci SKU, normy producenta wracają do
-     * stanu sprzed przebiegu; na kartę wraca poprzedni opublikowany opis (nowa published, origin restore), a gdy go
+     * stanu sprzed przebiegu (RunEffectsReverter — ta sama reguła co przy wycofaniu partii komendą
+     * products:rollback-batch); na kartę wraca poprzedni opublikowany opis (nowa published, origin restore), a gdy go
      * nie ma — karta jest zerowana (ProductEnrichmentResetter::reset; tekst zostaje w odrzuconej wersji). Adres strony
      * wskazany ręcznie (shop_source_url), który prowadzi na odrzuconą stronę, znika z karty — inaczej ponowne
      * pobranie wzięłoby go znowu (adres podany ręcznie wygrywa z blokadą); shop_source_url_cleared w odpowiedzi. Na
@@ -303,7 +354,7 @@ final class ProductReviewService
                 $hadShopUrl = trim((string) ($product->shop_source_url ?? '')) !== '';
                 $this->markRejected($target, $u, $note);
                 $this->versions->blockSourceUrl($target);
-                $this->dropRunEffects($product, $target);
+                $this->runEffects->revert($product, $target);
                 // Adres podany ręcznie wygrywa w przebiegu z blokadą (rejectedSourceKeysFor, decide reguła 1) —
                 // wskazujący odrzuconą stronę musi zniknąć, bo ponowne pobranie wzięłoby z niego ten sam opis.
                 // Porównanie kluczem blokady (sourceUrlKey: też wariant hosta z „www.”/„m.”), żeby nie zostawić
@@ -425,9 +476,10 @@ final class ProductReviewService
 
     /**
      * @param  list<object>  $rows
+     * @param  array<string, int>  $inReview  klucz modelu => ile kart tego modelu w wybranym zbiorze
      * @return list<array<string, mixed>>
      */
-    private function presentRows(array $rows): array
+    private function presentRows(array $rows, array $inReview = []): array
     {
         if ($rows === []) {
             return [];
@@ -443,7 +495,7 @@ final class ProductReviewService
                 ProductDescriptionVersion::STATUS_REJECTED,
             ])
             ->orderBy('id')
-            ->get(['id', 'product_id', 'status', 'identity_verdict', 'evidence_count', 'decision', 'created_at', 'primary_source_url']);
+            ->get(['id', 'product_id', 'status', 'identity_verdict', 'evidence_count', 'decision', 'created_at', 'primary_source_url', 'description_sha1']);
         foreach ($versionRows as $version) {
             $versionsByCard[(int) $version->product_id][] = $version;
         }
@@ -465,6 +517,9 @@ final class ProductReviewService
             [$published, $proposal] = $this->publishedAndProposal($versionsByCard[$id] ?? []);
             $identity = $this->jsonObject($row->identity ?? null);
             $evidence = $this->jsonObject($row->evidence_summary ?? null);
+            $model = ($row->model ?? null) instanceof ModelKey ? $row->model : null;
+            // lider, od którego karta dostała opis wspólny modelu (payload.model_group); sam lider nie ma „od kogo”
+            $leaderId = is_numeric($row->model_leader_product_id ?? null) ? (int) $row->model_leader_product_id : null;
             $out[] = [
                 'product_id' => $id,
                 'sku' => (string) $row->sku,
@@ -487,18 +542,28 @@ final class ProductReviewService
                 'image_url' => $images[$id] ?? null,
                 // adres źródła wersji (nie payloadu karty): odrzucenie blokuje adres wersji, a wersji bez adresu nic
                 // nie blokuje — okno potwierdzenia nie może wtedy obiecywać pominięcia strony
+                // description_sha1 = skrót tekstu wersji: „Zastosuj do N kart modelu” tylko gdy decyzja dotyczy tego
+                // samego tekstu na wszystkich kartach grupy (ta sama propozycja od lidera), nie różnych opisów
                 'published' => $published !== null ? [
                     'version_id' => (int) $published->id,
                     'identity_verdict' => $published->identity_verdict,
                     'evidence_count' => $published->evidence_count,
                     'primary_source_url' => $published->primary_source_url,
+                    'description_sha1' => $published->description_sha1,
                 ] : null,
                 'proposal' => $proposal !== null ? [
                     'version_id' => (int) $proposal->id,
                     'identity_verdict' => $proposal->identity_verdict,
                     'evidence_count' => $proposal->evidence_count,
                     'primary_source_url' => $proposal->primary_source_url,
+                    'description_sha1' => $proposal->description_sha1,
                     'created_at' => $proposal->created_at?->toJSON(),
+                ] : null,
+                'model' => $model !== null ? [
+                    'key' => $model->key,
+                    'stem' => $model->stem,
+                    'in_review' => $inReview[$model->key] ?? 1,
+                    'shared_from' => $leaderId !== null && $leaderId !== $id ? $leaderId : null,
                 ] : null,
             ];
         }
@@ -689,35 +754,6 @@ final class ProductReviewService
             ProductDescriptionVersion::VERDICT_NONE => Product::REVIEW_IDENTITY_NONE,
             default => null,
         };
-    }
-
-    /**
-     * Skutki przebiegu odrzuconego opisu poza samym opisem: zdjęcia i pliki z internetu dodane przez ten przebieg
-     * (z plikami na dysku, bez plików z panelu B2B i wgranych ręcznie), wpis pamięci SKU z tym opisem i normy
-     * producenta — przywrócone do stanu sprzed przebiegu tylko wtedy, gdy ten przebieg je zapisał i na karcie stoi
-     * dalej jego wartość (ManufacturerNormFacts::sameFacts, ta sama reguła co przy propozycji); zapis późniejszy
-     * (synchronizacja, inny przebieg, handlowiec) zostaje. Wersja bez danych technicznych (bazowa, z przeglądu) —
-     * tylko pamięć SKU.
-     */
-    private function dropRunEffects(Product $product, ProductDescriptionVersion $rejected): void
-    {
-        $meta = $this->versions->meta($rejected);
-        $files = is_array($meta['web_file_ids'] ?? null) ? $meta['web_file_ids'] : [];
-        $ids = static fn (mixed $list): array => array_values(array_map(
-            static fn ($id): int => (int) $id,
-            array_filter(is_array($list) ? $list : [], 'is_numeric'),
-        ));
-        $this->resetter->dropRejectedRunFiles($product, $ids($files['images'] ?? []), $ids($files['documents'] ?? []));
-        $written = $meta['manufacturer_norms_written'] ?? null;
-        if (array_key_exists('manufacturer_norms_before', $meta)
-            && is_array($written)
-            && ManufacturerNormFacts::sameFacts($product->manufacturer_norms, $written)) {
-            // przez model — hak saving przelicza indeks wyszukiwania
-            $product->manufacturer_norms = $meta['manufacturer_norms_before'];
-            if ($product->isDirty('manufacturer_norms')) {
-                $product->save();
-            }
-        }
     }
 
     private function openBatchId(Product $product): ?int

@@ -86,7 +86,7 @@ final class PriceListEnrichFiltersTest extends TestCase
         ])
             ->assertOk()
             // OLD, NONE, B2B — SITE ze strony cennika, MFR od producenta (domyślnie pomijany), NEW po zmianie stron
-            ->assertExactJson(['preview' => true, 'matched' => 3, 'will_queue' => 2, 'skipped_b2b' => 1, 'limit' => 50]);
+            ->assertExactJson(['preview' => true, 'matched' => 3, 'will_queue' => 2, 'skipped_b2b' => 1, 'limit' => 50, 'will_queue_models' => 2]);
 
         $this->assertSame(0, ProductEnrichmentBatch::query()->count());
         $this->assertSame(Product::ENRICHMENT_DONE, $this->cards['OLD']->fresh()->enrichment_status);
@@ -98,7 +98,7 @@ final class PriceListEnrichFiltersTest extends TestCase
         $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['only_not_from_sites' => true, 'apply' => false])
             ->assertOk()
             // matched: MFR odpada (skip_manufacturer domyślnie), SITE odpada; z OLD, NEW, NONE, B2B bez force zostają NONE i B2B
-            ->assertExactJson(['preview' => true, 'matched' => 4, 'will_queue' => 1, 'skipped_b2b' => 1, 'limit' => 50]);
+            ->assertExactJson(['preview' => true, 'matched' => 4, 'will_queue' => 1, 'skipped_b2b' => 1, 'limit' => 50, 'will_queue_models' => 1]);
 
         $this->postJson("/api/price-lists/{$this->list->id}/enrich", [
             'force' => true,
@@ -132,7 +132,7 @@ final class PriceListEnrichFiltersTest extends TestCase
 
         $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['force' => true, 'skip_manufacturer' => false, 'apply' => false])
             ->assertOk()
-            ->assertExactJson(['preview' => true, 'matched' => 7, 'will_queue' => 5, 'skipped_b2b' => 2, 'limit' => 50]);
+            ->assertExactJson(['preview' => true, 'matched' => 7, 'will_queue' => 5, 'skipped_b2b' => 2, 'limit' => 50, 'will_queue_models' => 5]);
 
         $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['force' => true, 'skip_manufacturer' => false])
             ->assertStatus(202)
@@ -175,7 +175,36 @@ final class PriceListEnrichFiltersTest extends TestCase
 
         $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['force' => true, 'skip_manufacturer' => false, 'apply' => false])
             ->assertOk()
-            ->assertExactJson(['preview' => true, 'matched' => 6, 'will_queue' => 2, 'skipped_b2b' => 1, 'limit' => 2]);
+            ->assertExactJson(['preview' => true, 'matched' => 6, 'will_queue' => 2, 'skipped_b2b' => 1, 'limit' => 2, 'will_queue_models' => 2]);
+    }
+
+    /**
+     * Etap 2: podgląd liczy karty i modele tak, jak tnie kolejka (całymi modelami) — model Coby o trzech kartach przy
+     * limicie 2 wchodzi cały, następny model już nie; min(liczba kart, limit) pokazywało 2 przy partii z 3 kartami.
+     */
+    public function test_preview_counts_whole_models_like_the_queue(): void
+    {
+        config(['ai.enrichment_batch_limit' => 2]);
+        config()->set('manufacturer_profiles.profiles.coba.model', ['group' => 'name_stem', 'min_members' => 2]);
+        $list = PriceList::query()->create([
+            'manufacturer' => 'Coba', 'version' => '2026', 'original_filename' => 'coba.xlsx', 'rows_total' => 4,
+            'products_created' => 4, 'products_updated' => 0, 'rows_skipped' => 0, 'product_ids' => [],
+        ]);
+        $orthomat = [];
+        foreach (['AF060001' => 'Orthomat Standard Czarny 0.6m x 0.9m', 'AF060002' => 'Orthomat Standard Szary 0.9m x 1.5m', 'AF060003' => 'Orthomat Standard Czarny 0.9m x 18.3m'] as $sku => $name) {
+            $orthomat[] = $this->cobaCard($list, $sku, $name)->id;
+        }
+        $this->cobaCard($list, 'DP010001', 'Deckplate Czarny 0.6m x 0.9m');
+
+        $this->postJson("/api/price-lists/{$list->id}/enrich", ['force' => true, 'skip_manufacturer' => false, 'apply' => false])
+            ->assertOk()
+            ->assertExactJson(['preview' => true, 'matched' => 4, 'will_queue' => 3, 'skipped_b2b' => 0, 'limit' => 2, 'will_queue_models' => 1]);
+
+        $response = $this->postJson("/api/price-lists/{$list->id}/enrich", ['force' => true, 'skip_manufacturer' => false])
+            ->assertStatus(202)
+            ->assertJsonPath('batch.total', 3)
+            ->assertJsonPath('models_queued', 1);
+        $this->assertEqualsCanonicalizing($orthomat, $response->json('product_ids'));
     }
 
     public function test_apply_is_default_and_queues_only_filtered_cards_in_price_list_batch(): void
@@ -228,7 +257,8 @@ final class PriceListEnrichFiltersTest extends TestCase
     {
         $response = $this->postJson("/api/price-lists/{$this->list->id}/enrich")->assertStatus(202);
 
-        $this->assertSame(['batch', 'product_ids', 'skipped_b2b', 'price_list_id'], array_keys($response->json()));
+        // models_queued (etap 2) — liczba modeli w partii, null dopóki kolejka ich nie liczy
+        $this->assertSame(['batch', 'product_ids', 'skipped_b2b', 'models_queued', 'price_list_id'], array_keys($response->json()));
         // bez force: karty gotowe odpadają, karta z opisem z B2B jest pomijana
         $response->assertJsonPath('product_ids', [$this->cards['NONE']->id])->assertJsonPath('skipped_b2b', 1);
 
@@ -251,6 +281,31 @@ final class PriceListEnrichFiltersTest extends TestCase
         $this->postJson("/api/price-lists/{$this->list->id}/enrich", ['apply' => 'tak'])
             ->assertStatus(422)
             ->assertJsonValidationErrors('apply');
+    }
+
+    /** Karta Coby bez opisu ze slotem pliku tego cennika (marka z grupowaniem po modelu). */
+    private function cobaCard(PriceList $list, string $sku, string $name): Product
+    {
+        $card = Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => 'Coba',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 0,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id,
+            'source_key' => ProductSourcePrice::SOURCE_FILE,
+            'price_list_id' => $list->id,
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'currency' => 'PLN',
+            'checked_at' => now(),
+        ]);
+
+        return $card;
     }
 
     /**

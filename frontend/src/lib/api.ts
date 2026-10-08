@@ -1665,6 +1665,12 @@ export type EnrichmentBatch = {
   manufacturer?: string | null
   current_product_id?: number | null
   price_list_id?: number | null
+  /**
+   * Modele w partii (etap 2 opisów z cenników): model = ten sam wyrób w różnych wymiarach i kolorach, opis pobierany
+   * raz na model. total/done liczą karty jak dotąd; null, gdy partia nie ma kluczy modelu.
+   */
+  models_total?: number | null
+  models_done?: number | null
   created_by_name?: string | null
   created_at?: string | null
   updated_at?: string | null

@@ -53,6 +53,22 @@ export type ReviewVersionRef = {
   evidence_count: number | null
   /** Adres strony źródła tej wersji — odrzucenie opisu z karty blokuje go; bez adresu niczego nie blokuje. */
   primary_source_url: string | null
+  /** Skrót tekstu tej wersji — ten sam skrót na kartach modelu = ten sam opis (decyzja zbiorcza ma sens). */
+  description_sha1: string | null
+}
+
+/**
+ * Model karty (etap 2 opisów z cenników): klucz liczony w locie dla marki z grupowaniem (Coba) — ten sam wyrób
+ * w różnych wymiarach i kolorach. Null = karta jest sama sobie modelem (marka bez grupowania).
+ */
+export type ReviewRowModel = {
+  key: string
+  /** Rdzeń nazwy modelu — nazwa bez rozmiarów, wymiarów i kolorów. */
+  stem: string
+  /** Ile kart tego modelu jest na całej liście przy bieżących filtrach (przed stronicowaniem). */
+  in_review: number
+  /** Karta, od której ta karta dostała opis wspólny modelu; null = karta sama pobrała opis. */
+  shared_from: number | null
 }
 
 export type ReviewRow = {
@@ -73,6 +89,8 @@ export type ReviewRow = {
   published: ReviewVersionRef | null
   /** Nowy opis czekający na decyzję (worse_version, rejected_source). */
   proposal: (ReviewVersionRef & { created_at: string | null }) | null
+  /** Model karty — front grupuje sąsiednie wiersze tego samego modelu; null = bez grupowania. */
+  model: ReviewRowModel | null
 }
 
 export type ReviewListResponse = {

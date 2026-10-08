@@ -331,6 +331,32 @@ final class DescriptionVersionStoreTest extends TestCase
         $this->assertArrayHasKey(DescriptionVersionStore::META_KEY, $payload);
     }
 
+    /** Etap 2: adresy zdjęć stron opisu lidera zostają w danych technicznych wersji — bez powtórzeń, najwyżej 40, tylko napisy. */
+    public function test_version_meta_keeps_page_image_urls_capped_and_deduplicated(): void
+    {
+        $card = $this->card();
+        $urls = array_map(static fn (int $i): string => "https://coba.com/img/{$i}.jpg", range(1, 45));
+        $given = ['', ' https://coba.com/img/1.jpg ', 7, null, ...$urls];
+
+        $version = $this->store->record($card, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => self::DESCRIPTION,
+            'enrichment_payload' => ['norms' => ['EN 388']],
+            '_version' => ['page_image_urls' => $given],
+        ]);
+
+        $meta = $this->store->meta($version->fresh());
+        $this->assertSame(array_slice($urls, 0, DescriptionVersionStore::PAGE_IMAGE_URLS_MAX), $meta['page_image_urls']);
+        // tylko w danych technicznych wersji, nie obok reszty payloadu
+        $payload = $version->fresh()->enrichment_payload;
+        $this->assertSame(['EN 388'], $payload['norms']);
+        $this->assertArrayNotHasKey('page_image_urls', $payload);
+        // pusta lista nie zostawia klucza
+        $empty = $this->store->record($card, ProductDescriptionVersion::STATUS_SHADOW, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => self::DESCRIPTION, '_version' => ['page_image_urls' => [' ', 3]],
+        ]);
+        $this->assertSame([], $this->store->meta($empty->fresh()));
+    }
+
     public function test_publish_recomputes_certificates_and_document_urls_from_files_on_card_and_drops_version_meta(): void
     {
         $card = $this->card();

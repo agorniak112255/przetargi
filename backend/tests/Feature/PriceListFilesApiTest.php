@@ -103,9 +103,11 @@ final class PriceListFilesApiTest extends TestCase
         $this->assertSame([
             'id', 'manufacturer', 'version', 'enrichment_sites', 'enrichment_sites_mode', 'enrichment_sites_updated_at',
             'has_b2b_account', 'cards', 'described', 'sources', 'stale', 'queued', 'running', 'failed', 'manual',
-            'batch', 'hosts', 'identity', 'to_review', 'with_image',
+            'batch', 'hosts', 'identity', 'to_review', 'with_image', 'models',
         ], array_keys($row));
         $this->assertSame($list->id, $row['id']);
+        // marka bez profilu grupowania: karta = model
+        $this->assertSame(11, $row['models']);
         $this->assertSame(['sklep-a.pl', 'sklep-b.pl', 'sklep-c.pl'], $row['enrichment_sites']);
         $this->assertSame('only', $row['enrichment_sites_mode']);
         $this->assertSame($sitesChangedAt->toIso8601String(), $row['enrichment_sites_updated_at']);
@@ -189,6 +191,20 @@ final class PriceListFilesApiTest extends TestCase
             'none' => 1,
         ], $row['sources']);
         $this->assertSame(2, $row['hosts'][0]['described_cards']);
+    }
+
+    /** Marka z grupowaniem (Coba): modele = różne klucze modelu + karty bez klucza — tyle przebiegów modelu potrzebuje pełne pobranie. */
+    public function test_files_count_models_for_brand_with_model_grouping(): void
+    {
+        $list = $this->list('Coba');
+        $this->card($list, 'AF060001', ['name' => 'Orthomat Standard Szary 0.6m x 0.9m']);
+        $this->card($list, 'AF060002', ['name' => 'Orthomat Standard Czarny 0.9m x 1.5m']);
+        $this->card($list, 'CCLIP25', ['name' => 'Akcesoria Krata GRP - Uchwyt typu C - 25mm']);
+
+        $row = $this->getJson('/api/price-lists/files')->assertOk()->json('lists.0');
+
+        $this->assertSame(3, $row['cards']);
+        $this->assertSame(2, $row['models']);
     }
 
     public function test_files_list_without_sites_and_with_b2b_account(): void

@@ -2,6 +2,7 @@
  * Cenniki → „Z pliku”: źródła opisów przy cenniku z pliku (strony cennika, tryb) — typy odpowiedzi API według
  * kontraktu z planu SUPON_AI_Plan_Zrodla_opisow_cennikow_2026-10-05 oraz pomocnicze funkcje list stron.
  */
+import type { EnrichmentBatch } from './api'
 
 /** 'first' = najpierw strony cennika, potem reszta; 'only' = tylko producent i strony cennika. */
 export type EnrichmentSitesMode = 'first' | 'only'
@@ -70,7 +71,16 @@ export type FilePriceList = {
   to_review: number
   /** Karty z co najmniej jednym zdjęciem (z `cards`). */
   with_image: number
+  /**
+   * Modele cennika (etap 2): dla marki z grupowaniem mniej niż kart — tyle pobrań opisu potrzebuje pełne pobranie;
+   * dla marki bez grupowania równe `cards`.
+   */
+  models: number
 }
+
+/** Wyjaśnienie „modelu” prostym językiem — tytuł przy liczbie modeli, nagłówku grupy i liczniku partii. */
+export const MODEL_NOTE =
+  'Model = ten sam wyrób w różnych wymiarach i kolorach. Opis jest pobierany raz na model i przepisywany pozostałym kartom modelu.'
 
 /** GET /price-lists/files */
 export type FilePriceListsResponse = {
@@ -133,6 +143,16 @@ export type EnrichPreviewResponse = {
   will_queue: number
   skipped_b2b: number
   limit: number
+  /** Ile modeli wejdzie do partii (etap 2; cięcie całymi modelami) — mniej niż `will_queue` przy marce z grupowaniem. */
+  will_queue_models?: number | null
+}
+
+/** POST /price-lists/{id}/enrich z apply:true (202). */
+export type EnrichQueuedResponse = {
+  batch: EnrichmentBatch
+  product_ids?: number[]
+  /** Modele w partii (etap 2); null, gdy kolejka ich nie liczy. */
+  models_queued?: number | null
 }
 
 export function siteHref(site: string): string {

@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDatasheetOnlyDescription;
+use App\Services\Enrichment\ModelGroupPlanner;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\PriceListCards;
 use Carbon\CarbonImmutable;
@@ -34,6 +35,11 @@ use Throwable;
  * kart opisanych przed datą albo bez daty, w każdym statusie poza kolejką; najstarsze pierwsze, więc --limit daje próbkę
  * z najgorszych. Force omija pamięć SKU — bez niego karta „failed” dostałaby z pamięci ten sam stary opis.
  * --price-list= bierze karty cennika jak „Pobierz opisy” w Cennikach (PriceListCards).
+ *
+ * --force (etap 2 opisów z cenników, pilotaż modeli): ponowne pobranie z force wskazanych kart (--id=) niezależnie od
+ * statusu i daty opisu — karty w kolejce i w toku pomijane; kolejka tnie partię całymi modelami i zleca tylko liderów.
+ * Porcje partii także całymi modelami (ModelGroupPlanner): cięcie po kartach rozdzielało model między partie
+ * (--price-list= Coby: Orthomat, 11 kart, w dwóch partiach = dwaj liderzy i dwa opisy).
  */
 final class QueueEnrichmentCommand extends Command
 {
@@ -45,12 +51,13 @@ final class QueueEnrichmentCommand extends Command
         {--price-list= : Tylko karty tego cennika (numer; ostatnie wgranie i karty z ceną z tego pliku)}
         {--enriched-before= : Ponowne pobranie (force) kart opisanych przed tą datą albo bez daty, każdy status poza kolejką — od najstarszych}
         {--id=* : Tylko te karty}
+        {--force : Ponowne pobranie (force) także kart z gotowym i ręcznym opisem — pilotaż modeli po --id=; karty w kolejce i w toku pomijane}
         {--user= : E-mail użytkownika, na którego idą partie (domyślnie pierwszy administrator)}
         {--apply : Zleć pobieranie (bez tej flagi tylko podgląd)}';
 
     protected $description = 'Zleca pobranie opisów kartom wybranego producenta i kategorii, które jeszcze nie mają opisu (podgląd bez --apply)';
 
-    public function handle(ProductEnrichmentService $enrichment, AiSettingsService $settings, B2bConnectorRegistry $registry, PriceListCards $cards): int
+    public function handle(ProductEnrichmentService $enrichment, AiSettingsService $settings, B2bConnectorRegistry $registry, PriceListCards $cards, ModelGroupPlanner $planner): int
     {
         $manufacturer = trim((string) $this->option('manufacturer'));
         $category = trim((string) $this->option('category'));
@@ -81,19 +88,21 @@ final class QueueEnrichmentCommand extends Command
             }
         }
         $refresh = $enrichedBefore !== null;
+        // --force (etap 2, pilotaż modeli po --id=): jak --enriched-before bez daty — każdy status poza kolejką, z force
+        $force = (bool) $this->option('force');
         if ($manufacturer === '' && $category === '' && ! $doneWithoutDescription && $listIds === null && $onlyIds === []) {
             $this->error('Podaj --manufacturer= albo --category= (albo --price-list=, --id=, --done-without-description) — bez filtra polecenie objęłoby cały katalog.');
 
             return self::FAILURE;
         }
         $limit = max(0, (int) $this->option('limit'));
-        $datasheetOnlyAccounts = $doneWithoutDescription || $refresh ? $this->datasheetOnlyAccountIds($registry) : [];
+        $datasheetOnlyAccounts = $doneWithoutDescription || $refresh || $force ? $this->datasheetOnlyAccountIds($registry) : [];
         $ids = Product::query()
             ->when(
-                $refresh,
+                $refresh || $force,
                 static fn ($q) => $q
                     ->whereNotIn('enrichment_status', [Product::ENRICHMENT_QUEUED, Product::ENRICHMENT_RUNNING])
-                    ->where(static fn ($w) => $w->whereNull('enriched_at')->orWhere('enriched_at', '<', $enrichedBefore)),
+                    ->when($refresh, static fn ($q) => $q->where(static fn ($w) => $w->whereNull('enriched_at')->orWhere('enriched_at', '<', $enrichedBefore))),
                 fn ($q) => $q->when(
                     $doneWithoutDescription,
                     static fn ($q) => $q->where('enrichment_status', Product::ENRICHMENT_DONE)
@@ -126,7 +135,8 @@ final class QueueEnrichmentCommand extends Command
         }
 
         $batchSize = $settings->enrichmentBatchLimit();
-        $batches = (int) ceil(count($ids) / $batchSize);
+        $chunks = $this->chunksByModel($planner, $ids, $batchSize);
+        $batches = count($chunks);
         $this->table(
             ['SKU', 'Producent', 'Nazwa', 'Kategoria', 'Status'],
             Product::query()->whereIn('id', array_slice($ids, 0, 15))->orderBy('id')->get(['sku', 'manufacturer', 'name', 'category', 'enrichment_status'])
@@ -144,6 +154,7 @@ final class QueueEnrichmentCommand extends Command
             count($ids),
             match (true) {
                 $refresh => ' opisanych przed '.$enrichedBefore->format('Y-m-d').' albo bez daty, ponowne pobranie (force)',
+                $force => ' — ponowne pobranie (force), także z gotowym opisem',
                 $doneWithoutDescription => ' „done” bez opisu, ponowne pobranie',
                 default => '',
             },
@@ -162,11 +173,11 @@ final class QueueEnrichmentCommand extends Command
         }
         $queued = 0;
         $batchIds = [];
-        foreach (array_chunk($ids, $batchSize) as $chunk) {
+        foreach ($chunks as $chunk) {
             try {
                 // „done” pomija enqueueProductIds bez force — przy kartach bez opisu i starych opisach to właśnie cel;
                 // force omija też pamięć SKU, która oddałaby stary opis bez nowego pobrania
-                $result = $enrichment->enqueueProductIds($chunk, $user, force: $doneWithoutDescription || $refresh);
+                $result = $enrichment->enqueueProductIds($chunk, $user, force: $doneWithoutDescription || $refresh || $force);
             } catch (RuntimeException $e) {
                 $this->warn($e->getMessage());
 
@@ -178,6 +189,31 @@ final class QueueEnrichmentCommand extends Command
         $this->info(sprintf('Zlecono pobranie opisu: %d kart w %d partiach (#%s).', $queued, count($batchIds), implode(', #', $batchIds)));
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Porcje partii całymi modelami (etap 2): kolejne grupy planera w kolejności listy (z --enriched-before najstarsze
+     * pierwsze), każda porcja do limitu kart — grupa, która się nie mieści, zaczyna następną porcję, a pierwsza grupa
+     * większa niż limit wchodzi cała (ModelGroupPlanner::sliceByLimit, bez przestawiania grup — reszta to dalsze
+     * grupy listy). Karta marki bez grupowania to grupa jednoelementowa, więc dla niej porcje są jak dotąd po kartach.
+     *
+     * @param  list<int>  $ids
+     * @return list<list<int>>
+     */
+    private function chunksByModel(ModelGroupPlanner $planner, array $ids, int $batchSize): array
+    {
+        $chunks = [];
+        $groups = $planner->groups($ids);
+        while ($groups !== []) {
+            $slice = $planner->sliceByLimit($groups, $batchSize, oldestFirst: false);
+            if ($slice['product_ids'] === []) {
+                break;
+            }
+            $chunks[] = $slice['product_ids'];
+            $groups = array_slice($groups, count($slice['groups']));
+        }
+
+        return $chunks;
     }
 
     /**

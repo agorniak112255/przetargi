@@ -10,12 +10,14 @@ import { formatDateTime } from '../lib/priceChange'
 import {
   appendSites,
   ENRICHMENT_SITES_MAX,
+  MODEL_NOTE,
   parseSiteLines,
   siteHref,
   siteKey,
   toLocalDateTimeInput,
   type EnrichmentSitesMode,
   type EnrichPreviewResponse,
+  type EnrichQueuedResponse,
   type FilePriceList,
   type FilePriceListSources,
   type FilePriceListsResponse,
@@ -216,11 +218,17 @@ export function PriceListsFiles() {
     void load().catch((ex) => setErr(ex instanceof Error ? ex.message : 'Błąd odświeżania listy'))
   }
 
-  function onQueued(list: FilePriceList, batch: EnrichmentBatch, count: number) {
+  function onQueued(list: FilePriceList, batch: EnrichmentBatch, count: number, models: number | null) {
     setReenrichList(null)
     setErr('')
+    // liczba modeli tylko, gdy przyszła i różni się od liczby kart (marka z grupowaniem) — inaczej nic nie wnosi
+    const modelsNote =
+      models !== null && models !== count
+        ? `To ${n(models)} ${plural(models, 'model', 'modele', 'modeli')} — opis jest pobierany raz na model i przepisywany pozostałym kartom modelu. `
+        : ''
     setMsg(
       `Zlecono ponowne pobranie opisów dla ${n(count)} ${plural(count, 'karty', 'kart', 'kart')} z „${list.manufacturer} / ${list.version}”. ` +
+        modelsNote +
         'Pobieranie trwa w tle — możesz zamknąć stronę, postęp wróci po odświeżeniu.',
     )
     if (isActiveStatus(batch.status)) {
@@ -298,7 +306,17 @@ export function PriceListsFiles() {
                           )}
                         </td>
                         <td className="p-2 text-slate-700">{list.version}</td>
-                        <td className="p-2 text-right tabular-nums">{n(list.cards)}</td>
+                        <td className="p-2 text-right tabular-nums">
+                          {n(list.cards)}
+                          {list.models < list.cards && (
+                            <p
+                              className="mt-0.5 cursor-help whitespace-nowrap text-[11px] text-slate-500"
+                              title={MODEL_NOTE}
+                            >
+                              modeli: {n(list.models)}
+                            </p>
+                          )}
+                        </td>
                         <td className="min-w-[16rem] p-2">
                           <SourcesBar sources={list.sources} />
                           {list.stale > 0 && list.enrichment_sites_updated_at && (
@@ -381,7 +399,7 @@ export function PriceListsFiles() {
         <ReenrichModal
           list={reenrichList}
           onClose={() => setReenrichList(null)}
-          onQueued={(batch, count) => onQueued(reenrichList, batch, count)}
+          onQueued={(batch, count, models) => onQueued(reenrichList, batch, count, models)}
         />
       )}
     </div>
@@ -1154,7 +1172,8 @@ function SearchSitesPicker({ manufacturer, currentText, sites, error, onRetry, o
 type ReenrichProps = {
   list: FilePriceList
   onClose: () => void
-  onQueued: (batch: EnrichmentBatch, count: number) => void
+  /** models = liczba modeli w partii z odpowiedzi (null, gdy kolejka ich nie liczy). */
+  onQueued: (batch: EnrichmentBatch, count: number, models: number | null) => void
 }
 
 /** „Pobierz opisy ponownie”: filtry → podgląd liczby kart (apply:false) → potwierdzenie → zlecenie (apply:true). */
@@ -1216,11 +1235,15 @@ function ReenrichModal({ list, onClose, onQueued }: ReenrichProps) {
     setBusy(true)
     setErr('')
     try {
-      const res = await api<{ batch: EnrichmentBatch; product_ids?: number[] }>(`/price-lists/${list.id}/enrich`, {
+      const res = await api<EnrichQueuedResponse>(`/price-lists/${list.id}/enrich`, {
         method: 'POST',
         body: JSON.stringify({ force: true, ...filters(), apply: true }),
       })
-      onQueued(res.batch, res.product_ids?.length ?? res.batch.total)
+      onQueued(
+        res.batch,
+        res.product_ids?.length ?? res.batch.total,
+        typeof res.models_queued === 'number' ? res.models_queued : null,
+      )
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić pobierania')
       setBusy(false)
@@ -1309,6 +1332,13 @@ function ReenrichModal({ list, onClose, onQueued }: ReenrichProps) {
               Pasuje <b>{n(preview.matched)}</b> {plural(preview.matched, 'karta', 'karty', 'kart')}, zostanie zleconych{' '}
               <b>{n(preview.will_queue)}</b> (limit partii {n(preview.limit)}).
             </p>
+            {typeof preview.will_queue_models === 'number' && preview.will_queue_models !== preview.will_queue && (
+              <p className="cursor-help" title={MODEL_NOTE}>
+                To <b>{n(preview.will_queue_models)}</b>{' '}
+                {plural(preview.will_queue_models, 'model', 'modele', 'modeli')} — opis jest pobierany raz na model (ten
+                sam wyrób w różnych wymiarach i kolorach) i przepisywany pozostałym kartom modelu bez osobnego pobierania.
+              </p>
+            )}
             {preview.skipped_b2b > 0 && <p>Pominięte z opisem z B2B: {n(preview.skipped_b2b)}.</p>}
             {preview.matched > preview.will_queue && preview.will_queue > 0 && (
               <p className="text-slate-500">Resztę zlecisz kolejnym uruchomieniem po zakończeniu tej partii.</p>

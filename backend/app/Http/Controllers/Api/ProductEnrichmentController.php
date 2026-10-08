@@ -10,9 +10,12 @@ use App\Jobs\EnrichProductJob;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\B2b\B2bDescriptionSource;
 use App\Services\Enrichment\EnrichmentSlots;
+use App\Services\Enrichment\ModelGroup;
+use App\Services\Enrichment\ModelGroupPlanner;
 use App\Services\Enrichment\PriceListDescriptionSources;
 use App\Services\Enrichment\PriceListSourceSettings;
 use App\Services\Enrichment\ProductEnrichmentService;
@@ -21,6 +24,7 @@ use App\Services\Pricing\SupplierSpecialMask;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Throwable;
 
@@ -157,6 +161,8 @@ class ProductEnrichmentController extends Controller
             'batch' => $this->batchPayload($queued['batch']),
             'product_ids' => $queued['product_ids'],
             'skipped_b2b' => $queued['skipped_b2b'],
+            // modele w partii (etap 2): liderzy grup modelu + karty bez grupy; null, dopóki kolejka ich nie liczy
+            'models_queued' => $queued['models'] ?? null,
             'price_list_id' => $priceList->id,
             // tylko przy ponownym pobraniu (force) — bez niego odpowiedź jak przed 07.10.2026
             ...($force ? [
@@ -226,15 +232,22 @@ class ProductEnrichmentController extends Controller
                 static fn (int $id): bool => isset($cards[$id])
                     && ($force || ! in_array($cards[$id]['status'], [Product::ENRICHMENT_DONE, Product::ENRICHMENT_MANUAL], true)),
             ));
-            $skippedB2b = $eligible === [] ? 0 : count(app(B2bDescriptionSource::class)->productIds($eligible));
+            $fromB2b = $eligible === [] ? [] : app(B2bDescriptionSource::class)->productIds($eligible);
+            $skippedB2b = count($fromB2b);
             $limit = $this->aiSettings->enrichmentBatchLimit();
+            $plan = $this->previewPlan(
+                array_values(array_filter($eligible, static fn (int $id): bool => ! isset($fromB2b[$id]))),
+                $limit,
+                $force,
+            );
 
             return response()->json([
                 'preview' => true,
                 'matched' => $matched,
-                'will_queue' => min(max(0, count($eligible) - $skippedB2b), $limit),
+                'will_queue' => count($plan['product_ids']),
                 'skipped_b2b' => $skippedB2b + count($b2bCards),
                 'limit' => $limit,
+                'will_queue_models' => count($plan['groups']),
             ]);
         }
 
@@ -259,8 +272,28 @@ class ProductEnrichmentController extends Controller
             'batch' => $this->batchPayload($queued['batch']),
             'product_ids' => $queued['product_ids'],
             'skipped_b2b' => $queued['skipped_b2b'] + count($b2bCards),
+            'models_queued' => $queued['models'] ?? null,
             'price_list_id' => $priceList->id,
         ], 202);
+    }
+
+    /**
+     * Podgląd partii (etap 2): karty i modele, które weszłyby do partii — ta sama reguła cięcia co w kolejce (całymi
+     * modelami, ModelGroupPlanner::sliceByLimit: pierwszy model większy niż limit wchodzi cały; karta bez grupy =
+     * model) i ta sama kolejność co w enqueueProductIds (z force ponad limit najstarsze opisy pierwsze), na kartach,
+     * które przeszłyby do kolejki. Liczenie min(liczba kart, limit) rozjeżdżało się z partią przy modelu ponad limit.
+     *
+     * @param  list<int>  $ids
+     * @return array{groups: list<ModelGroup>, product_ids: list<int>}
+     */
+    private function previewPlan(array $ids, int $limit, bool $force): array
+    {
+        if ($ids === []) {
+            return ['groups' => [], 'product_ids' => []];
+        }
+        $planner = app(ModelGroupPlanner::class);
+
+        return $planner->sliceByLimit($planner->groups($ids), $limit, oldestFirst: $force && count($ids) > $limit);
     }
 
     public function enrichProducts(Request $request): JsonResponse
@@ -291,6 +324,7 @@ class ProductEnrichmentController extends Controller
             'batch' => $this->batchPayload($queued['batch']),
             'product_ids' => $queued['product_ids'],
             'skipped_b2b' => $queued['skipped_b2b'],
+            'models_queued' => $queued['models'] ?? null,
             ...($force ? [
                 'skipped_manufacturer' => count($skippedManufacturer),
                 'skipped_manufacturer_ids' => $skippedManufacturer,
@@ -511,7 +545,7 @@ class ProductEnrichmentController extends Controller
     }
 
     /**
-     * @param  array{manufacturer: ?string, current_product_id: ?int, price_list_id: ?int}|null  $ctx
+     * @param  array{manufacturer: ?string, current_product_id: ?int, price_list_id: ?int, models_total?: ?int, models_done?: ?int}|null  $ctx
      * @return array<string, mixed>
      */
     private function batchPayload(ProductEnrichmentBatch $batch, ?array $ctx = null): array
@@ -540,18 +574,85 @@ class ProductEnrichmentController extends Controller
             'manufacturer' => $ctx['manufacturer'],
             'current_product_id' => $ctx['current_product_id'],
             'price_list_id' => $ctx['price_list_id'],
+            // modele partii (etap 2): total/done po kartach jak dotąd, osobno po modelach; null bez kluczy modelu
+            'models_total' => $ctx['models_total'] ?? null,
+            'models_done' => $ctx['models_done'] ?? null,
             'created_at' => $batch->created_at?->toIso8601String(),
             'updated_at' => $batch->updated_at?->toIso8601String(),
         ];
     }
 
     /**
+     * Liczniki modeli partii z jej pozycji, w PHP (bez GROUP BY — produkcja z ONLY_FULL_GROUP_BY): models_total = różne
+     * klucze modelu + pozycje bez klucza (karta bez grupy liczy się jak model), models_done = modele, których żadna
+     * pozycja nie czeka ani nie trwa. Null, gdy żadna pozycja partii nie ma klucza (partia sprzed etapu 2, marka bez
+     * grupowania) — baner pokazuje wtedy tylko karty.
+     *
+     * @param  list<int>  $batchIds
+     * @return array<int, array{models_total: ?int, models_done: ?int}>
+     */
+    private function batchModelCounts(array $batchIds): array
+    {
+        $out = [];
+        foreach ($batchIds as $batchId) {
+            $out[$batchId] = ['models_total' => null, 'models_done' => null];
+        }
+        if ($batchIds === [] || ! self::batchItemsHaveModelKey()) {
+            return $out;
+        }
+        /** @var array<int, array<string, bool>> $models partia => model => czy wszystkie pozycje zakończone */
+        $models = [];
+        $withKey = [];
+        foreach (array_chunk($batchIds, 500) as $chunk) {
+            $rows = ProductEnrichmentBatchItem::query()
+                ->toBase()
+                ->whereIntegerInRaw('batch_id', $chunk)
+                ->get(['batch_id', 'product_id', 'model_key', 'status']);
+            foreach ($rows as $row) {
+                $batchId = (int) $row->batch_id;
+                $key = is_string($row->model_key) && $row->model_key !== '' ? 'model:'.$row->model_key : 'karta:'.$row->product_id;
+                if (str_starts_with($key, 'model:')) {
+                    $withKey[$batchId] = true;
+                }
+                $settled = ! in_array((string) $row->status, [
+                    ProductEnrichmentBatchItem::STATUS_QUEUED,
+                    ProductEnrichmentBatchItem::STATUS_RUNNING,
+                ], true);
+                $models[$batchId][$key] = ($models[$batchId][$key] ?? true) && $settled;
+            }
+        }
+        foreach ($models as $batchId => $byModel) {
+            if (! isset($withKey[$batchId])) {
+                continue;
+            }
+            $out[$batchId] = [
+                'models_total' => count($byModel),
+                'models_done' => count(array_filter($byModel)),
+            ];
+        }
+
+        return $out;
+    }
+
+    /** Kolumna z migracji etapu 2 — po pierwszym „jest” bez kolejnych zapytań (baner odpytuje partie co kilka sekund). */
+    private static function batchItemsHaveModelKey(): bool
+    {
+        static $has = false;
+        if (! $has) {
+            $has = Schema::hasColumn('product_enrichment_batch_items', 'model_key');
+        }
+
+        return $has;
+    }
+
+    /**
      * @param  iterable<int, ProductEnrichmentBatch>  $batches
-     * @return array<int, array{manufacturer: ?string, current_product_id: ?int, price_list_id: ?int}>
+     * @return array<int, array{manufacturer: ?string, current_product_id: ?int, price_list_id: ?int, models_total: ?int, models_done: ?int}>
      */
     private function batchLinkContext(iterable $batches): array
     {
         $list = collect($batches);
+        $modelCounts = $this->batchModelCounts($list->pluck('id')->map(static fn ($id): int => (int) $id)->all());
         $priceListIds = $list
             ->where('scope', ProductEnrichmentBatch::SCOPE_PRICE_LIST)
             ->pluck('scope_id')
@@ -611,6 +712,7 @@ class ProductEnrichmentController extends Controller
                 'manufacturer' => is_string($manufacturer) && $manufacturer !== '' ? $manufacturer : null,
                 'current_product_id' => $currentProductId,
                 'price_list_id' => $priceListId,
+                ...($modelCounts[(int) $batch->id] ?? ['models_total' => null, 'models_done' => null]),
             ];
         }
 

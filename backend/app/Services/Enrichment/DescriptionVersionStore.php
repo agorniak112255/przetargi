@@ -32,7 +32,9 @@ use RuntimeException;
  *     którą przebieg zapisał; oba tylko wtedy, gdy przebieg tę kolumnę zapisał (odrzucenie przywraca „before” tylko,
  *     gdy na karcie stoi dalej „written” — ManufacturerNormFacts::sameFacts, jak przy propozycji);
  *   url_blocked — odrzucona wersja blokuje swój adres źródła (tylko odrzucony opis z karty, nie propozycja);
- *   url_unblocked_at / url_unblocked_by — blokadę zdjęło zatwierdzenie wersji z tego adresu.
+ *   url_unblocked_at / url_unblocked_by — blokadę zdjęło zatwierdzenie wersji z tego adresu;
+ *   page_image_urls — adresy zdjęć stron opisu przebiegu lidera modelu (etap 2, ≤ PAGE_IMAGE_URLS_MAX): członkowie
+ *     modelu dostają z nich zdjęcie w kolorze swojej karty bez ponownego pobierania stron.
  */
 final class DescriptionVersionStore
 {
@@ -47,6 +49,9 @@ final class DescriptionVersionStore
 
     /** Reguła 5 decide: o ile dowodów mniej niż w bazie, żeby nowy opis został propozycją. */
     public const MIN_EVIDENCE_DROP = 2;
+
+    /** Ile adresów zdjęć stron opisu (page_image_urls, etap 2) zostaje w danych technicznych wersji. */
+    public const PAGE_IMAGE_URLS_MAX = 40;
 
     /** Ranga werdyktu tożsamości strony źródła (SourceIdentity); brak werdyktu = ranga nieznana. */
     private const RANK = [
@@ -609,6 +614,23 @@ final class DescriptionVersionStore
         if (array_key_exists('manufacturer_norms_before', $meta) && array_key_exists('manufacturer_norms_written', $meta)) {
             $out['manufacturer_norms_before'] = $meta['manufacturer_norms_before'];
             $out['manufacturer_norms_written'] = $meta['manufacturer_norms_written'];
+        }
+        // adresy zdjęć stron opisu lidera (etap 2: członkowie modelu dostają zdjęcie w kolorze swojej karty bez sieci) —
+        // najwyżej PAGE_IMAGE_URLS_MAX, tylko w kopii payloadu wersji
+        if (is_array($meta['page_image_urls'] ?? null)) {
+            $urls = [];
+            foreach ($meta['page_image_urls'] as $url) {
+                $url = is_string($url) ? trim($url) : '';
+                if ($url !== '' && mb_strlen($url) <= 2000 && ! in_array($url, $urls, true)) {
+                    $urls[] = $url;
+                }
+                if (count($urls) >= self::PAGE_IMAGE_URLS_MAX) {
+                    break;
+                }
+            }
+            if ($urls !== []) {
+                $out['page_image_urls'] = $urls;
+            }
         }
 
         return $out;

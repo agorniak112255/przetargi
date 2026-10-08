@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { EnrichmentBatchLogModal } from './EnrichmentBatchLogModal'
 import { EnrichmentLiveMessage } from './EnrichmentLiveMessage'
 import { enrichmentProductHref, type EnrichmentBatch } from '../lib/api'
+import { MODEL_NOTE } from '../lib/priceListSources'
 
 type Props = {
   batches: EnrichmentBatch[]
@@ -45,6 +46,12 @@ function EnrichmentProgressItem({
       Pobieranie opisów/zdjęć
       {batch.manufacturer ? ` — ${batch.manufacturer}` : ''} — {batch.done + batch.failed}/
       {batch.total} ({batch.progress_percent}%)
+      {/* modele (etap 2) tylko, gdy partia je liczy i jest ich mniej niż kart — postęp po kartach bez zmian */}
+      {typeof batch.models_total === 'number' && batch.models_total < batch.total && (
+        <span className="cursor-help font-normal" title={MODEL_NOTE}>
+          {' · '}Modele: {batch.models_done ?? 0} z {batch.models_total}
+        </span>
+      )}
     </>
   )
   const nowLabel = batch.current_sku

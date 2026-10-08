@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Exceptions\EnrichmentCancelledException;
 use App\Exceptions\ProductSourcesNotFoundException;
+use App\Jobs\ApplyModelDescriptionJob;
 use App\Jobs\DescribeB2bProductFromDatasheetJob;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\PrefetchProductSourcesJob;
@@ -35,6 +36,7 @@ use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\BlockedSourceHost;
 use App\Support\CertificateLabels;
+use App\Support\ColourWords;
 use App\Support\EnrichmentDescriptionTemplates;
 use App\Support\ManufacturerNormFacts;
 use App\Support\NormCode;
@@ -139,6 +141,24 @@ final class ProductEnrichmentService
      */
     private ?array $lastRunDecision = null;
 
+    /**
+     * Wersja opisu z ostatniego enrichProduct / applyModelDescription — zapisana (published) albo propozycja
+     * (proposed), także z pamięci SKU; null = przebieg bez wersji (brak źródeł, wyjątek, opis odrzucony).
+     * EnrichProductJob po przebiegu lidera modelu daje ją członkom (ApplyModelDescriptionJob) albo zarządza sztafetę.
+     */
+    private ?ProductDescriptionVersion $lastRunVersion = null;
+
+    /**
+     * Nota modelu dla lidera grupy w partii (ModelGroupPlanner::contextFor: klucz, rdzeń nazwy, karty modelu w partii)
+     * — na czas jednego enrichProduct, zerowana w finally; null = karta bez grupy albo poniżej min_members profilu.
+     *
+     * @var array{key: string, stem: string, members: list<array{id: int, sku: string, name: string}>}|null
+     */
+    private ?array $modelContext = null;
+
+    /** Tyle kart modelu wymienia nota modelu w poleceniu; reszta jako liczba (budżet polecenia). */
+    private const MODEL_NOTE_MAX_MEMBERS = 30;
+
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
         'ubranie', 'odziez', 'odzież', 'buty', 'obuwie', 'trzewiki', 'polbuty', 'półbuty', 'sandaly',
@@ -225,6 +245,41 @@ final class ProductEnrichmentService
         return app(ManufacturerProfiles::class);
     }
 
+    /*
+     * Etap 2 opisów z cenników (opis wspólny dla modelu): plan partii po modelach, klucz modelu, fakty z cennika,
+     * kopie plików lidera i dobór zdjęcia członka — także przez kontener (konstruktor bez zmian).
+     */
+    private function planner(): ModelGroupPlanner
+    {
+        return app(ModelGroupPlanner::class);
+    }
+
+    private function modelKeys(): ProductModelKey
+    {
+        return app(ProductModelKey::class);
+    }
+
+    private function cardFacts(): PriceListCardFacts
+    {
+        return app(PriceListCardFacts::class);
+    }
+
+    private function copier(): ProductWebFileCopier
+    {
+        return app(ProductWebFileCopier::class);
+    }
+
+    private function imagePicker(): ModelImagePicker
+    {
+        return app(ModelImagePicker::class);
+    }
+
+    /** Marka z opisem wspólnym dla modelu (profil `model.group`) — pamięć SKU nie jest dla niej czytana ani pisana. */
+    private function sharesModelDescription(Product $product): bool
+    {
+        return $this->profiles()->for($product)?->modelGroup !== null;
+    }
+
     public function enqueueProduct(Product $product, User $user, bool $force = false, bool $overwriteB2bDescription = false): ProductEnrichmentBatch
     {
         if (! $force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
@@ -244,7 +299,7 @@ final class ProductEnrichmentService
         ]);
 
         // pozycja partii zapamiętuje stan sprzed kolejki (restoreAfterCancel) — dlatego przed zmianą statusu
-        $this->seedBatchItems($batch, [$product]);
+        $this->seedBatchItems($batch, [$product], $this->singleCardGroups($product));
         // Ślad (enrichment_trace) zostaje: to pochodzenie obecnego opisu, a anulowana partia nie daje nowego.
         // Nowy przebieg i tak go zastępuje (zapis opisu albo błędu).
         $product->update([
@@ -255,6 +310,20 @@ final class ProductEnrichmentService
         PrefetchProductSourcesJob::dispatch($product->id, $batch->id, $force);
 
         return $batch;
+    }
+
+    /**
+     * Plan partii z jedną kartą (enqueueProduct, enrichProductSync): grupa jednoelementowa z kluczem modelu karty
+     * (marka z grupowaniem) albo bez klucza; lider = ta karta. Jedna karta modelu w partii to mniej niż min_members —
+     * przebieg idzie jak dotąd, bez noty modelu.
+     *
+     * @return list<ModelGroup>
+     */
+    private function singleCardGroups(Product $product): array
+    {
+        $key = $this->modelKeys()->for($product);
+
+        return [new ModelGroup($key?->key ?? '', $key?->stem ?? '', (int) $product->id, [(int) $product->id])];
     }
 
     /**
@@ -289,8 +358,11 @@ final class ProductEnrichmentService
      * enrichProductSync): przepuszcza takie karty do kolejki. Używa go b2b:queue-table-descriptions dla kart,
      * w których opis ze sklepu jest w praktyce samą tabelką.
      *
+     * Partia planowana po modelach (etap 2, ModelGroupPlanner): models = liczba grup modeli w partii (karta marki bez
+     * grupowania = jedna grupa); zadanie prefetchu idzie tylko do lidera każdej grupy.
+     *
      * @param  list<int>  $ids
-     * @return array{batch: ProductEnrichmentBatch, product_ids: list<int>, skipped_b2b: int}
+     * @return array{batch: ProductEnrichmentBatch, product_ids: list<int>, skipped_b2b: int, models: int}
      */
     public function enqueueProductIds(
         array $ids,
@@ -340,19 +412,25 @@ final class ProductEnrichmentService
 
         $limit = $this->aiSettings->enrichmentBatchLimit();
         $requested = count($productIds);
-        if ($requested > $limit) {
-            // Z force karty „done” nie odpadają, więc każda partia brała te same pierwsze karty listy — najpierw
-            // karty bez opisu i z najstarszym, a świeżo opisane trafiają na koniec i kolejna partia idzie dalej.
-            if ($force) {
-                $productIds = $this->oldestEnrichedFirst($productIds);
-            }
-            $productIds = array_slice($productIds, 0, $limit);
-        }
+        // Plan po modelach (etap 2): karty jednego modelu marki z grupowaniem idą razem, zadanie dostaje tylko lider;
+        // karta marki bez grupowania to grupa jednoelementowa, więc kolejność i cięcie limitem są jak dotąd.
+        // Z force karty „done” nie odpadają, więc każda partia brała te same pierwsze karty listy — przy limicie
+        // najpierw modele z kartą bez opisu i z najstarszym opisem, a świeżo opisane trafiają na koniec i kolejna
+        // partia idzie dalej. Limit tnie całymi modelami (pierwszy model większy niż limit wchodzi cały).
+        $plan = $this->planner()->sliceByLimit(
+            $this->planner()->groups($productIds),
+            $limit,
+            oldestFirst: $force && $requested > $limit,
+        );
+        $groups = $plan['groups'];
+        $productIds = $plan['product_ids'];
 
         $queued = count($productIds);
+        $models = count($groups);
         $message = ($requested > $limit
             ? "W kolejce: {$queued}/{$requested} (limit {$limit} — Ustawienia AI)"
             : 'W kolejce: '.$queued.' produktów')
+            .($models < $queued ? ' ('.self::modelsLabel($models).')' : '')
             .($skippedB2b > 0 ? ' · pominięto '.$skippedB2b.' z opisem z cennika B2B' : '');
 
         $batch = ProductEnrichmentBatch::query()->create([
@@ -368,10 +446,11 @@ final class ProductEnrichmentService
         ]);
 
         // pozycje partii zapamiętują stan sprzed kolejki (restoreAfterCancel) — dlatego przed zmianą statusu;
-        // ślad zostaje, jak w enqueueProduct
+        // ślad zostaje, jak w enqueueProduct; klucz modelu i lider zamrożone w pozycjach (contextFor/membersOf)
         $this->seedBatchItems(
             $batch,
-            Product::query()->whereIn('id', $productIds)->get(['id', 'sku', 'name', 'enrichment_status', 'enrichment_error'])
+            Product::query()->whereIn('id', $productIds)->get(['id', 'sku', 'name', 'enrichment_status', 'enrichment_error']),
+            $groups,
         );
         Product::query()->whereIn('id', $productIds)->update([
             'enrichment_status' => Product::ENRICHMENT_QUEUED,
@@ -379,8 +458,10 @@ final class ProductEnrichmentService
         ]);
 
         if ($dispatchJobs) {
-            foreach ($productIds as $productId) {
-                PrefetchProductSourcesJob::dispatch($productId, $batch->id, $force);
+            // zadanie dostaje tylko lider grupy — członkowie dostaną jego opis (ApplyModelDescriptionJob);
+            // karta bez klucza jest własnym liderem
+            foreach ($groups as $group) {
+                PrefetchProductSourcesJob::dispatch($group->leaderId, $batch->id, $force);
             }
         }
 
@@ -388,27 +469,22 @@ final class ProductEnrichmentService
             'batch' => $batch,
             'product_ids' => $productIds,
             'skipped_b2b' => $skippedB2b,
+            'models' => $models,
         ];
     }
 
-    /**
-     * Karty bez daty opisu na początku, potem od najstarszego enriched_at; przy równej dacie kolejność wejściowa.
-     *
-     * @param  list<int>  $ids
-     * @return list<int>
-     */
-    private function oldestEnrichedFirst(array $ids): array
+    /** „1 model”, „3 modele”, „12 modeli” — do komunikatu partii. */
+    private static function modelsLabel(int $count): string
     {
-        $enrichedAt = [];
-        foreach (array_chunk($ids, 1000) as $chunk) {
-            foreach (Product::query()->whereIntegerInRaw('id', $chunk)->toBase()->get(['id', 'enriched_at']) as $row) {
-                $enrichedAt[(int) $row->id] = $row->enriched_at !== null ? (string) $row->enriched_at : '';
-            }
-        }
-        $position = array_flip($ids);
-        usort($ids, static fn (int $a, int $b): int => [$enrichedAt[$a] ?? '', $position[$a]] <=> [$enrichedAt[$b] ?? '', $position[$b]]);
+        $last = $count % 10;
+        $tens = $count % 100;
+        $word = match (true) {
+            $count === 1 => 'model',
+            $last >= 2 && $last <= 4 && ($tens < 12 || $tens > 14) => 'modele',
+            default => 'modeli',
+        };
 
-        return $ids;
+        return $count.' '.$word;
     }
 
     /**
@@ -420,7 +496,9 @@ final class ProductEnrichmentService
         $started = microtime(true);
         $this->assertBatchNotCancelled($batchId);
 
-        if (! $force && $this->hasSkuCacheRow($product)) {
+        // Marka z opisem wspólnym dla modelu (etap 2): pamięć SKU nie jest czytana — pochodzenie niesie wersja opisu,
+        // a wpis pamięci SKU (inna karta tego kodu, dawny przebieg) nie zna modelu; przebieg idzie pełną ścieżką.
+        if (! $force && ! $this->sharesModelDescription($product) && $this->hasSkuCacheRow($product)) {
             Log::info('Product source prefetch', [
                 'product_id' => $product->id,
                 'sku' => $product->sku,
@@ -758,9 +836,10 @@ final class ProductEnrichmentService
                 'snippet' => mb_substr((string) ($page['text'] ?? ''), 0, 200),
             ];
         }
-        $extracted = $this->extractWithLlm($product, $cardSources, array_slice($clean, 0, 5));
+        // druga pula tego samego przebiegu lidera — nota modelu i sito na rdzeniu nazwy jak w pierwszej
+        $extracted = $this->extractWithLlm($product, $cardSources, array_slice($clean, 0, 5), modelContext: $this->modelContext);
         $description = ProductDescriptionText::plain($this->modelDescription($extracted));
-        if (! $this->isUsableProductDescription($description, $product, array_column($clean, 'url'))) {
+        if (! $this->isUsableProductDescription($description, $this->modelIdentityCard($product), array_column($clean, 'url'))) {
             $description = '';
         }
 
@@ -852,7 +931,7 @@ final class ProductEnrichmentService
         ]);
 
         Cache::forget($this->prefetchPackKey($product));
-        $this->seedBatchItems($batch, [$product]);
+        $this->seedBatchItems($batch, [$product], $this->singleCardGroups($product));
         $this->recordBatchProduct($batch, $product, ProductEnrichmentBatchItem::STATUS_RUNNING);
 
         try {
@@ -894,8 +973,9 @@ final class ProductEnrichmentService
 
     public function enrichProduct(Product $product, bool $force = false, ?int $batchId = null): void
     {
-        // worker trzyma serwis między zadaniami — komunikat o propozycji należy tylko do tego przebiegu
+        // worker trzyma serwis między zadaniami — komunikat o propozycji i wersja należą tylko do tego przebiegu
         $this->lastProposalNote = null;
+        $this->lastRunVersion = null;
         if (! $force && $product->enrichment_status === Product::ENRICHMENT_DONE) {
             return;
         }
@@ -937,12 +1017,22 @@ final class ProductEnrichmentService
             // Strony odrzucone przez handlowca nie wracają jako źródło opisu (przed bramkami, na każdej ścieżce kandydatów)
             $this->rejectedSourceKeys = $this->rejectedSourceKeysFor($product);
             $this->listSources = $this->priceListSourcesFor($product);
-            // Pamięć SKU niesie opis spoza stron cennika (inna karta tego kodu, wcześniejszy przebieg bez ustawień) —
-            // przy stronach cennika przebieg idzie pełną ścieżką.
-            if ($this->listSources !== null && ! $force && $product->trustedShopUrl() === null && $this->hasSkuCacheRow($product)) {
-                $this->attemptLog()->add('search', 'strony cennika '.$this->listSources->manufacturer.' — pamięć SKU pominięta');
+            // Opis wspólny dla modelu (etap 2): lider grupy w partii dostaje notę modelu w poleceniu i sito opisu na
+            // rdzeniu nazwy; marka z grupowaniem nie czyta ani nie pisze pamięci SKU (pochodzenie niesie wersja).
+            $this->modelContext = $batchId !== null && self::batchItemsHaveModelColumns()
+                ? $this->planner()->contextFor($product, $batchId)
+                : null;
+            $sharedModel = $this->sharesModelDescription($product);
+            if (! $force && $product->trustedShopUrl() === null && $this->hasSkuCacheRow($product)) {
+                // Pamięć SKU niesie opis spoza stron cennika (inna karta tego kodu, wcześniejszy przebieg bez ustawień) —
+                // przy stronach cennika przebieg idzie pełną ścieżką.
+                if ($this->listSources !== null) {
+                    $this->attemptLog()->add('search', 'strony cennika '.$this->listSources->manufacturer.' — pamięć SKU pominięta');
+                } elseif ($sharedModel) {
+                    $this->attemptLog()->add('search', 'pamięć SKU pominięta — opis wspólny modelu');
+                }
             }
-            if (! $force && $this->listSources === null && $product->trustedShopUrl() === null && $this->applyFromSkuCache($product, $before)) {
+            if (! $force && ! $sharedModel && $this->listSources === null && $product->trustedShopUrl() === null && $this->applyFromSkuCache($product, $before)) {
                 $this->logEnrichmentTiming($timing, $started, extra: ['from_cache' => true]);
 
                 return;
@@ -1169,7 +1259,8 @@ final class ProductEnrichmentService
             $extracted = $this->extractWithLlm(
                 $product,
                 $cardSources,
-                array_slice($pageSnippets, 0, 5)
+                array_slice($pageSnippets, 0, 5),
+                modelContext: $this->modelContext,
             );
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets);
             $timing['llm_extract_ms'] = $this->elapsedMs($t);
@@ -1178,7 +1269,7 @@ final class ProductEnrichmentService
             // Opis wyłącznie od modelu — tekstu strony jako opisu zapasowego nie bierzemy
             // (audyt 22.09.2026: CAPTCHA, cenniki i banery cookies zapisane jako opis).
             $description = ProductDescriptionText::plain($this->modelDescription($extracted));
-            if (! $this->isUsableProductDescription($description, $product, array_column($pageSnippets, 'url'))) {
+            if (! $this->isUsableProductDescription($description, $this->modelIdentityCard($product), array_column($pageSnippets, 'url'))) {
                 $description = '';
             }
 
@@ -1682,6 +1773,12 @@ final class ProductEnrichmentService
             $productPayload['evidence'] = $evidence['entries'];
             $productPayload['evidence_summary'] = ['explicit' => $evidence['explicit'], 'inferred' => $evidence['inferred']];
             $productPayload['completeness'] = $evidence['completeness'];
+            // Pochodzenie opisu modelu (etap 2): klucz modelu karty — lider = ta karta, numer wersji lidera niesie
+            // description_version_id; członkowie dostają leader_product_id lidera i shared = true (applyModelDescription).
+            $modelGroup = $this->modelGroupPayload($product);
+            if ($modelGroup !== null) {
+                $productPayload['model_group'] = $modelGroup;
+            }
             $storedDescription = mb_substr($description, 0, 10000);
             $trace = $cachedImageUrls === []
                 ? $this->attemptLog()->snapshot($product)
@@ -1699,6 +1796,9 @@ final class ProductEnrichmentService
                 'packaging' => $packaging,
                 'primary_source_url' => $primarySourceUrl,
                 'batch_id' => $batchId,
+                // adresy zdjęć stron opisu — tylko w danych technicznych wersji (etap 2: członkowie modelu biorą z nich
+                // zdjęcie w kolorze swojej karty bez ponownego pobierania stron); publishDescription dokłada resztę meta
+                DescriptionVersionStore::META_KEY => ['page_image_urls' => $this->pageImageUrls($descPages)],
             ];
             $saved = [
                 'description' => $storedDescription,
@@ -1738,13 +1838,16 @@ final class ProductEnrichmentService
 
             ReindexProductEmbeddingJob::dispatch($product->id, true);
 
-            $this->storeSkuCache(
-                $product,
-                $description,
-                $payload,
-                $cachedImageUrls, // tylko realnie pobrane — nie cache'uj 404
-                $sourceUrls
-            );
+            // marka z opisem wspólnym dla modelu nie pisze pamięci SKU — pochodzenie niesie wersja opisu (etap 2)
+            if (! $sharedModel) {
+                $this->storeSkuCache(
+                    $product,
+                    $description,
+                    $payload,
+                    $cachedImageUrls, // tylko realnie pobrane — nie cache'uj 404
+                    $sourceUrls
+                );
+            }
             $this->recordSourceDocuments(
                 $product,
                 $sourcePages,
@@ -1813,6 +1916,8 @@ final class ProductEnrichmentService
             // kody kart producenta (bramka wariantu) czytane na nowo przy kolejnej karcie — katalog rośnie między zadaniami
             $this->manufacturerCatalogCodes = [];
             $this->rejectedSourceKeys = [];
+            // nota modelu należy do lidera tego przebiegu — kolejna karta liczy ją od nowa (albo nie ma jej wcale)
+            $this->modelContext = null;
         }
     }
 
@@ -1824,6 +1929,545 @@ final class ProductEnrichmentService
     public function lastProposalNote(): ?string
     {
         return $this->lastProposalNote;
+    }
+
+    /**
+     * Wersja opisu z ostatniego enrichProduct: zapisana (published, także z pamięci SKU) albo propozycja (proposed).
+     * null = przebieg bez wersji (brak źródeł, wyjątek, opis odrzucony, zdjęcie bez opisu). EnrichProductJob daje ją
+     * członkom modelu lidera (ApplyModelDescriptionJob) albo — bez wersji — promuje kolejnego członka na lidera.
+     */
+    public function lastRunVersion(): ?ProductDescriptionVersion
+    {
+        return $this->lastRunVersion;
+    }
+
+    /**
+     * Karta do sita opisu (isUsableProductDescription → descriptionMentionsProduct) w przebiegu lidera modelu: klon
+     * z nazwą = rdzeń nazwy modelu (bez wymiarów i koloru). Sito odrzucało poprawne opisy Coby, bo nazwa z cennika
+     * niesie wymiary („Rib Mat Czarny 0.9m x 15.3m (12.5mm)”), których opis modelu celowo nie powtarza. Bez noty
+     * modelu — karta bez zmian.
+     */
+    private function modelIdentityCard(Product $product): Product
+    {
+        $stem = trim((string) ($this->modelContext['stem'] ?? ''));
+        if ($this->modelContext === null || $stem === '') {
+            return $product;
+        }
+        $card = clone $product;
+        $card->name = $stem;
+
+        return $card;
+    }
+
+    /**
+     * Nota modelu w treści użytkownika polecenia opisu (tylko lider grupy z ≥ min_members kart modelu w partii):
+     * lista wariantów „sku — nazwa” i prośba o opis modelu bez wymiaru, koloru i kodu pojedynczego wariantu.
+     *
+     * @param  array{key: string, stem: string, members: list<array{id: int, sku: string, name: string}>}  $context
+     */
+    private function modelContextNote(array $context): string
+    {
+        $members = array_values(is_array($context['members'] ?? null) ? $context['members'] : []);
+        $lines = [];
+        foreach (array_slice($members, 0, self::MODEL_NOTE_MAX_MEMBERS) as $member) {
+            $lines[] = '- '.trim((string) ($member['sku'] ?? '')).' — '.trim((string) ($member['name'] ?? ''));
+        }
+        $rest = count($members) - count($lines);
+        if ($rest > 0) {
+            $lines[] = '- … i '.$rest.' kolejnych';
+        }
+        $stem = trim((string) ($context['stem'] ?? ''));
+
+        return "\n\nOpis wspólny dla ".count($members).' wariantów tego modelu'.($stem !== '' ? ' „'.$stem.'”' : '')." (lista: sku — nazwa):\n"
+            .implode("\n", $lines)
+            ."\nOpisz model bez wymiaru, koloru i kodu pojedynczego wariantu w description; warianty/rozmiary/kolory ze źródła podaj w specs.";
+    }
+
+    /**
+     * Pochodzenie opisu modelu w enrichment_payload lidera (etap 2): klucz z pozycji partii (zamrożony), a bez noty
+     * modelu — liczony z karty; null = marka bez grupowania albo pusty rdzeń. Numer wersji lidera niesie
+     * description_version_id karty; członkowie dostają go w leader_version_id (applyModelDescription).
+     *
+     * @return array{key: string, stem: string, family: string, leader_product_id: int, leader_version_id: null, members: int, shared: false}|null
+     */
+    private function modelGroupPayload(Product $product): ?array
+    {
+        $key = $this->modelKeys()->for($product);
+        if ($key === null) {
+            return null;
+        }
+        $context = $this->modelContext;
+
+        return [
+            'key' => trim((string) ($context['key'] ?? '')) !== '' ? (string) $context['key'] : $key->key,
+            'stem' => $key->stem,
+            'family' => $key->family,
+            'leader_product_id' => (int) $product->id,
+            'leader_version_id' => null,
+            'members' => $context !== null ? count($context['members']) : 1,
+            'shared' => false,
+        ];
+    }
+
+    /**
+     * Adresy zdjęć stron opisu (zaufane pierwsze, bez śmieci) do danych technicznych wersji lidera — członkowie
+     * modelu biorą z nich zdjęcie w kolorze swojej karty bez ponownego pobierania stron (ModelImagePicker).
+     *
+     * @param  list<array<string, mixed>>  $descPages
+     * @return list<string>
+     */
+    private function pageImageUrls(array $descPages): array
+    {
+        $out = [];
+        foreach (['trusted_image_urls', 'image_urls'] as $field) {
+            foreach ($descPages as $page) {
+                foreach ((array) ($page[$field] ?? []) as $url) {
+                    if (! is_string($url) || ! str_starts_with($url, 'http') || isset($out[$url])
+                        || $this->isJunkImageUrl($url) || ! ProductImageDownloader::looksLikeImageUrl($url)) {
+                        continue;
+                    }
+                    $out[$url] = true;
+                    if (count($out) >= DescriptionVersionStore::PAGE_IMAGE_URLS_MAX) {
+                        return array_keys($out);
+                    }
+                }
+            }
+        }
+
+        return array_keys($out);
+    }
+
+    /** Ranga werdyktu tożsamości (hard > soft > none > brak) — zapasowy werdykt karty członka modelu. */
+    private static function verdictRank(mixed $verdict): int
+    {
+        return match ($verdict) {
+            ProductDescriptionVersion::VERDICT_HARD => 3,
+            ProductDescriptionVersion::VERDICT_SOFT => 2,
+            ProductDescriptionVersion::VERDICT_NONE => 1,
+            default => 0,
+        };
+    }
+
+    /**
+     * Etykieta linii specs („Grubość: 9,5 mm” → „grubość”): tekst przed pierwszym dwukropkiem, małymi literami, bez
+     * nadmiarowych białych znaków; null = linia bez etykiety.
+     */
+    private static function specLabel(string $line): ?string
+    {
+        $pos = mb_strpos($line, ':');
+        if ($pos === false) {
+            return null;
+        }
+        $label = mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', mb_substr($line, 0, $pos))), 'UTF-8');
+
+        return $label !== '' ? $label : null;
+    }
+
+    /**
+     * Klucz tożsamości członka do source.identity kolumny norm producenta — tylko z twardego werdyktu kodem wyrobu na
+     * stronie, w formacie ManufacturerNormIdentity::confirm (norms:from-manufacturer-pages): by = rodzaj kodu,
+     * value = kod, where = gdzie na stronie. Adres ręczny, blok katalogu i słabsze werdykty nie dają klucza.
+     *
+     * @param  array<string, mixed>  $identity  werdykt karty (SourceIdentity::judgePage + source_url/profile)
+     * @return array{by: string, value: string, where: string}|null
+     */
+    private static function normIdentityFromVerdict(array $identity): ?array
+    {
+        $keyType = (string) ($identity['key_type'] ?? '');
+        $key = trim((string) ($identity['key'] ?? ''));
+        $where = (string) ($identity['where'] ?? '');
+        if (($identity['verdict'] ?? null) !== ProductDescriptionVersion::VERDICT_HARD
+            || $key === ''
+            || ! in_array($keyType, ['sku', 'ean', 'manufacturer_code', 'model_code'], true)
+            || ! in_array($where, ['url', 'title', 'markup', 'text'], true)) {
+            return null;
+        }
+
+        return ['by' => $keyType, 'value' => $key, 'where' => $where];
+    }
+
+    /**
+     * Opis wspólny dla modelu (etap 2 opisów z cenników, §1.2 kontraktu): członek grupy modelu dostaje opis z wersji
+     * lidera bez modelu językowego. Per karta: werdykt tożsamości (judgePage na zapisanych stronach źródeł lidera
+     * z kluczami członka — tabela części Coby daje twardy werdykt wymiarom; werdykt karty = strona głównego źródła
+     * lidera, zapasowo najlepszy), listy wspólne z payloadu lidera + fakty z cennika członka (PriceListCardFacts:
+     * wymiary, kolor, atrybuty z kolumn, EAN — do specs i do dowodów `price_list`), atrybuty i rozmiar per karta
+     * (payloadFromExtraction, bez rozmiaru lidera), dowody przeliczone na tekstach lidera, normy jak u lidera (kolumna
+     * norm z listy; normy producenta ze strony producenta z ochroną replaceableFromWebPage), zdjęcie w kolorze karty
+     * (ModelImagePicker: adres z galerii stron lidera do pobrania albo kopia pliku lidera bez sieci; kolor sprzeczny —
+     * bez nowego), dokumenty lidera kopią, opis prozą identyczny z liderem, nazwa karty bez zmian. Decyzja zapisu per
+     * karta (publishRun): twarda baza i słabszy werdykt → propozycja (karta wraca do stanu sprzed przebiegu), inaczej
+     * publikacja z origin model_shared. Członek, który ten opis lidera już ma (bieżąca baza o tym samym skrócie
+     * i leader_version_id) → skipped. Pamięć SKU nieczytana i niepisana. Pliki z internetu sprzed przebiegu ustępują
+     * nowym po zapisie w partii z force (jak przebieg karty). Wyjątki idą do wołającego (ApplyModelDescriptionJob łapie
+     * per członek i ustawia kartę) — pliki dodane przez ten przebieg znikają wtedy razem z błędem.
+     *
+     * @return string ApplyModelDescriptionJob::RESULT_PUBLISHED | RESULT_PROPOSED | RESULT_SKIPPED
+     */
+    public function applyModelDescription(Product $member, ProductDescriptionVersion $leaderVersion, ?int $batchId): string
+    {
+        // worker trzyma serwis między zadaniami — nota propozycji i wersja należą tylko do tego członka
+        $this->lastProposalNote = null;
+        $this->lastRunVersion = null;
+        $this->assertBatchNotCancelled($batchId);
+
+        $leader = $leaderVersion->product;
+        if ($leader === null) {
+            throw new RuntimeException("Karta lidera wersji opisu #{$leaderVersion->id} nie istnieje");
+        }
+        if ((int) $leader->id === (int) $member->id) {
+            throw new RuntimeException('Lider modelu nie dostaje własnego opisu jako członek');
+        }
+        // zadanie członków czeka w kolejce za przebiegami liderów (sweeper zleca je nawet po kwadransach) — w tym czasie
+        // handlowiec mógł odrzucić opis lidera jako cudzą stronę; odrzucona wersja nie jest podstawą dla członków
+        if ($leaderVersion->status === ProductDescriptionVersion::STATUS_REJECTED
+            || $leaderVersion->decision === ProductDescriptionVersion::DECISION_REJECTED) {
+            throw new RuntimeException("Wersja opisu lidera #{$leaderVersion->id} została odrzucona w przeglądzie — bez podstawy dla członków modelu");
+        }
+        // ten sam tekst co u lidera — bez przekształceń, ten sam limit co przy zapisie karty
+        $description = mb_substr((string) $leaderVersion->description, 0, 10000);
+        if (! Product::isDescriptionText($description)) {
+            throw new RuntimeException("Wersja opisu lidera #{$leaderVersion->id} nie ma tekstu opisu");
+        }
+        $leaderPayload = is_array($leaderVersion->enrichment_payload) ? $leaderVersion->enrichment_payload : [];
+        $leaderMeta = $this->versions()->meta($leaderVersion);
+        unset($leaderPayload[DescriptionVersionStore::META_KEY]);
+        // strony tej wersji lidera = adresy z jej payloadu (główne źródło + source_urls); zapisane źródła karty lidera
+        // obejmują też wcześniejsze przebiegi (inne, czasem cudze strony) — te do tego opisu nie należą
+        $leaderUrlKeys = [];
+        foreach ([(string) ($leaderPayload['primary_source_url'] ?? ''), ...array_filter((array) ($leaderPayload['source_urls'] ?? []), 'is_string')] as $url) {
+            if (trim($url) !== '') {
+                $leaderUrlKeys[Product::normalizeShopUrl($url)] = true;
+                $leaderUrlKeys[Product::normalizeShopUrl($this->identity->preferredLocaleUrl($url, $leader))] = true;
+            }
+        }
+        // lider skończył propozycją (opis słabszy od jego bazy): członek dostaje tekst do własnej decyzji, ale bez plików
+        // i norm z karty lidera — jego zdjęcia, dokumenty i normy pochodzą sprzed tego przebiegu (§5 kontraktu)
+        $leaderProposal = $leaderVersion->status === ProductDescriptionVersion::STATUS_PROPOSED;
+
+        // opis tego lidera już na karcie (bieżąca baza z tym samym skrótem i numerem wersji lidera) — tylko status
+        $current = $this->versions()->current($member);
+        if ($current !== null
+            && $current->description_sha1 === sha1($description)
+            && (int) ($current->enrichment_payload['model_group']['leader_version_id'] ?? 0) === (int) $leaderVersion->id) {
+            if ($member->enrichment_status !== Product::ENRICHMENT_DONE) {
+                $member->update(['enrichment_status' => Product::ENRICHMENT_DONE]);
+            }
+
+            return ApplyModelDescriptionJob::RESULT_SKIPPED;
+        }
+
+        // stan karty sprzed przebiegu — propozycja przywraca z niego normy, pliki i status (jak enrichProduct)
+        $before = $this->versions()->snapshot($member);
+        $this->attemptLog()->reset();
+        $this->attemptLog()->add('start', trim($member->sku.' · '.$member->name.' · '.$member->manufacturer));
+        $this->attemptLog()->add('model', 'opis wspólny modelu z karty lidera '.$leader->sku.' (wersja #'.$leaderVersion->id.')');
+        $member->update([
+            'enrichment_status' => Product::ENRICHMENT_RUNNING,
+            'enrichment_error' => null,
+        ]);
+        if ($batchId !== null) {
+            $this->liveProgress()->bind($batchId, $member);
+            $this->liveProgress()->step('opis wspólny modelu');
+        }
+        // pliki z internetu sprzed przebiegu: partia z force zastępuje je nowymi po zapisie opisu (jak przebieg karty)
+        $replaceFiles = $batchId !== null && (bool) ProductEnrichmentBatch::query()->whereKey($batchId)->value('force');
+        $previousWebFiles = $replaceFiles ? $before['web_files'] : null;
+        $published = false;
+        try {
+            $profile = $this->profiles()->for($member);
+            $primaryUrl = trim((string) ($leaderPayload['primary_source_url'] ?? $leaderVersion->primary_source_url ?? ''));
+            $primaryUrl = $primaryUrl !== '' ? $primaryUrl : null;
+            $primaryKind = is_string($leaderPayload['primary_source_kind'] ?? null) ? $leaderPayload['primary_source_kind'] : null;
+
+            // zapisane strony źródeł lidera (teksty z dysku po jednym) i werdykt członka na każdej — klucze członka
+            $pages = [];
+            $primaryVerdict = null;
+            $bestVerdict = null;
+            $primaryKey = $primaryUrl !== null ? Product::normalizeShopUrl($primaryUrl) : null;
+            foreach ($this->sources()->forProduct($leader) as $doc) {
+                $addresses = [
+                    Product::normalizeShopUrl($doc->url),
+                    Product::normalizeShopUrl($this->identity->preferredLocaleUrl($doc->url, $member)),
+                ];
+                if (trim((string) $doc->finalUrl) !== '') {
+                    $addresses[] = Product::normalizeShopUrl((string) $doc->finalUrl);
+                }
+                if (array_intersect_key(array_fill_keys($addresses, true), $leaderUrlKeys) === []) {
+                    continue;
+                }
+                $page = $this->storedSourcePage($doc);
+                if ($page === null) {
+                    continue;
+                }
+                $verdict = $this->sourceIdentity()->judgePage($member, $page, $profile);
+                $pages[] = $page;
+                if ($primaryVerdict === null && $primaryKey !== null && in_array($primaryKey, $addresses, true)) {
+                    $primaryVerdict = $verdict;
+                }
+                if ($bestVerdict === null || self::verdictRank($verdict['verdict']) > self::verdictRank($bestVerdict['verdict'])) {
+                    $bestVerdict = $verdict;
+                }
+            }
+            $cardVerdict = $primaryVerdict ?? $bestVerdict;
+            // bez zapisanych stron wersji lidera nie ma czym potwierdzić karty — werdykt „none” (nie null): przy bazie
+            // o znanej randze decyzja daje propozycję, bez bazy zapis z powodem przeglądu identity_none
+            $identity = ($cardVerdict ?? [
+                'verdict' => ProductDescriptionVersion::VERDICT_NONE,
+                'reason' => $leaderUrlKeys === []
+                    ? 'wersja lidera bez adresów źródeł'
+                    : ($pages === [] ? 'brak zapisanych stron źródeł tej wersji lidera' : 'strona głównego źródła lidera nie jest zapisana'),
+                'key_type' => null,
+                'key' => null,
+                'where' => null,
+            ]) + ['source_url' => $primaryUrl, 'profile' => $profile === null ? null : ($profile->profileKey ?? 'default')];
+            $this->attemptLog()->add(
+                'identity',
+                'werdykt '.($identity['verdict'] ?? 'brak').' — '.$identity['reason'].($primaryVerdict === null && $bestVerdict !== null ? ' (zapasowo: najlepsza strona lidera)' : ''),
+                urls: array_column($pages, 'url'),
+            );
+
+            // Normy producenta jak u lidera (odczyt ze strony producenta z przebiegu lidera) — tylko gdy kolumna członka
+            // jest pusta albo sama pochodzi ze strony (replaceableFromWebPage); cofane przy propozycji ($runWrites).
+            $runWrites = [];
+            $leaderNorms = $leaderMeta['manufacturer_norms_written'] ?? $leader->manufacturer_norms;
+            if (! $leaderProposal
+                && is_array($leaderNorms)
+                && ($leaderNorms['source']['connector'] ?? null) === ManufacturerNormFacts::WEB_PAGE_CONNECTOR
+                && ManufacturerNormFacts::norms($leaderNorms) !== []
+                && ManufacturerNormFacts::replaceableFromWebPage($member->manufacturer_norms)) {
+                // Klucz tożsamości (source.identity) należy do karty lidera — u członka czyniłby kolumnę „sprawdzoną”
+                // (ManufacturerNormFacts::verified, dowód w przetargu) cudzym kodem. Zostaje tylko przy twardym werdykcie
+                // członka, w formacie norms:from-manufacturer-pages (ManufacturerNormIdentity::confirm), z jego kluczem.
+                $column = $leaderNorms;
+                unset($column['source']['identity']);
+                $column['source']['copied_from_product_id'] = (int) $leader->id;
+                $memberIdentity = self::normIdentityFromVerdict($identity);
+                if ($memberIdentity !== null) {
+                    $column['source']['identity'] = $memberIdentity;
+                }
+                if (! ManufacturerNormFacts::sameFacts($member->manufacturer_norms, $column)) {
+                    $member->manufacturer_norms = $column;
+                    $member->save();
+                    $runWrites['manufacturer_norms'] = $member->manufacturer_norms;
+                    $this->attemptLog()->add('desc', 'normy producenta jak u lidera: '.implode(', ', ManufacturerNormFacts::norms($column)));
+                }
+            }
+
+            // listy wspólne z wersji lidera + fakty z cennika członka; atrybuty i rozmiar per karta (rozmiar lidera nie
+            // przechodzi — członek ma własny z cennika i ze swoich specs)
+            $facts = $this->cardFacts()->for($member);
+            $memberKey = $this->modelKeys()->for($member);
+            // Nota modelu każe liderowi wpisywać warianty do specs („Grubość: 9,5 mm”, „Kolor: Czarny”, „Wymiary: …”) —
+            // linia lidera z etykietą, którą członek ma we własnych faktach z cennika, to wartość innego wariantu i odpada;
+            // linie bez takiej etykiety (np. „Faktura: bąbelkowa”) zostają wspólne.
+            $ownLabels = [];
+            foreach ($facts['specs'] as $line) {
+                $label = self::specLabel($line);
+                if ($label !== null) {
+                    $ownLabels[$label] = true;
+                }
+            }
+            $specs = [];
+            foreach ($this->stringList($leaderPayload['specs'] ?? null) as $line) {
+                $label = self::specLabel($line);
+                if ($label !== null && isset($ownLabels[$label])) {
+                    continue;
+                }
+                $specs[] = $line;
+            }
+            foreach ($facts['specs'] as $line) {
+                if (! in_array($line, $specs, true)) {
+                    $specs[] = $line;
+                }
+            }
+            // atrybuty tożsamości karty nie przechodzą z lidera: kod wyrobu liczy normalizator z SKU członka (lider
+            // „AF010001” u członka to fałszywy atrybut w dopasowaniu przetargów), rozmiar — z cennika i specs członka
+            $leaderAttributes = is_array($leaderPayload['attributes'] ?? null) ? $leaderPayload['attributes'] : null;
+            if ($leaderAttributes !== null) {
+                unset($leaderAttributes['rozmiar'], $leaderAttributes['kod_producenta']);
+            }
+            $fields = $this->payloadFromExtraction($member, [
+                'features' => $this->stringList($leaderPayload['features'] ?? null),
+                'norms' => $this->stringList($leaderPayload['norms'] ?? null),
+                'certificates' => $this->stringList($leaderPayload['certificates'] ?? null),
+                'materials' => $this->stringList($leaderPayload['materials'] ?? null),
+                'use_cases' => $this->stringList($leaderPayload['use_cases'] ?? null),
+                'specs' => $specs,
+                'attributes' => $leaderAttributes,
+            ], $description, []);
+            $lists = $fields['lists'];
+
+            // dowody na tekstach lidera (plus normy producenta i atrybuty cennika członka — evidenceDocs) + wiersze z pliku
+            // Liczba dowodów (decyzja publishRun, evidence_count wersji) tylko ze stron — tak liczy baza etapu 1; fakty
+            // z cennika to dane samej karty (tautologia) i nie mogą zasłonić słabszego pokrycia ze stron lidera —
+            // zostają w evidence ze źródłem price_list, liczone osobno (evidence_summary.price_list).
+            $evidence = $this->evidence()->extract($lists, $this->evidenceDocs($member, $pages));
+            $entries = [...$evidence['entries'], ...$facts['evidence']];
+            $explicit = (int) $evidence['explicit'];
+            $priceListEvidence = count($facts['evidence']);
+
+            if ($this->writeNormsColumn($member, $lists['norms'])) {
+                $runWrites['norms'] = $member->norms;
+            }
+
+            // zdjęcie w kolorze karty: adres z galerii stron lidera do pobrania albo kopia pliku lidera bez sieci
+            if ($leaderProposal) {
+                $pick = ['url' => null, 'copy_of' => null, 'reason' => 'lider skończył propozycją — bez plików z jego karty'];
+            } else {
+                $pageImageUrls = array_values(array_filter((array) ($leaderMeta['page_image_urls'] ?? []), 'is_string'));
+                $leaderImages = ProductImage::query()
+                    ->where('product_id', $leader->id)
+                    ->whereNull('b2b_account_id')
+                    ->orderByDesc('is_primary')
+                    ->orderBy('sort_order')
+                    ->orderBy('id')
+                    ->get()
+                    ->all();
+                // kolory karty jako zbiór (karta dwubarwna to inny kolor niż jednobarwna); rdzeń modelu do nazwy pliku
+                $memberColours = is_array($facts['colours'] ?? null)
+                    ? array_values(array_filter($facts['colours'], 'is_string'))
+                    : (($facts['colour'] ?? null) !== null ? [(string) $facts['colour']] : []);
+                $pick = $this->imagePicker()->pickFor($member, $memberColours, $pageImageUrls, $leaderImages, $memberKey?->stem);
+            }
+            $savedImages = [];
+            $imageNote = $pick['reason'];
+            if ($pick['url'] !== null) {
+                $savedImages = $this->images->downloadMany($member, [$pick['url']], 1);
+                if ($savedImages === []) {
+                    $failure = $this->imageFailureSummary([$pick['url']]);
+                    $imageNote .= ' — nie pobrano'.($failure !== '' ? ' ('.$failure.')' : '');
+                }
+            } elseif ($pick['copy_of'] !== null) {
+                $copy = $this->copier()->copyImage($leader, $pick['copy_of'], $member);
+                if ($copy !== null) {
+                    $savedImages = [$copy];
+                } else {
+                    $imageNote .= ' — pliku lidera nie ma na dysku albo karta go odrzuciła';
+                }
+            }
+            $this->attemptLog()->add('image', $imageNote, urls: $pick['url'] !== null ? [$pick['url']] : []);
+
+            // dokumenty lidera z internetu kopią (ten sam plik albo adres już na karcie = istniejący wiersz)
+            $leaderDocIds = $leaderProposal ? [] : ProductDocument::query()
+                ->where('product_id', $leader->id)
+                ->whereNull('b2b_account_id')
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->limit(self::MAX_PRODUCT_DOCUMENTS)
+                ->pluck('id')
+                ->map(static fn ($id): int => (int) $id)
+                ->all();
+            $savedDocs = $leaderDocIds !== [] ? $this->copier()->copyDocuments($leader, $leaderDocIds, $member) : [];
+            $this->assertBatchNotCancelled($batchId);
+
+            $leaderGroup = is_array($leaderPayload['model_group'] ?? null) ? $leaderPayload['model_group'] : [];
+            $members = (int) ($leaderGroup['members'] ?? 0);
+            if ($members < 1 && $batchId !== null && self::batchItemsHaveModelColumns()) {
+                $members = ProductEnrichmentBatchItem::query()->where('batch_id', $batchId)->where('model_leader_id', $leader->id)->count();
+            }
+            $payload = [
+                ...$lists,
+                'certificates' => CertificateLabels::relabel($lists['certificates'], $savedDocs),
+                'source_urls' => array_values(array_filter((array) ($leaderPayload['source_urls'] ?? []), 'is_string')),
+                'primary_source_url' => $primaryUrl,
+                'primary_source_kind' => $primaryKind,
+                'confidence' => (float) ($leaderPayload['confidence'] ?? 0),
+                'from_cache' => false,
+                'document_urls' => array_values(array_filter(array_map(
+                    static fn ($d): ?string => is_string($d->source_url) ? $d->source_url : null,
+                    $savedDocs
+                ))),
+                'identity' => $identity,
+                'evidence' => $entries,
+                'evidence_summary' => ['explicit' => $explicit, 'inferred' => (int) $evidence['inferred'], 'price_list' => $priceListEvidence],
+                'completeness' => $evidence['completeness'],
+                'model_group' => [
+                    'key' => trim((string) ($leaderGroup['key'] ?? '')) !== '' ? (string) $leaderGroup['key'] : (string) ($memberKey?->key ?? ''),
+                    'stem' => trim((string) ($leaderGroup['stem'] ?? '')) !== '' ? (string) $leaderGroup['stem'] : (string) ($memberKey?->stem ?? ''),
+                    'family' => (string) ($leaderGroup['family'] ?? ($memberKey?->family ?? '')),
+                    'leader_product_id' => (int) $leader->id,
+                    'leader_version_id' => (int) $leaderVersion->id,
+                    'members' => $members,
+                    'shared' => true,
+                ],
+            ];
+            foreach (['price_list_sources', 'dropped_norm_claims', 'unverified_claims'] as $key) {
+                if (is_array($leaderPayload[$key] ?? null) && $leaderPayload[$key] !== []) {
+                    $payload[$key] = $leaderPayload[$key];
+                }
+            }
+
+            $keptPreviousImages = $savedImages === [] && $previousWebFiles !== null && $previousWebFiles['images'] !== [];
+            if ($keptPreviousImages) {
+                $this->attemptLog()->add('image', 'nowego zdjęcia brak — zostaje poprzednie zdjęcie karty');
+            }
+            $trace = $this->attemptLog()->snapshot($member);
+            $candidate = [
+                'identity' => $identity,
+                'evidence_count' => $explicit,
+                'primary_source_url' => $primaryUrl,
+                'manual_url' => $primaryUrl !== null && $member->isTrustedShopUrl($primaryUrl),
+            ];
+            $versionData = [
+                'description' => $description,
+                'enrichment_payload' => $payload,
+                'enrichment_trace' => $trace,
+                'packaging' => $fields['packaging'],
+                'primary_source_url' => $primaryUrl,
+                'batch_id' => $batchId,
+            ];
+            $saved = [
+                'description' => $description,
+                'enrichment_payload' => $payload,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+                'enrichment_error' => $savedImages === []
+                    ? ($keptPreviousImages ? 'Opis OK, nowego zdjęcia nie udało się pobrać — zostaje poprzednie' : 'Opis OK, nie udało się pobrać zdjęcia')
+                        .' ('.$imageNote.').'
+                    : null,
+                'enrichment_trace' => $trace,
+            ];
+            if ($fields['packaging'] !== null) {
+                $saved['packaging'] = $fields['packaging'];
+            }
+            // decyzja per karta pod blokadą (publishRun): twarda baza i słabszy werdykt → propozycja, karta wraca do stanu
+            // sprzed przebiegu; inaczej zapis z pochodzeniem model_shared
+            $version = $this->publishDescription($member, ProductDescriptionVersion::ORIGIN_MODEL_SHARED, $candidate, $versionData, $saved, $before, runWrites: $runWrites);
+            if ($version === null) {
+                $this->keepAsProposal($member, $before, $batchId, $versionData, $this->lastRunDecision, $runWrites, $identity, $pages, $primaryUrl, $primaryKind, ProductDescriptionVersion::ORIGIN_MODEL_SHARED);
+
+                return ApplyModelDescriptionJob::RESULT_PROPOSED;
+            }
+            $published = true;
+            $this->dropPreviousWebFiles($member, $previousWebFiles, $savedImages, $savedDocs);
+            ReindexProductEmbeddingJob::dispatch($member->id, true);
+            // te same teksty (sha256) co u lidera, wiersze per karta z werdyktem członka
+            $this->recordSourceDocuments($member, $pages, $identity, $primaryUrl, $primaryKind, [], (int) $version->id);
+            Log::info('Model description applied to member', [
+                'product_id' => $member->id,
+                'sku' => $member->sku,
+                'leader_id' => $leader->id,
+                'leader_version_id' => $leaderVersion->id,
+                'version_id' => $version->id,
+                'verdict' => $identity['verdict'],
+                'image' => $pick['reason'],
+            ]);
+
+            return ApplyModelDescriptionJob::RESULT_PUBLISHED;
+        } catch (Throwable $e) {
+            // opis się nie zapisał — pliki dodane przez ten przebieg znikają, stare zostają; kartę ustawia wołający
+            if (! $published) {
+                try {
+                    $this->dropWebFilesAddedSince($member, $before['web_files']);
+                } catch (Throwable) {
+                    // jak w enrichProduct — pliki sprzątnie kolejny przebieg
+                }
+            }
+            throw $e;
+        } finally {
+            $this->liveProgress()->clear();
+        }
     }
 
     private function enrichmentStatusForFailure(Throwable $e): string
@@ -1995,7 +2639,9 @@ final class ProductEnrichmentService
         ?callable $stillValid = null,
         array $runWrites = [],
     ): ?ProductDescriptionVersion {
-        $versionData[DescriptionVersionStore::META_KEY] = $this->versions()->versionMeta($product, $before, $runWrites);
+        // dane techniczne przebiegu (pliki, normy producenta) obok tych od wołającego (page_image_urls lidera modelu)
+        $versionData[DescriptionVersionStore::META_KEY] = $this->versions()->versionMeta($product, $before, $runWrites)
+            + (is_array($versionData[DescriptionVersionStore::META_KEY] ?? null) ? $versionData[DescriptionVersionStore::META_KEY] : []);
         $this->lastRunDecision = null;
         $abandoned = new RuntimeException('karta zmieniona w trakcie przebiegu — opis nie zapisany');
         try {
@@ -2033,6 +2679,7 @@ final class ProductEnrichmentService
             return null;
         }
         $this->lastRunDecision = $result['decision'];
+        $this->lastRunVersion = $result['version'];
 
         return $result['version'];
     }
@@ -2051,6 +2698,7 @@ final class ProductEnrichmentService
      * @param  array<string, mixed>  $runWrites  kolumna => wartość zapisana przez ten przebieg (norms, manufacturer_norms)
      * @param  array<string, mixed>  $identity
      * @param  list<array<string, mixed>>  $sourcePages
+     * @param  string  $origin  pochodzenie wersji: przebieg karty (enrichment) albo opis członka modelu (model_shared)
      */
     private function keepAsProposal(
         Product $product,
@@ -2063,6 +2711,7 @@ final class ProductEnrichmentService
         array $sourcePages,
         ?string $primarySourceUrl,
         ?string $primarySourceKind,
+        string $origin = ProductDescriptionVersion::ORIGIN_ENRICHMENT,
     ): void {
         // pliki przebiegu znikają razem z propozycją — dane techniczne publikacji (`_version`) jej nie dotyczą
         unset($versionData[DescriptionVersionStore::META_KEY]);
@@ -2070,9 +2719,10 @@ final class ProductEnrichmentService
         $version = $this->versions()->record(
             $product,
             ProductDescriptionVersion::STATUS_PROPOSED,
-            ProductDescriptionVersion::ORIGIN_ENRICHMENT,
+            $origin,
             [...$versionData, 'review_reason' => $decision['review_reason'], 'reason' => $decision['reason']],
         );
+        $this->lastRunVersion = $version;
         $this->dropWebFilesAddedSince($product, $before['web_files']);
         $note = self::proposalNote($decision['review_reason']);
         DB::transaction(function () use ($product, $before, $batchId, $decision, $runWrites, $note): void {
@@ -3201,6 +3851,11 @@ final class ProductEnrichmentService
         $scored = [];
         $skuNorm = mb_strtolower(trim($sku));
         $nameBits = array_values(array_filter(preg_split('/[\s\-®™]+/u', mb_strtolower($name)) ?: [], static fn ($w): bool => mb_strlen($w) >= 4));
+        // Kolory karty z nazwy — tylko marka z opisem wspólnym dla modelu (etap 2, Coba: strona modelu pokazuje zwykle
+        // czarny, a nazwy plików galerii niosą kolor). U innych marek nazwa pliku bywa „glove-on-white-background”,
+        // „navy-yellow” przy karcie żółto-granatowej — kara zostawiała kartę bez zdjęcia (Portwest/Mascot/JHK). Zbiory:
+        // karta dwubarwna to inny kolor niż jednobarwna. Nazwa bez koloru — bez tej reguły.
+        $cardColours = $product !== null && $this->sharesModelDescription($product) ? ColourWords::allInName($name) : [];
 
         $push = static function (string $url, int $bonus) use (&$scored): void {
             $scored[$url] = max($scored[$url] ?? 0, $bonus);
@@ -3295,6 +3950,15 @@ final class ProductEnrichmentService
             if (preg_match('#(?<!/templates)/images/products/#', $u) === 1
                 && ! str_contains($u, 'sites/default')) {
                 $score -= 80;
+            }
+            if ($cardColours !== []) {
+                $fileColours = ColourWords::allInUrl($url);
+                if (ColourWords::sameSet($fileColours, $cardColours)) {
+                    $score += 30;
+                } elseif ($fileColours !== [] && array_intersect($fileColours, $cardColours) === []) {
+                    // plik mówi o kolorach i żaden nie jest kolorem karty — inny wariant
+                    $score -= 50;
+                }
             }
             if ($score >= 20) {
                 $ranked[] = ['url' => $url, 'score' => $score];
@@ -5835,8 +6499,11 @@ final class ProductEnrichmentService
 
     /**
      * @param  iterable<int, Product>  $products
+     * @param  list<ModelGroup>  $groups  plan partii po modelach (etap 2): klucz modelu i lider grupy zamrożone w pozycjach —
+     *                                    karta bez klucza (grupa z key '') dostaje model_key null i jest własnym liderem;
+     *                                    bez planu obie kolumny zostają puste
      */
-    public function seedBatchItems(ProductEnrichmentBatch $batch, iterable $products): void
+    public function seedBatchItems(ProductEnrichmentBatch $batch, iterable $products, array $groups = []): void
     {
         if (! Schema::hasTable('product_enrichment_batch_items')) {
             return;
@@ -5844,6 +6511,14 @@ final class ProductEnrichmentService
         $now = now();
         $rows = [];
         $withPrevious = Schema::hasColumn('product_enrichment_batch_items', 'previous_status');
+        $withModel = $groups !== [] && self::batchItemsHaveModelColumns();
+        /** @var array<int, array{key: ?string, leader_id: int}> $modelOf */
+        $modelOf = [];
+        foreach ($groups as $group) {
+            foreach ($group->memberIds as $memberId) {
+                $modelOf[(int) $memberId] = ['key' => $group->key !== '' ? mb_substr($group->key, 0, 160) : null, 'leader_id' => (int) $group->leaderId];
+            }
+        }
         foreach ($products as $product) {
             $row = [
                 'batch_id' => $batch->id,
@@ -5861,6 +6536,12 @@ final class ProductEnrichmentService
                 $known = in_array($previous, self::RESTORABLE_STATUSES, true);
                 $row['previous_status'] = $known ? $previous : null;
                 $row['previous_error'] = $known ? $product->enrichment_error : null;
+            }
+            if ($withModel) {
+                $model = $modelOf[(int) $product->id] ?? null;
+                $row['model_key'] = $model['key'] ?? null;
+                $row['model_leader_id'] = $model['leader_id'] ?? null;
+                $row['model_leader_version_id'] = null;
             }
             $rows[] = $row;
         }
@@ -6103,6 +6784,18 @@ final class ProductEnrichmentService
         return $has;
     }
 
+    /** Kolumny opisu wspólnego modelu w pozycjach partii (migracja etapu 2) — bez nich plan po modelach nie jest zapisywany. */
+    private static function batchItemsHaveModelColumns(): bool
+    {
+        static $has = false;
+        if (! $has) {
+            $has = Schema::hasTable('product_enrichment_batch_items')
+                && Schema::hasColumn('product_enrichment_batch_items', 'model_leader_version_id');
+        }
+
+        return $has;
+    }
+
     /**
      * Natychmiastowe zatrzymanie batcha: flaga + usunięcie oczekujących jobów z kolejki.
      *
@@ -6283,8 +6976,130 @@ final class ProductEnrichmentService
                     'enrichment_error' => 'Przebieg przerwany — proces zniknął bez zapisania wyniku.',
                 ]);
         }
+        // członkowie modelu bez lidera (etap 2) — osobny licznik w dzienniku, wynik jak dotąd: zwolnione karty
+        $this->handOverOrphanedModelMembers();
 
         return $released;
+    }
+
+    /**
+     * Zabity lider modelu (etap 2 opisów z cenników): członkowie modelu z pozycją partii „queued” bez własnego zadania,
+     * których lider w tej partii już nie żyje — ani pozycja z kartą nie czekają/nie trwają (sama pozycja „running” po
+     * zniknięciu zadania lidera nie liczy się: kartę zwolnił releaseStaleRunningProducts), ani nie ma zadania (prefetch,
+     * przebieg lidera, opis członków). Pozycja z numerem wersji lidera → zadanie opisu członków od nowa
+     * (ApplyModelDescriptionJob); bez numeru, ale z wersją lidera z tej partii (latestOfRun) → to samo z jej numerem;
+     * dopiero bez wersji → sztafeta (kolejny członek liderem, prefetch). Pozycja musi stać bez zmiany STALE_RUNNING_AFTER_MINUTES: numer
+     * wersji wpisuje EnrichProductJob tuż przed zleceniem zadania, więc świeża pozycja znaczy zadanie w drodze. Raz na
+     * (partia, lider) przez 10 min (Cache::add) — kolejne odpytania panelu (activeBatches) nie dublują zlecenia.
+     * Partia przerwana: członków przywraca anulowanie, nie sztafeta.
+     *
+     * @return int ilu członków obsłużono
+     */
+    public function handOverOrphanedModelMembers(): int
+    {
+        if (! self::batchItemsHaveModelColumns()) {
+            return 0;
+        }
+        // tylko partie otwarte (wołane przy każdym odpytaniu panelu — po batch_id zapytanie trafia w indeks pozycji)
+        $openBatchIds = ProductEnrichmentBatch::query()
+            ->whereIn('status', [ProductEnrichmentBatch::STATUS_QUEUED, ProductEnrichmentBatch::STATUS_RUNNING])
+            ->orderByDesc('id')
+            ->limit(50)
+            ->pluck('id')
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
+        if ($openBatchIds === []) {
+            return 0;
+        }
+        $rows = ProductEnrichmentBatchItem::query()
+            ->whereIntegerInRaw('batch_id', $openBatchIds)
+            ->where('status', ProductEnrichmentBatchItem::STATUS_QUEUED)
+            ->whereNotNull('model_leader_id')
+            ->whereColumn('model_leader_id', '!=', 'product_id')
+            ->where('updated_at', '<', now()->subMinutes(self::STALE_RUNNING_AFTER_MINUTES))
+            ->orderBy('batch_id')
+            ->orderBy('model_leader_id')
+            ->orderBy('product_id')
+            ->get(['batch_id', 'product_id', 'model_leader_id', 'model_leader_version_id']);
+        if ($rows->isEmpty()) {
+            return 0;
+        }
+
+        $handled = 0;
+        /** @var array<int, ProductEnrichmentBatch|null> $batches */
+        $batches = [];
+        foreach ($rows->groupBy(static fn (ProductEnrichmentBatchItem $row): string => $row->batch_id.':'.$row->model_leader_id) as $group) {
+            $batchId = (int) $group->first()->batch_id;
+            $leaderId = (int) $group->first()->model_leader_id;
+            if (! array_key_exists($batchId, $batches)) {
+                $batches[$batchId] = ProductEnrichmentBatch::query()->find($batchId);
+            }
+            $batch = $batches[$batchId];
+            if ($batch === null || $batch->isCancelled()) {
+                continue;
+            }
+            $memberIds = [];
+            $versionId = 0;
+            foreach ($group as $row) {
+                // członek z własnym zadaniem (czekanie na wyszukiwarkę, ponowienie) to nie osierocony członek
+                if ($this->productHasPendingJob((int) $row->product_id)) {
+                    continue;
+                }
+                $memberIds[] = (int) $row->product_id;
+                $versionId = max($versionId, (int) ($row->model_leader_version_id ?? 0));
+            }
+            if ($memberIds === []) {
+                continue;
+            }
+            // Lider jeszcze żyje: pozycja czeka albo trwa I karta lidera też (zadanie lidera, które zniknęło, zostawia
+            // pozycję „running”, a kartę zwalnia releaseStaleRunningProducts do „failed” — sama pozycja to za mało), albo
+            // zadanie prefetchu/przebiegu w kolejce, albo opis członków już zlecony.
+            $openItem = [ProductEnrichmentBatchItem::STATUS_QUEUED, ProductEnrichmentBatchItem::STATUS_RUNNING];
+            $openCard = [Product::ENRICHMENT_QUEUED, Product::ENRICHMENT_RUNNING];
+            $leaderStatus = (string) ProductEnrichmentBatchItem::query()
+                ->where('batch_id', $batchId)
+                ->where('product_id', $leaderId)
+                ->value('status');
+            $leaderCard = (string) Product::query()->whereKey($leaderId)->value('enrichment_status');
+            if ((in_array($leaderStatus, $openItem, true) && in_array($leaderCard, $openCard, true))
+                || $this->productHasPendingJob($leaderId)
+                || $this->modelJobPending($batchId, $leaderId)) {
+                continue;
+            }
+            if (! Cache::add('enrichment:model-handover:'.$batchId.':'.$leaderId, 1, now()->addMinutes(10))) {
+                continue;
+            }
+            if ($versionId <= 0) {
+                // lider zdążył zapisać wersję w tej partii (zapis albo propozycja), ale worker padł przed wpisaniem jej
+                // członkom — ta wersja jest podstawą, sztafeta dopiero bez niej
+                $run = ProductDescriptionVersion::latestOfRun($leaderId, $batchId);
+                if ($run !== null) {
+                    $versionId = (int) $run->id;
+                    ProductEnrichmentBatchItem::query()
+                        ->where('batch_id', $batchId)
+                        ->whereIntegerInRaw('product_id', $memberIds)
+                        ->update(['model_leader_version_id' => $versionId]);
+                }
+            }
+            if ($versionId > 0) {
+                ApplyModelDescriptionJob::dispatch($batchId, $leaderId, $versionId);
+            } else {
+                $next = $this->planner()->nextLeader($batchId, $leaderId);
+                if ($next === null) {
+                    continue;
+                }
+                PrefetchProductSourcesJob::dispatch($next, $batchId, (bool) $batch->force);
+            }
+            $handled += count($memberIds);
+            Log::info('Model members handed over after lost leader', [
+                'batch_id' => $batchId,
+                'leader_id' => $leaderId,
+                'leader_version_id' => $versionId > 0 ? $versionId : null,
+                'members' => $memberIds,
+            ]);
+        }
+
+        return $handled;
     }
 
     private function productHasPendingJob(int $productId): bool
@@ -6296,6 +7111,18 @@ final class ProductEnrichmentService
         // payload to JSON z serializacją PHP w środku — cudzysłowy bywają jako \"
         return DB::table('jobs')
             ->where('payload', 'like', '%productId%;i:'.$productId.';%')
+            ->exists();
+    }
+
+    /** Zadanie opisu członków modelu (ApplyModelDescriptionJob) tej partii i tego lidera czeka w kolejce. */
+    private function modelJobPending(int $batchId, int $leaderId): bool
+    {
+        if (! Schema::hasTable('jobs')) {
+            return false;
+        }
+
+        return $this->jobsPayloadQuery($batchId)
+            ->where('payload', 'like', '%leaderId%;i:'.$leaderId.';%')
             ->exists();
     }
 
@@ -6609,9 +7436,11 @@ SYS,
      * @param  list<array{url: string, text: string}>  $pageSnippets
      * @param  string|null  $sourcesNote  opis źródeł zamiast „Wyniki wyszukiwania / Strony (po filtrze AI)” — dla
      *                                    opisu ze źródeł B2B, gdzie ani wyszukiwania, ani filtra nie było
+     * @param  array<string, mixed>|null  $modelContext  nota modelu lidera grupy (ModelGroupPlanner::contextFor, etap 2) —
+     *                                                   tylko z nią polecenie dostaje listę wariantów; bez niej treść jak dotąd
      * @return array<string, mixed>
      */
-    private function extractWithLlm(Product $product, array $searchResults, array $pageSnippets, ?string $sourcesNote = null): array
+    private function extractWithLlm(Product $product, array $searchResults, array $pageSnippets, ?string $sourcesNote = null, ?array $modelContext = null): array
     {
         // Nie ma tekstu źródła — nie ma opisu. Model z samą nazwą z cennika dopisuje wyrobowi cechy z pamięci.
         $withText = array_filter($pageSnippets, static fn ($page): bool => is_array($page) && trim((string) ($page['text'] ?? '')) !== '');
@@ -6642,6 +7471,7 @@ SYS,
                 'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}"
                     .$this->manufacturerModelHint($product)."\nEAN: ".($product->ean ?? '—')
                     .$this->manufacturerNormsNote($this->manufacturerNormFactsFromPages($pageSnippets, $product))
+                    .($modelContext !== null ? $this->modelContextNote($modelContext) : '')
                     .($sourcesNote !== null
                         ? "\n\n{$sourcesNote}\n\nTeksty źródeł:\n{$pagesJson}"
                         : "\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}"),

@@ -14,6 +14,7 @@ use App\Services\B2b\B2bAccountPriceList;
 use App\Services\Enrichment\CatalogSearchHostService;
 use App\Services\Enrichment\PriceListDescriptionSources;
 use App\Services\Enrichment\PriceListSourceSettings;
+use App\Services\Enrichment\ProductModelKey;
 use Carbon\CarbonImmutable;
 
 /**
@@ -27,6 +28,7 @@ final class PriceListFileSources
         private readonly PriceListDescriptionSources $sources,
         private readonly B2bAccountPriceList $b2bLists,
         private readonly CatalogSearchHostService $searchHosts,
+        private readonly ProductModelKey $modelKeys,
     ) {}
 
     /**
@@ -187,7 +189,35 @@ final class PriceListFileSources
             'identity' => $identity,
             'to_review' => $toReview,
             'with_image' => $this->cardsWithImage(array_keys($cards)),
+            // modele cennika (etap 2): dla marki z grupowaniem mniej niż kart — tyle przebiegów modelu językowego
+            // potrzebuje pełne pobranie; dla marki bez grupowania równe liczbie kart
+            'models' => $this->modelCount(array_keys($cards)),
         ];
+    }
+
+    /**
+     * Różne klucze modelu (ProductModelKey, w locie z sku, nazwy i producenta) + karty bez klucza (karta = model).
+     * Porcjami po 1000 kart, w pamięci tylko klucze.
+     *
+     * @param  list<int>  $ids
+     */
+    private function modelCount(array $ids): int
+    {
+        $keys = [];
+        $withoutKey = 0;
+        foreach (array_chunk($ids, 1000) as $chunk) {
+            $products = Product::query()->whereIntegerInRaw('id', $chunk)->get(['id', 'sku', 'name', 'manufacturer']);
+            foreach ($products as $product) {
+                $key = $this->modelKeys->for($product);
+                if ($key === null) {
+                    $withoutKey++;
+                } else {
+                    $keys[$key->key] = true;
+                }
+            }
+        }
+
+        return count($keys) + $withoutKey;
     }
 
     /**

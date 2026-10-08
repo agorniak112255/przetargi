@@ -5,7 +5,7 @@ import { PriceListsTabs } from '../components/PriceListsTabs'
 import { canAny } from '../lib/api'
 import { plural } from '../lib/plural'
 import { formatDateTime } from '../lib/priceChange'
-import { siteLabel } from '../lib/priceListSources'
+import { MODEL_NOTE, siteLabel } from '../lib/priceListSources'
 import {
   fetchDescriptionVersions,
   fetchReviews,
@@ -23,6 +23,7 @@ import {
   type ReviewListResponse,
   type ReviewReason,
   type ReviewRow,
+  type ReviewRowModel,
 } from '../lib/productReview'
 
 const PER_PAGE = 50
@@ -52,6 +53,7 @@ const ORIGIN_LABEL: Record<string, string> = {
   review_approve: 'zatwierdzenie w przeglądzie',
   legacy_baseline: 'opis sprzed zapisu wersji',
   stored_sources: 'z zapisanych stron',
+  model_shared: 'opis wspólny modelu — przepisany z karty, która pobrała go dla modelu',
 }
 
 const DECISION_LABEL: Record<NonNullable<DescriptionVersion['decision']>, string> = {
@@ -94,6 +96,50 @@ function errorText(ex: unknown, fallback: string): string {
   return ex instanceof Error && ex.message ? ex.message : fallback
 }
 
+/** Sąsiednie wiersze listy o tym samym kluczu modelu; karta bez modelu stoi sama (model = null). */
+type ModelGroup = { model: ReviewRowModel | null; rows: ReviewRow[] }
+
+function groupByModel(rows: ReviewRow[]): ModelGroup[] {
+  const groups: ModelGroup[] = []
+  for (const row of rows) {
+    const last = groups[groups.length - 1]
+    if (row.model && last?.model && last.model.key === row.model.key) {
+      last.rows.push(row)
+    } else {
+      groups.push({ model: row.model ?? null, rows: [row] })
+    }
+  }
+  return groups
+}
+
+/** Skrót tekstu wersji, o której jest decyzja w wierszu: propozycja, a bez niej opis z karty. */
+function decidedTextOf(row: ReviewRow): string | null {
+  return (row.proposal ?? row.published)?.description_sha1 ?? null
+}
+
+/**
+ * Rodzaj decyzji zbiorczej dla grupy modelu: 'proposal' = każda karta ma propozycję (Zatwierdź / Odrzuć propozycje),
+ * 'published' = żadna nie ma (tylko Zatwierdź). Null = jedna karta albo różne powody / rodzaje decyzji — wtedy
+ * decyzje tylko per karta. Null także wtedy, gdy decyzja NIE dotyczy tego samego tekstu na wszystkich kartach (różne
+ * propozycje albo różne opisy, np. pobrane osobno, każda ze swojej strony — jedno „Zatwierdź” zatwierdziłoby różne
+ * teksty naraz i zdjęło blokady adresów). Propozycje od jednego lidera mają ten sam tekst, więc przechodzą.
+ */
+function bulkKind(model: ReviewRowModel | null, rows: ReviewRow[]): 'proposal' | 'published' | null {
+  if (!model || rows.length < 2) return null
+  const [first] = rows
+  const withProposal = first.proposal !== null
+  const text = decidedTextOf(first)
+  const uniform =
+    text !== null &&
+    rows.every(
+      (r) =>
+        r.review_reason === first.review_reason &&
+        (r.proposal !== null) === withProposal &&
+        decidedTextOf(r) === text,
+    )
+  return uniform ? (withProposal ? 'proposal' : 'published') : null
+}
+
 /**
  * Cenniki → „Do przeglądu”: karty cenników z plików, których opis handlowiec powinien sprawdzić — opis ze strony bez
  * kodu wyrobu albo niepotwierdzonej, propozycja gorsza od obecnego opisu, propozycja z odrzuconej strony.
@@ -116,6 +162,10 @@ export function PriceListsReview() {
   const [open, setOpen] = useState<Record<number, boolean>>({})
   /** Karta, przy której trwa akcja; null = nic w toku. */
   const [busy, setBusy] = useState<number | null>(null)
+  /** Decyzja zbiorcza w toku („Zastosuj do N kart modelu”): klucz modelu, decyzja i która karta z ilu. */
+  const [bulk, setBulk] = useState<{ key: string; action: 'approve' | 'reject'; step: number; total: number } | null>(
+    null,
+  )
   /** Karta z otwartym polem „Wskaż właściwą stronę”. */
   const [urlFor, setUrlFor] = useState<number | null>(null)
   const [urlValue, setUrlValue] = useState('')
@@ -169,6 +219,14 @@ export function PriceListsReview() {
   }, [load])
 
   const rows = useMemo(() => result?.data ?? [], [result])
+  /** Grupa modelu każdego wiersza (sąsiednie wiersze o tym samym kluczu) — nagłówek stoi przed pierwszym wierszem grupy. */
+  const rowGroup = useMemo(() => {
+    const map = new Map<number, ModelGroup>()
+    for (const group of groupByModel(rows)) {
+      for (const row of group.rows) map.set(row.product_id, group)
+    }
+    return map
+  }, [rows])
   const meta = result?.meta ?? null
   const counts = result?.counts ?? null
   const lastPage = meta ? Math.max(1, Math.ceil(meta.total / meta.per_page)) : 1
@@ -224,6 +282,66 @@ export function PriceListsReview() {
     }
   }
 
+  /**
+   * „Zastosuj do N kart modelu”: ta sama decyzja zapisana kolejno dla każdej karty grupy istniejącym wywołaniem per
+   * karta (bez nowego endpointu). Błąd jednej karty (409: od wczytania listy doszła propozycja albo opis z B2B; 422)
+   * nie przerywa reszty — komunikat zbiorczy wymienia karty, którym się nie udało, z odpowiedzią serwera.
+   * Odrzucenie opisu z karty (bez propozycji) zbiorczo nie istnieje: każde blokuje stronę i zleca pobranie —
+   * decyzja per karta.
+   */
+  async function actGroup(model: ReviewRowModel, groupRows: ReviewRow[], action: 'approve' | 'reject') {
+    if (busy !== null || bulk !== null) return
+    const kind = bulkKind(model, groupRows)
+    if (kind === null || (action === 'reject' && kind !== 'proposal')) return
+    const count = groupRows.length
+    const question =
+      action === 'approve'
+        ? kind === 'proposal'
+          ? `Zastąpić obecne opisy ${count} kart modelu „${model.stem}” nowymi opisami (propozycjami)? Decyzja zostanie zapisana kolejno dla każdej karty.`
+          : `Opisy ${count} kart modelu „${model.stem}” są dobre i zostają na kartach? Decyzja zostanie zapisana kolejno dla każdej karty.`
+        : `Odrzucić nowe opisy ${count} kart modelu „${model.stem}”? Obecne opisy zostają na kartach. Decyzja zostanie zapisana kolejno dla każdej karty.`
+    if (!window.confirm(question)) return
+    setErr('')
+    setMsg('')
+    let ok = 0
+    const failures: string[] = []
+    let filesFromPrevious = false
+    try {
+      for (let i = 0; i < groupRows.length; i++) {
+        const row = groupRows[i]
+        setBulk({ key: model.key, action, step: i + 1, total: count })
+        setBusy(row.product_id)
+        const versionId = row.proposal?.version_id ?? row.published?.version_id ?? null
+        try {
+          const res = await reviewProduct(row.product_id, versionId ? { action, version_id: versionId } : { action })
+          ok++
+          if (res.files_from_previous) filesFromPrevious = true
+        } catch (ex) {
+          failures.push(`${row.sku} — ${errorText(ex, 'nie udało się zapisać decyzji')}`)
+        }
+      }
+    } finally {
+      setBusy(null)
+      setBulk(null)
+    }
+    setDetailsToken((t) => t + 1)
+    // komunikaty po odświeżeniu listy — load() czyści błąd na starcie, a lista nieudanych kart ma zostać widoczna
+    await load()
+    if (ok > 0) {
+      setMsg(
+        (action === 'approve'
+          ? `Zatwierdzono opisy ${ok} z ${count} kart modelu „${model.stem}”.`
+          : `Odrzucono nowe opisy ${ok} z ${count} kart modelu „${model.stem}” — obecne opisy zostają.`) +
+          (filesFromPrevious ? ` ${FILES_FROM_PREVIOUS_NOTE}` : ''),
+      )
+    }
+    if (failures.length > 0) {
+      setErr(
+        `Nie udało się zapisać decyzji dla ${failures.length} z ${count} kart modelu „${model.stem}”: ${failures.join('; ')}`,
+      )
+    }
+  }
+
   async function submitUrl(e: FormEvent, row: ReviewRow) {
     e.preventDefault()
     const url = urlValue.trim()
@@ -268,7 +386,9 @@ export function PriceListsReview() {
       <p className="mb-3 max-w-4xl text-xs text-slate-500">
         Karty z cenników z plików, których opis warto sprawdzić: program zapisał opis ze strony bez kodu wyrobu albo
         niepotwierdzonej, albo nowe pobranie dało opis gorszy od obecnego. Otwórz stronę źródłową, porównaj z wyrobem
-        i zdecyduj: „Zatwierdź”, „Odrzuć” albo „Wskaż właściwą stronę”.
+        i zdecyduj: „Zatwierdź”, „Odrzuć” albo „Wskaż właściwą stronę”. Karty tego samego modelu (ten sam wyrób
+        w różnych wymiarach i kolorach) stoją obok siebie pod wspólnym nagłówkiem — decyzja jest zawsze per karta,
+        a „Zastosuj do N kart modelu” wykonuje ją kolejno dla każdej karty modelu.
       </p>
 
       <div className="mb-3 flex flex-wrap items-end gap-x-3 gap-y-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm">
@@ -348,8 +468,22 @@ export function PriceListsReview() {
               const isOpen = Boolean(open[row.product_id])
               const rowBusy = busy === row.product_id
               const rejectId = row.proposal?.version_id ?? row.published?.version_id ?? null
+              const group = rowGroup.get(row.product_id) ?? null
+              const model = group?.model ?? null
+              // grupa widoczna = co najmniej dwie sąsiednie karty tego modelu na tej stronie listy
+              const grouped = group !== null && model !== null && group.rows.length >= 2
               return (
                 <Fragment key={row.product_id}>
+                  {group && model && group.rows.length >= 2 && group.rows[0] === row && (
+                    <ModelGroupHeader
+                      model={model}
+                      rows={group.rows}
+                      canAct={canAct}
+                      disabled={busy !== null || bulk !== null}
+                      progress={bulk !== null && bulk.key === model.key ? bulk : null}
+                      onAct={(action) => void actGroup(model, group.rows, action)}
+                    />
+                  )}
                   <tr className={`border-t border-slate-100 align-top ${isOpen ? 'bg-blue-50/40' : ''}`}>
                     <td className="px-3 py-2">
                       {row.image_url ? (
@@ -370,6 +504,23 @@ export function PriceListsReview() {
                       <Link to={`/products/${row.product_id}`} className="font-medium text-blue-700 hover:underline">
                         {row.name}
                       </Link>
+                      {typeof row.model?.shared_from === 'number' && (
+                        <p className="mt-0.5 text-[11px]">
+                          <Link
+                            to={`/products/${row.model.shared_from}`}
+                            className="rounded bg-indigo-50 px-1 py-0.5 text-indigo-800 hover:underline"
+                            title="Opis przepisany z karty, która pobrała go dla całego modelu — ten sam tekst; dane i dowody przeliczone dla tej karty"
+                          >
+                            opis wspólny z karty #{row.model.shared_from}
+                          </Link>
+                        </p>
+                      )}
+                      {model && !grouped && model.in_review > 1 && (
+                        <p className="mt-0.5 cursor-help text-[11px] text-slate-500" title={MODEL_NOTE}>
+                          model {model.stem}: do przeglądu {n(model.in_review)}{' '}
+                          {plural(model.in_review, 'karta', 'karty', 'kart')} tego modelu
+                        </p>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-slate-700">{row.manufacturer || '—'}</td>
                     <td className="max-w-[16rem] px-3 py-2">
@@ -535,6 +686,94 @@ export function PriceListsReview() {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Nagłówek grupy modelu (co najmniej dwie sąsiednie karty tego modelu): rdzeń nazwy, liczba kart i — gdy wszystkie
+ * karty grupy mają ten sam powód, rodzaj decyzji i ten sam tekst wersji, o której jest decyzja — „Zastosuj do N kart
+ * modelu” z Zatwierdź / Odrzuć propozycje; karty z różnymi tekstami dostają zamiast tego uwagę „decyzje per karta”.
+ */
+function ModelGroupHeader({
+  model,
+  rows,
+  canAct,
+  disabled,
+  progress,
+  onAct,
+}: {
+  model: ReviewRowModel
+  rows: ReviewRow[]
+  canAct: boolean
+  disabled: boolean
+  /** Postęp decyzji zbiorczej tej grupy (null = nie trwa). */
+  progress: { action: 'approve' | 'reject'; step: number; total: number } | null
+  onAct: (action: 'approve' | 'reject') => void
+}) {
+  const count = rows.length
+  const inReview = Math.max(model.in_review, count)
+  const kind = bulkKind(model, rows)
+  const sameText = rows.every((r) => decidedTextOf(r) !== null && decidedTextOf(r) === decidedTextOf(rows[0]))
+  const label = (action: 'approve' | 'reject', idle: string) =>
+    progress && progress.action === action ? `Zapisuję ${progress.step} z ${progress.total}…` : idle
+
+  return (
+    <tr className="border-t border-slate-200 bg-slate-100/70">
+      <td colSpan={7} className="px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="cursor-help font-semibold text-slate-800" title={MODEL_NOTE}>
+            Model: {model.stem}
+          </span>
+          <span className="text-slate-600">
+            {inReview > count
+              ? `tu obok siebie ${n(count)} z ${n(inReview)} kart modelu do przeglądu (pozostałe dalej na liście albo na innych stronach)`
+              : `${n(count)} ${plural(count, 'karta', 'karty', 'kart')} modelu do przeglądu`}
+          </span>
+          {canAct && !kind && !sameText && (
+            <span
+              className="cursor-help text-slate-500"
+              title="Karty mają różne teksty (np. opisy pobrane osobno, każda ze swojej strony) — jedno „Zatwierdź” objęłoby różne opisy, więc decyzje tylko pojedynczo"
+            >
+              różne teksty opisów — decyzje per karta
+            </span>
+          )}
+          {canAct && kind && (
+            <span className="ml-auto flex flex-wrap items-center gap-1">
+              <span
+                className="cursor-help text-slate-500"
+                title="Ta sama decyzja zapisana kolejno dla każdej karty modelu — decyzja jest zawsze per karta"
+              >
+                Zastosuj do {n(count)} kart modelu:
+              </span>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onAct('approve')}
+                className="whitespace-nowrap rounded border border-emerald-300 bg-white px-2 py-0.5 text-[11px] font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+                title={
+                  kind === 'proposal'
+                    ? 'Nowe opisy (propozycje) zastępują obecne opisy wszystkich kart modelu'
+                    : 'Opisy są dobre — zostają na kartach, karty znikają z listy'
+                }
+              >
+                {label('approve', 'Zatwierdź')}
+              </button>
+              {kind === 'proposal' && (
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onAct('reject')}
+                  className="whitespace-nowrap rounded border border-red-300 bg-white px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  title="Nowe opisy odpadają, obecne zostają — na wszystkich kartach modelu; strony nie są blokowane"
+                >
+                  {label('reject', 'Odrzuć propozycje')}
+                </button>
+              )}
+            </span>
+          )}
+        </div>
+      </td>
+    </tr>
   )
 }
 

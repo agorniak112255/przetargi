@@ -43,6 +43,8 @@ final class ManufacturerProfiles
         ));
         $resolver = $entry['resolver'] ?? $default['resolver'] ?? null;
         $modelRegex = $code['model_regex'] ?? null;
+        $model = array_replace((array) ($default['model'] ?? []), (array) ($entry['model'] ?? []));
+        $modelGroup = $model['group'] ?? null;
 
         return new ManufacturerProfile(
             brandKey: $brandKey,
@@ -60,6 +62,8 @@ final class ManufacturerProfiles
             variantSuffixes: array_values(array_filter((array) ($code['variant_suffixes'] ?? []), static fn (mixed $s): bool => is_string($s) && $s !== '')),
             combinationSuffix: is_string($code['combination_suffix'] ?? null) && $code['combination_suffix'] !== '' ? $code['combination_suffix'] : null,
             labelledShortCodes: (bool) ($entry['labelled_short_codes'] ?? $default['labelled_short_codes'] ?? false),
+            modelGroup: is_string($modelGroup) && $modelGroup !== '' ? $modelGroup : null,
+            modelMinMembers: max(1, (int) ($model['min_members'] ?? 2)),
         );
     }
 }
