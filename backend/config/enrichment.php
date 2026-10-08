@@ -211,7 +211,9 @@ return [
     | w puli sklepy zostają źródłem jak dotąd. Klucze jak w manufacturer_domains.
     | Ta lista obowiązuje też przy uzupełnianiu krótkich opisów B2B (tam bez manufacturer_first_every_brand).
     */
-    'manufacturer_only_sources' => ['pros', 'aj-group', 'ajgroup', 'mapa'],
+    // coba — decyzja właściciela 08.10.2026: model HR Matting (mata ESD) dostał od lidera opis wycieraczki z fachhandel.pl
+    // (sklep z kodem HR060003 na karcie, ale z tekstem innego wyrobu) i opis modelu nadpisał poprawny opis ESD HR060003C
+    'manufacturer_only_sources' => ['pros', 'aj-group', 'ajgroup', 'mapa', 'secura', 'coba'],
 
     /*
     | Zwykłe pobieranie opisu karty (cenniki z pliku, „Pobierz” w panelu) — decyzja właściciela 01.10.2026 po cenniku

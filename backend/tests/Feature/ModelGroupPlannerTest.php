@@ -203,16 +203,23 @@ final class ModelGroupPlannerTest extends TestCase
         $this->assertSame([(int) $cut->id, (int) $roll->id], $this->planner()->membersOf((int) $batch->id, (int) $leader->id), 'tylko queued, bez lidera');
         $this->assertSame([], $this->planner()->membersOf((int) $batch->id, (int) $deckplate->id));
 
-        // sztafeta: lider padł — kolejny wg reguły lidera (SKU bazowe „AF060003” przed „AF060003C”), reszta przepięta
+        // sztafeta: lider padł — kolejny wg reguły lidera (SKU bazowe „AF060003” przed „AF060003C”), reszta przepięta;
+        // jak w EnrichProductJob: pozycja lidera ma stan końcowy (ręcznie), zanim oddaje model
+        ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $leader->id)->update(['status' => ProductEnrichmentBatchItem::STATUS_MANUAL]);
         $next = $this->planner()->nextLeader((int) $batch->id, (int) $leader->id);
         $this->assertSame((int) $roll->id, $next);
         $this->assertSame((int) $roll->id, (int) ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $cut->id)->value('model_leader_id'));
         $this->assertSame((int) $roll->id, (int) ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $roll->id)->value('model_leader_id'));
-        $this->assertSame((int) $leader->id, (int) ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $leader->id)->value('model_leader_id'), 'pozycja padłego lidera bez zmian');
+        // zmiana zamierzona (08.10.2026, pełne pobranie Coby #501): upadły lider przechodzi pod nowego lidera, żeby dostać
+        // opis modelu, gdy ten da wersję (ApplyModelDescriptionJob::describeRelayedLeaders) — wcześniej zostawał „ręcznie”
+        $this->assertSame((int) $roll->id, (int) ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $leader->id)->value('model_leader_id'), 'pozycja padłego lidera pod nowym liderem');
         $this->assertSame((int) $leader->id, (int) ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $done->id)->value('model_leader_id'), 'zakończona pozycja bez zmian');
         $this->assertSame([(int) $cut->id], $this->planner()->membersOf((int) $batch->id, (int) $roll->id));
 
+        ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $roll->id)->update(['status' => ProductEnrichmentBatchItem::STATUS_MANUAL]);
         $this->assertSame((int) $cut->id, $this->planner()->nextLeader((int) $batch->id, (int) $roll->id));
+        // obaj upadli liderzy (AF060001, AF060003) pod ostatnim liderem — dostaną jego opis (relayedLeaders)
+        $this->assertSame([(int) $leader->id, (int) $roll->id], ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('model_leader_id', $cut->id)->where('product_id', '!=', $cut->id)->orderBy('product_id')->pluck('product_id')->map(static fn ($id): int => (int) $id)->all());
         $this->assertNull($this->planner()->nextLeader((int) $batch->id, (int) $cut->id), 'nikt już nie czeka');
     }
 

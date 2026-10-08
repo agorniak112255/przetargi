@@ -27,6 +27,15 @@ use Illuminate\Support\Str;
  * kopii lidera to kolory z nazwy jego pliku, a bez nich kolory z nazwy karty lidera — zdjęcie lidera „Czarny/Brązowy”
  * nie idzie na kartę „Czarny/Niebieski”, lider bez żadnego koloru oddaje kopię. Karta bez koloru bierze kopię zdjęcia
  * lidera.
+ *
+ * Kod karty w nazwie pliku (ponowny audyt Coby 08.10.2026, partia #501): coba.com nazywa zdjęcia wariantów kodem
+ * („DAF010701_Orthomat_Diamond_BlkYel_06x09.jpg”, „OCP010002_OrthoComfortPlus_09x15_Blk_Coner.jpg” — w drugim nie ma
+ * słowa rdzenia „orthomat”). Nazwa z kodem tej karty albo z kodem jej rodziny (codeRelation: te same litery kodu,
+ * wspólny początek cyfr, zgodna końcówka) mówi o modelu jak słowo rdzenia — kolor nadal rozstrzygają słowa koloru
+ * w nazwie pliku, więc plik z kodem innego członka w innym kolorze to „inny kolor”, nie dowód. Plik z pełnym kodem
+ * TEJ karty („DAF010703C_…_BlkYel.jpg” dla DAF010703C) wygrywa z wcześniejszym plikiem w tym samym kolorze. Nazwa
+ * z kodem innej linii („…-DeckStep-…-DS020610C-….jpg” przy HR Matting) nie liczy się wcale, nawet ze słowem rdzenia.
+ * Zamiennik z innej karty modelu: pickFromModelSiblings (wołający łączy go z pickFor).
  */
 final class ModelImagePicker
 {
@@ -39,6 +48,14 @@ final class ModelImagePicker
     public const REASON_LEADER_COPY = 'kopia zdjęcia lidera';
 
     public const REASON_LEADER_NONE = 'lider bez zdjęcia';
+
+    public const REASON_SIBLING_COPY = 'kopia zdjęcia innej karty modelu w kolorze karty';
+
+    /** Kod karty: litery na początku i co najmniej tyle cyfr po nich („DAF0107-4” → daf + 0107). */
+    private const CODE_MIN_DIGITS = 4;
+
+    /** Rodzina kodu: ile pierwszych cyfr musi być wspólnych („DS031210C” ~ „DS030610”: 03; „DS0406” ≁ „DS030610”). */
+    private const CODE_FAMILY_DIGITS = 2;
 
     /**
      * Tokeny nazwy pliku, które nie mówią o wyrobie: rozszerzenia i dopiski techniczne (WordPress: „-1000x1000”,
@@ -70,13 +87,17 @@ final class ModelImagePicker
         if ($colours !== []) {
             $stemWord = self::stemWord($modelStem);
             $profile = $stemWord !== null ? ($this->profiles ??= app(ManufacturerProfiles::class))->for($member) : null;
+            $sku = (string) $member->sku;
             $otherColours = false;
+            $inColour = null;
             foreach ($pageImageUrls as $url) {
                 if (! is_string($url) || ! str_starts_with($url, 'http') || self::isSwatchOrThumbnail($url)) {
                     continue;
                 }
-                if ($stemWord !== null
-                    && ! self::fileNameNamesModel(self::fileName($url), $stemWord, $profile !== null && $profile->ownsUrl($url))) {
+                $fileName = self::fileName($url);
+                $code = self::codeRelation($fileName, $sku);
+                if ($code === 'foreign' || ($stemWord !== null && $code === null
+                    && ! self::fileNameNamesModel($fileName, $stemWord, $profile !== null && $profile->ownsUrl($url)))) {
                     continue;
                 }
                 $inFile = ColourWords::allInUrl($url);
@@ -84,9 +105,18 @@ final class ModelImagePicker
                     continue;
                 }
                 if (ColourWords::sameSet($inFile, $colours)) {
-                    return ['url' => $url, 'copy_of' => null, 'reason' => self::REASON_PAGE_IN_COLOUR];
+                    // plik z pełnym kodem tej karty wygrywa od razu; inaczej pierwszy w kolorze karty
+                    if ($code === 'exact') {
+                        return ['url' => $url, 'copy_of' => null, 'reason' => self::REASON_PAGE_IN_COLOUR];
+                    }
+                    $inColour ??= $url;
+
+                    continue;
                 }
                 $otherColours = true;
+            }
+            if ($inColour !== null) {
+                return ['url' => $inColour, 'copy_of' => null, 'reason' => self::REASON_PAGE_IN_COLOUR];
             }
             if ($otherColours) {
                 return ['url' => null, 'copy_of' => null, 'reason' => self::REASON_PAGE_OTHER_COLOUR];
@@ -106,7 +136,7 @@ final class ModelImagePicker
         if ($colours !== []) {
             $leaderColours = ColourWords::allInUrl((string) $first->source_url);
             if ($leaderColours === []) {
-                $leaderColours = $this->leaderNameColours($first);
+                $leaderColours = $this->ownerNameColours($first);
             }
             if ($leaderColours !== [] && ! ColourWords::sameSet($leaderColours, $colours)) {
                 return ['url' => null, 'copy_of' => null, 'reason' => self::REASON_LEADER_OTHER_COLOUR];
@@ -114,6 +144,63 @@ final class ModelImagePicker
         }
 
         return ['url' => null, 'copy_of' => $first, 'reason' => self::REASON_LEADER_COPY];
+    }
+
+    /**
+     * Zamiennik z innej karty TEGO SAMEGO modelu (ponowny audyt Coby 08.10.2026: Superdry Szary 11216/11217 bez
+     * zdjęcia, a karta 11218 tego modelu ma „WH01_06-Superdry-Grey_general.jpg”; Entra-Plush Szary 11162/11164 ←
+     * „PP060002_EntraPlush_09x15_Grey.jpg” z 11163). Do skopiowania (ProductWebFileCopier::copyImage z kartą-właścicielem
+     * zdjęcia jako $from) nadaje się zdjęcie, którego nazwa pliku w adresie źródła:
+     *   - ma ten sam zbiór kolorów co karta członka (ColourWords::sameSet) — kolor musi być w nazwie pliku; zdjęcie bez
+     *     koloru w nazwie nie idzie, bo właśnie takie kopie lidera dały czarne zdjęcia na kartach w innych kolorach;
+     *   - mówi o modelu jak w pickFor (słowo rdzenia, kod karty/rodziny albo — host producenta — same słowa koloru);
+     *   - nie jest próbką koloru ani miniaturą;
+     * a nazwa karty-właściciela nie mówi o innym zbiorze kolorów (pusty zbiór przechodzi). Plik z pełnym kodem karty
+     * członka wygrywa, inaczej pierwszy pasujący w podanej kolejności. Zdjęcia samej karty członka są pomijane.
+     *
+     * Wołający (ProductEnrichmentService) podaje zdjęcia innych kart modelu — jak zdjęcia lidera bez plików z panelu
+     * B2B, z załadowaną relacją `product`, w kolejności główne → sort_order → id. Karta bez koloru (memberColours bez
+     * słowa ze słownika) → null: bez koloru nie ma czego szukać poza kopią lidera.
+     *
+     * @param  list<string>  $memberColours  jak w pickFor
+     * @param  list<ProductImage>  $siblingImages  zdjęcia innych kart tego samego modelu
+     */
+    public function pickFromModelSiblings(Product $member, array $memberColours, array $siblingImages, ?string $modelStem): ?ProductImage
+    {
+        $colours = self::canonicalSet($memberColours);
+        if ($colours === []) {
+            return null;
+        }
+        $stemWord = self::stemWord($modelStem);
+        $profile = $stemWord !== null ? ($this->profiles ??= app(ManufacturerProfiles::class))->for($member) : null;
+        $sku = (string) $member->sku;
+        $first = null;
+        foreach ($siblingImages as $image) {
+            if (! $image instanceof ProductImage || (int) $image->product_id === (int) $member->id) {
+                continue;
+            }
+            $url = trim((string) $image->source_url);
+            if ($url === '' || self::isSwatchOrThumbnail($url)
+                || ! ColourWords::sameSet(ColourWords::allInUrl($url), $colours)) {
+                continue;
+            }
+            $fileName = self::fileName($url);
+            $code = self::codeRelation($fileName, $sku);
+            if ($code === 'foreign' || ($stemWord !== null && $code === null
+                && ! self::fileNameNamesModel($fileName, $stemWord, $profile !== null && $profile->ownsUrl($url)))) {
+                continue;
+            }
+            $ownerColours = $this->ownerNameColours($image);
+            if ($ownerColours !== [] && ! ColourWords::sameSet($ownerColours, $colours)) {
+                continue;
+            }
+            if ($code === 'exact') {
+                return $image;
+            }
+            $first ??= $image;
+        }
+
+        return $first;
     }
 
     /**
@@ -183,14 +270,69 @@ final class ModelImagePicker
             if (ctype_digit($token) || in_array($token, self::FILE_NAME_TECH_TOKENS, true)) {
                 continue;
             }
-            $colour = ColourWords::canonical($token);
-            if ($colour === null) {
+            // skróty i sklejki też („Blk-Yel-1.jpg”, „BlackYellow.jpg”)
+            $colours = ColourWords::inFileToken($token);
+            if ($colours === []) {
                 return false;
             }
-            $hasColour = $hasColour || $colour !== 'clear';
+            $hasColour = $hasColour || array_diff($colours, ['clear']) !== [];
         }
 
         return $hasColour;
+    }
+
+    /**
+     * Czy nazwa pliku (fileName) nosi kod karty $sku:
+     *   'exact'  — pełny kod karty jako osobne słowo nazwy („daf010703c_orthomatdiamond_…” dla DAF010703C; „ss070002b1m”
+     *              to nie „SS070002B1F”);
+     *   'family' — kod tej samej rodziny: te same litery na początku, co najmniej CODE_MIN_DIGITS cyfr po nich w obu,
+     *              wspólne pierwsze CODE_FAMILY_DIGITS cyfry i zgodna końcówka po cyfrach (pusta po jednej stronie albo
+     *              równa): „DS030610_…” dla DS031210C i DS0306, „OCP010002_…” dla OCP010701, ale nie „GRP0112_…” dla
+     *              GRP070009G (cyfry), „GRP070005N” dla GRP070009G ani „SS070002B1M” dla SS070002B1F (końcówka);
+     *   'foreign' — nazwa nosi tylko kody o innych literach niż kod karty: zdjęcie innego wyrobu, nie liczy się wcale,
+     *              nawet ze słowem rdzenia (symulacja na partii #501: „Mata-DeckStep-Matting-Niebieski-…-DS020610C-…jpg”
+     *              z karty HR Matting szłoby na niebieskie HR Matting przez ogólne słowo rdzenia „matting”);
+     *   null     — kodu karty w nazwie nie ma (albo są tylko kody tych samych liter spoza rodziny) albo karta nie ma
+     *              kodu z literami i cyframi.
+     * Kod w nazwie pliku zaczyna się od litery po znaku spoza liter („1_DAF0107…”, „…-WH050001.jpg”); litery dopisków
+     * technicznych („IMG20240901”) kodem nie są. Coba to jedyna marka z modelami (profil `model.group`) — jej kody to
+     * litery linii i cyfry (profil `code.model_regex`).
+     *
+     * @return 'exact'|'family'|'foreign'|null
+     */
+    private static function codeRelation(string $fileName, string $sku): ?string
+    {
+        $sku = mb_strtolower(Str::ascii(trim($sku)), 'UTF-8');
+        if (preg_match('/^([a-z]{2,})(\d{'.self::CODE_MIN_DIGITS.',})([a-z0-9]*)/', $sku, $own) !== 1) {
+            return null;
+        }
+        $skuWords = preg_split('/[^a-z0-9]+/', $sku, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $fileWords = preg_split('/[^a-z0-9]+/', $fileName, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (str_contains('-'.implode('-', $fileWords).'-', '-'.implode('-', $skuWords).'-')) {
+            return 'exact';
+        }
+        if (preg_match_all('/(?<![a-z])([a-z]{2,})(\d{'.self::CODE_MIN_DIGITS.',})([a-z0-9]*)/', $fileName, $codes, PREG_SET_ORDER) < 1) {
+            return null;
+        }
+        $foreign = false;
+        $sameLetters = false;
+        foreach ($codes as [, $letters, $digits, $tail]) {
+            if (in_array($letters, self::FILE_NAME_TECH_TOKENS, true)) {
+                continue;
+            }
+            if ($letters !== $own[1]) {
+                $foreign = true;
+
+                continue;
+            }
+            $sameLetters = true;
+            if (strncmp($digits, $own[2], self::CODE_FAMILY_DIGITS) === 0
+                && ($tail === '' || $own[3] === '' || $tail === $own[3])) {
+                return 'family';
+            }
+        }
+
+        return $foreign && ! $sameLetters ? 'foreign' : null;
     }
 
     /**
@@ -224,11 +366,12 @@ final class ModelImagePicker
     }
 
     /**
-     * Kolory z nazwy karty lidera (właściciela zdjęcia); relacja już załadowana nie kosztuje zapytania.
+     * Kolory z nazwy karty-właściciela zdjęcia (lider albo inna karta modelu); relacja już załadowana nie kosztuje
+     * zapytania.
      *
      * @return list<string>
      */
-    private function leaderNameColours(ProductImage $image): array
+    private function ownerNameColours(ProductImage $image): array
     {
         $name = $image->relationLoaded('product')
             ? (string) ($image->product?->name ?? '')

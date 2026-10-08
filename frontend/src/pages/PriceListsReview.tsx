@@ -36,6 +36,7 @@ const REASON_TONE: Record<ReviewReason, string> = {
   identity_none: 'bg-red-100 text-red-800',
   worse_version: 'bg-violet-100 text-violet-900',
   rejected_source: 'bg-slate-200 text-slate-800',
+  manufacturer_missing: 'bg-orange-100 text-orange-900',
 }
 
 const STATUS_LABEL: Record<DescriptionVersion['status'], string> = {
@@ -241,7 +242,9 @@ export function PriceListsReview() {
     if (action === 'approve') {
       const question = proposalId
         ? `Zastąpić obecny opis karty ${row.sku} nowym opisem (propozycją)?`
-        : `Opis karty ${row.sku} jest dobry i zostaje na karcie?`
+        : publishedId
+          ? `Opis karty ${row.sku} jest dobry i zostaje na karcie?`
+          : `Karta ${row.sku} zostaje bez opisu i znika z listy? Opis można dopisać później ręcznie albo wskazać stronę producenta.`
       if (!window.confirm(question)) return
     } else {
       // odrzucenie blokuje adres źródła wersji — wersja bez adresu niczego nie blokuje i nie wolno tego obiecywać
@@ -561,7 +564,9 @@ export function PriceListsReview() {
                               title={
                                 row.proposal
                                   ? 'Nowy opis (propozycja) zastępuje obecny opis karty'
-                                  : 'Opis jest dobry — zostaje na karcie, karta znika z listy'
+                                  : row.published
+                                    ? 'Opis jest dobry — zostaje na karcie, karta znika z listy'
+                                    : 'Karta zostaje bez opisu i znika z listy'
                               }
                             >
                               {rowBusy ? 'Zapisuję…' : 'Zatwierdź'}
@@ -899,7 +904,15 @@ function ReviewDetails({
                   <tr key={v.id} className="border-b border-slate-100 align-top">
                     <td className="whitespace-nowrap py-1 pr-2">{v.created_at ? formatDateTime(v.created_at) : '—'}</td>
                     <td className="py-1 pr-2">
-                      {isCurrent ? <b className="text-emerald-700">na karcie</b> : STATUS_LABEL[v.status] ?? v.status}
+                      {isCurrent ? (
+                        <b className="text-emerald-700">na karcie</b>
+                      ) : v.withdrawn ? (
+                        <span title="Opis zdjęty z karty bez nowego: producent ma opisy tylko z własnej strony, a ten był ze sklepu. „Przywróć” kładzie go z powrotem.">
+                          zdjęta z karty
+                        </span>
+                      ) : (
+                        (STATUS_LABEL[v.status] ?? v.status)
+                      )}
                     </td>
                     <td className="py-1 pr-2 text-slate-600">{ORIGIN_LABEL[v.origin] ?? v.origin}</td>
                     <td className="max-w-[14rem] py-1 pr-2">

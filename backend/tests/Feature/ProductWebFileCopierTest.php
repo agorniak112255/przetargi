@@ -127,6 +127,28 @@ final class ProductWebFileCopierTest extends TestCase
         $this->assertSame([], (new ProductWebFileCopier)->copyDocuments($leader, [], $member));
     }
 
+    /**
+     * Etap 3, runda 3: kopia nie omija bramek pobierania — znana zaślepka po sumie (config/image_blocklist.php; „404 nginx”
+     * na kartach HR Matting) i grafika witryny po adresie (ImageUrlBlocklist z regułami profilu Coby) nie są kopiowane.
+     */
+    public function test_placeholder_checksum_and_blocklisted_url_are_not_copied(): void
+    {
+        $leader = $this->product('HR060001');
+        $member = $this->product('HR060002');
+        $copier = new ProductWebFileCopier;
+
+        $placeholder = $this->image($leader, '<html>404 Not Found nginx</html>', 'https://www.coba.com/wp-content/uploads/hr-matting-grey.jpg');
+        config()->set('image_blocklist.checksums', [(string) $placeholder->checksum]);
+        $this->assertNull($copier->copyImage($leader, $placeholder, $member), 'znana zaślepka');
+
+        $banner = $this->image($leader, 'BANNER', 'https://www.coba.com/wp-content/uploads/StandUpforHealth-PL.jpg');
+        $this->assertNull($copier->copyImage($leader, $banner, $member), 'grafika witryny z listy profilu Coby');
+
+        $photo = $this->image($leader, 'PHOTO', 'https://www.coba.com/wp-content/uploads/hr-matting-grey-2.jpg');
+        $this->assertNotNull($copier->copyImage($leader, $photo, $member), 'zwykłe zdjęcie dalej kopiowane');
+        $this->assertSame(1, ProductImage::query()->where('product_id', $member->id)->count());
+    }
+
     private function product(string $sku): Product
     {
         return Product::query()->create(['sku' => $sku, 'name' => 'Orthomat Standard Szary '.$sku, 'manufacturer' => 'Coba']);

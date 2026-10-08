@@ -23,7 +23,7 @@ final class ColourWordsTest extends TestCase
             'Brązowy' => 'brown', 'brown' => 'brown', 'Pomarańczowy' => 'orange', 'orange' => 'orange',
             'Beżowy' => 'beige', 'beige' => 'beige', 'Granatowy' => 'navy', 'navy' => 'navy',
             'Antracyt' => 'anthracite', 'antracytowy' => 'anthracite', 'anthracite' => 'anthracite',
-            'charcoal' => 'charcoal', 'Stalowy' => 'steel', 'Clear' => 'clear', 'przezroczysty' => 'clear',
+            'charcoal' => 'anthracite', 'Charcoal' => 'anthracite', 'Stalowy' => 'steel', 'Clear' => 'clear', 'przezroczysty' => 'clear',
             'transparent' => 'clear', 'srebrny' => 'silver', 'silver' => 'silver', 'różowy' => 'pink', 'pink' => 'pink',
             'fioletowy' => 'purple', 'złoty' => 'gold',
         ] as $word => $colour) {
@@ -66,7 +66,8 @@ final class ColourWordsTest extends TestCase
         $this->assertSame('black', ColourWords::inUrl('https://www.coba.com/x/AF010003C_OrthomatStd_09xLinear_Black.jpg'));
         $this->assertSame('black', ColourWords::inUrl('https://www.coba.com/pl/wp-content/uploads/sites/6/2026/04/Superdry-Contract-Edges_Black.png?v=yellow'), 'tylko nazwa pliku, bez zapytania');
         $this->assertNull(ColourWords::inUrl('https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/Solid-Fatigue-Step-Leisure_07.jpg'));
-        $this->assertNull(ColourWords::inUrl('https://www.coba.com/x/SS070002B1M_FatStepEdgeB1_Yel_Male-scaled.jpg'), 'skrót „Yel” nie jest w słowniku');
+        // do 08.10.2026 skrót „Yel” nie był kolorem; od ponownego audytu Coby skróty w nazwach plików się liczą
+        $this->assertSame('yellow', ColourWords::inUrl('https://www.coba.com/x/SS070002B1M_FatStepEdgeB1_Yel_Male-scaled.jpg'));
         $this->assertNull(ColourWords::inUrl('https://shop.example/black/photo_1.jpg'), 'katalog nie liczy się');
         $this->assertNull(ColourWords::inUrl('https://shop.example/img/steel-toe-boot.jpg'));
     }
@@ -110,5 +111,62 @@ final class ColourWordsTest extends TestCase
         $this->assertSame('black', ColourWords::inName('Vyna-Plush Czarny/Stalowy 0.9m x 1.2m'));
         $this->assertNull(ColourWords::inName('Akcesoria Krata GRP - Uchwyt typu C - 25mm'));
         $this->assertNull(ColourWords::inName('First-Step'));
+    }
+
+    public function test_abbreviated_and_glued_colours_in_real_file_names(): void
+    {
+        // ponowny audyt Coby 08.10.2026 (partia #501): prawdziwe nazwy plików z galerii coba.com i z katalogu
+        $c = 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/';
+        foreach ([
+            'DAF010701_Orthomat_Diamond_BlkYel_06x09.jpg' => ['black', 'yellow'],
+            'DAF010703C_OrthomatDiamond_09xLinear_BlkYel.jpg' => ['black', 'yellow'],
+            'Orthomat%C2%AE-Comfort-Plus_06x09_Blkyel_Corner_1.jpg' => ['black', 'yellow'],
+            'GRPN_COBAGRiP-Stair-Nosing-BlackYellow_isolated.jpg' => ['black', 'yellow'],
+            'FF01_0701-Orthomat-Premium_Yel_Bk-100_0.6-x-0.9m-Corner.jpg' => ['yellow', 'black'],
+            'OCP010002_OrthoComfortPlus_09x15_Blk_Coner.jpg' => ['black'],
+            '1_Deckplate_BK_ReGen-70_isolated.jpg' => ['black'],
+            'Deckplate-ReGen-70-Corner-Black-Yellow-DPR0.jpg' => ['black', 'yellow'],
+            'MODULOS3LT-GRY-CTLG.JPG' => ['grey'],
+            'tsrb-body-bk-9-m_03.jpg' => ['black'],
+            'GOLLYCLOSE-BRN-CTLG.JPG' => ['brown'],
+            'sf101as-blu-eu-clear-as-20-cs.jpg' => ['blue', 'clear'],
+            'sps-ppe-oliver-EU-24205-GRN-right.jpg' => ['green'],
+            'KASSIE-WHT-CTLG.JPG' => ['white'],
+            'TR010004_Toughrib_08x12_Charcoal.jpg' => ['anthracite'],
+            'af-needlepunch-entrance-matting-charcoal-3.jpg' => ['anthracite'],
+        ] as $file => $colours) {
+            $this->assertSame($colours, ColourWords::allInUrl($c.$file), $file);
+        }
+
+        // skrót przy cyfrach to kod, nie kolor; sklejka musi rozłożyć się bez reszty
+        foreach (['BK1234_front.jpg', 'org2024.jpg', 'greenline-boot.jpg', 'redwood-handle.jpg', 'blkx.jpg', 'Superdry-Construction-Square.png'] as $file) {
+            $this->assertSame([], ColourWords::allInUrl($c.$file), $file);
+        }
+        $this->assertSame(['black', 'yellow'], ColourWords::inFileToken('BlkYel'));
+        $this->assertSame(['black', 'yellow'], ColourWords::inFileToken('blackyellow'));
+        $this->assertSame(['black'], ColourWords::inFileToken('Bk'));
+        $this->assertSame([], ColourWords::inFileToken('bkyel'), 'dwuliterowe „bk” tylko jako osobne słowo');
+        $this->assertSame([], ColourWords::inFileToken('blk1'), 'tylko słowo z samych liter');
+        $this->assertSame([], ColourWords::inFileToken(''));
+        $this->assertSame([], ColourWords::inFileToken(str_repeat('red', 20)), 'za długie na sklejkę');
+
+        // skróty nie są kolorem w nazwie karty („Zakaz gry w piłkę”, kod „BK”)
+        foreach (['Yel', 'gry', 'Blk', 'bk', 'org', 'BlkYel'] as $word) {
+            $this->assertNull(ColourWords::canonical($word), $word);
+        }
+        $this->assertSame([], ColourWords::allInName('GB048 Zakaz gry w piłkę - arkusz 12 naklejek'));
+    }
+
+    public function test_charcoal_is_anthracite_but_graphite_stays_separate(): void
+    {
+        // Toughrib 11175/11176: karta „Antracyt”, plik „…_Charcoal.jpg” — ten sam kolor (dobre zdjęcie było usuwane)
+        $this->assertTrue(ColourWords::sameSet(
+            ColourWords::allInUrl('https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/TR010004_Toughrib_08x12_Charcoal.jpg'),
+            ColourWords::allInName('Toughrib Antracyt 0.9m x 1.5m')
+        ));
+        // grafit i antracyt to dwa warianty w katalogu (Demar, Fagum-Stomil, Łukpol, MASCOT)
+        $this->assertSame('graphite', ColourWords::canonical('grafitowy'));
+        $this->assertSame('graphite', ColourWords::canonical('graphite'));
+        $this->assertNotSame(ColourWords::canonical('grafit'), ColourWords::canonical('antracyt'));
     }
 }

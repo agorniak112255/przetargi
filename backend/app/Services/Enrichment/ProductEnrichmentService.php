@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Exceptions\EnrichmentCancelledException;
+use App\Exceptions\ManufacturerPageMissingException;
 use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\ApplyModelDescriptionJob;
 use App\Jobs\DescribeB2bProductFromDatasheetJob;
@@ -45,7 +46,10 @@ use App\Support\ProductCodeMatch;
 use App\Support\ProductDescriptionText;
 use App\Support\ProductNormsColumn;
 use App\Support\ProductSizeVariant;
+use App\Support\PromptEcho;
 use App\Support\RequirementCheck\En388Code;
+use App\Support\SafetyFeatures;
+use App\Support\ShopEntryId;
 use App\Support\Utf8Trim;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Query\Builder;
@@ -155,6 +159,13 @@ final class ProductEnrichmentService
      * @var array{key: string, stem: string, members: list<array{id: int, sku: string, name: string}>}|null
      */
     private ?array $modelContext = null;
+
+    /**
+     * Etap 3 (W3/W4): komunikat awarii wyszukiwarki z drugiej próby na hostach producenta (searchOnHosts) — wtedy brak
+     * strony producenta nie jest pewny i przebieg kończy się w „failed”, nie w manufacturer_missing. Na czas jednego
+     * enrichProduct, zerowany w finally.
+     */
+    private ?string $manufacturerRetryOutage = null;
 
     /** Tyle kart modelu wymienia nota modelu w poleceniu; reszta jako liczba (budżet polecenia). */
     private const MODEL_NOTE_MAX_MEMBERS = 30;
@@ -817,6 +828,8 @@ final class ProductEnrichmentService
      */
     private function describeFromPages(Product $product, array $pages): array
     {
+        // Etap 3 (W1): strona innego wyrobu marki albo ze sprzeczną cechą bezpieczeństwa nie wchodzi do drugiej puli.
+        $pages = $this->withoutForeignOrConflictingPages($product, $pages);
         // Druga pula (indeks, sklepy, otwarty internet) bywa kartą producenta razem ze sklepami — ta sama reguła.
         // Strony cennika z pliku (listSources) działają tu tak samo jak w pierwszej puli.
         ['pages' => $pages, 'cut' => $cut, 'list_sites' => $listSites] = $this->manufacturerOnlyPages($product, $pages);
@@ -838,8 +851,9 @@ final class ProductEnrichmentService
         }
         // druga pula tego samego przebiegu lidera — nota modelu i sito na rdzeniu nazwy jak w pierwszej
         $extracted = $this->extractWithLlm($product, $cardSources, array_slice($clean, 0, 5), modelContext: $this->modelContext);
-        $description = ProductDescriptionText::plain($this->modelDescription($extracted));
-        if (! $this->isUsableModelDescription($description, $product, array_column($clean, 'url'))) {
+        $description = $this->modelText($this->modelDescription($extracted));
+        if (! $this->isUsableModelDescription($description, $product, array_column($clean, 'url'))
+            || $this->descriptionContradictsCard($product, $description)) {
             $description = '';
         }
 
@@ -1069,6 +1083,8 @@ final class ProductEnrichmentService
             // karcie producenta. Marki bez kart HTML per wyrób (SECURA) opisuje wyłącznie on,
             // więc gdy niesie blok tego kodu, brak wyników wyszukiwarki nie kończy przebiegu.
             $catalogPages = $this->withoutRejectedSources($this->manufacturerCatalogPages($product), $product);
+            // Etap 3 (W3): druga próba na hostach producenta z innymi zapisami kodu — null = jeszcze nie było
+            $manufacturerRetry = null;
             // Tavily include_images WYŁĄCZONE — dawało piwo/LEGO/mapy zamiast produktu
             if ($searchResults === [] && $catalogPages === []) {
                 $this->attemptLog()->add('search', $searchEmptyDetail);
@@ -1076,13 +1092,22 @@ final class ProductEnrichmentService
                     throw new ProductSourcesNotFoundException($this->listSitesNotFoundMessage($product, $searchEmptyDetail));
                 }
                 $outage = $this->engineOutageDetail($searchEmptyDetail);
-                throw new ProductSourcesNotFoundException(
-                    $outage !== null
-                        ? 'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
-                            .' — nie wiadomo, czy karta istnieje. Ponów po przywróceniu wyszukiwarki. '.$outage
-                        : 'Nie znaleziono karty produktu '.$product->sku
-                            .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie. '.$searchEmptyDetail
-                );
+                // Marka „tylko od producenta”: zanim karta pójdzie do ręki, druga próba na jego hostach (inny zapis kodu);
+                // nic → brak strony producenta (manufacturer_missing), nie zwykłe „wpisz ręcznie”.
+                if ($outage === null && $this->identity->usesManufacturerSourcesOnly($product)) {
+                    $manufacturerRetry = $this->retryManufacturerHosts($product);
+                    if ($manufacturerRetry === []) {
+                        throw $this->manufacturerPageMissing($product, $searchEmptyDetail);
+                    }
+                } else {
+                    throw new ProductSourcesNotFoundException(
+                        $outage !== null
+                            ? 'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
+                                .' — nie wiadomo, czy karta istnieje. Ponów po przywróceniu wyszukiwarki. '.$outage
+                            : 'Nie znaleziono karty produktu '.$product->sku
+                                .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie. '.$searchEmptyDetail
+                    );
+                }
             }
             $hintedUrl = $product->hintedShopUrl();
             if ($hintedUrl !== null) {
@@ -1134,11 +1159,16 @@ final class ProductEnrichmentService
                 $product,
                 $mfrDomains
             );
+            // Etap 3 (W1) już przed rundami szukania: pula ze samą stroną innego wyrobu marki (1011 R przy 1011) albo ze
+            // sprzeczną cechą jest pusta i uruchamia dalsze rundy (indeks, zmapowane sklepy, otwarty internet) — W1 po
+            // rundach zostawiał wtedy pustą pulę bez ponownego szukania. Wywołanie niżej zostaje (strony z rund).
+            $pageSnippets = $this->withoutForeignOrConflictingPages($product, $pageSnippets);
             $openWebCardsUnreachable = false;
             $openWebWalledCards = [];
             $this->walledReaderDetails = [];
             $openWebTried = false;
-            if ($pageSnippets === []) {
+            // strona producenta z drugiej próby (wyszukiwarka nic nie dała) — kolejne rundy szukania sklepów nic nie wniosą
+            if ($pageSnippets === [] && ($manufacturerRetry ?? []) === []) {
                 $triedUrls = array_values(array_filter(array_map(
                     static fn ($p): string => is_array($p) ? (string) ($p['url'] ?? '') : '',
                     $fetched['pages']
@@ -1185,11 +1215,35 @@ final class ProductEnrichmentService
             // wyrobu, więc potwierdza go mocniej niż heurystyka nazwy na stronie sklepu.
             // Tą samą drogą idzie karta PDF ze strony producenta: za kartą HTML, przed sklepami, ponownie po
             // filtrze stron (tabela rozmiarów przetrwa) i z własnym wpisem w źródłach.
+            // Etap 3 (W1): strona innego wyrobu marki (kod dłuższy albo etykietowany kod producenta) albo ze sprzeczną
+            // cechą bezpieczeństwa (kV, klasa, filtr, gaz) odpada — razem ze swoimi zdjęciami i plikami. Przed kartą PDF:
+            // numer wpisu jej pliku porównujemy już tylko ze stronami, które zostały.
+            $pageSnippets = $this->withoutForeignOrConflictingPages($product, $pageSnippets);
+            // Etap 3 (W6): plik innego wyrobu marki albo wpisu sklepu innej strony nie jest kartą PDF tego wyrobu.
             $catalogPages = array_merge(
                 $catalogPages,
-                $this->withoutRejectedSources($this->manufacturerPdfCardPages($product, (array) ($fetched['document_urls'] ?? [])), $product)
+                $this->withoutRejectedSources($this->withoutForeignOrConflictingPages($product, $this->manufacturerPdfCardPages(
+                    $product,
+                    $this->withoutForeignDocuments(
+                        $product,
+                        array_values(array_filter((array) ($fetched['document_urls'] ?? []), 'is_string')),
+                        is_array($fetched['document_labels'] ?? null) ? $fetched['document_labels'] : [],
+                        $pageSnippets,
+                    )
+                )), $product)
             );
             $pageSnippets = $this->withCatalogPages($pageSnippets, $catalogPages, $product, $mfrDomains);
+            // Etap 3 (W3): marka „tylko od producenta” bez jego karty w puli — druga próba na hostach producenta z innymi
+            // zapisami kodu; znaleziona strona idzie przed sklepy, a manufacturerOnlyPages zostawia wtedy tylko ją.
+            if ($this->identity->usesManufacturerSourcesOnly($product) && ! $this->manufacturerCardInPool($product, $pageSnippets)) {
+                $manufacturerRetry ??= $this->retryManufacturerHosts($product);
+                if ($manufacturerRetry !== []) {
+                    $pageSnippets = $this->mergePageSnippets($manufacturerRetry, $pageSnippets);
+                    if ($mfrDomains === []) {
+                        $mfrDomains = $this->manufacturers->domainsFor($product);
+                    }
+                }
+            }
             if ($pageSnippets === []) {
                 // Gdy po drodze padła wyszukiwarka, „brak karty” jest tylko
                 // skutkiem awarii — produkt wraca do ponowienia, nie do ręki.
@@ -1197,7 +1251,8 @@ final class ProductEnrichmentService
                 // „sklep nie odpowiada” to celowo fraza z SearchEngineOutage — przez nią
                 // przebieg kończy w `failed`, nie w „wpisz ręcznie”.
                 $outage = $this->engineOutageDetail($searchEmptyDetail);
-                throw new ProductSourcesNotFoundException(match (true) {
+                $outageOrWall = $outage !== null || $openWebCardsUnreachable || $openWebWalledCards !== [];
+                $message = match (true) {
                     $outage !== null => 'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
                         .' — nie wiadomo, czy karta istnieje. Ponów po przywróceniu wyszukiwarki. '.$outage,
                     $openWebCardsUnreachable => 'Znalezione karty produktu '.$product->sku
@@ -1209,7 +1264,13 @@ final class ProductEnrichmentService
                     (bool) $this->listSources?->onlyMode() => $this->listSitesNotFoundMessage($product, $searchEmptyDetail),
                     default => 'Nie znaleziono karty potwierdzającej produkt '.$product->sku
                         .' — bez strony nie ma opisu ani zdjęcia. Opis wpisz ręcznie.',
-                });
+                };
+                // Marka „tylko od producenta”: bez żadnej strony (i po drugiej próbie) to brak strony producenta —
+                // powód przeglądu manufacturer_missing; awaria, zapora i niedostępne karty zostają jak wyżej.
+                if (! $outageOrWall && $this->identity->usesManufacturerSourcesOnly($product)) {
+                    throw $this->manufacturerPageMissing($product, $searchEmptyDetail);
+                }
+                throw new ProductSourcesNotFoundException($message);
             }
 
             // Stare zdjęcia i dokumenty ustępują dopiero zapisanemu nowemu opisowi (dropPreviousWebFiles). Kasowane tu,
@@ -1221,7 +1282,12 @@ final class ProductEnrichmentService
 
             // Marka „tylko producent” z jego kartą w puli — od tego miejsca sklepy nie wchodzą ani do rozmiarów,
             // ani do filtra stron, ani do opisu, ani do zdjęć (te biorą się z kart źródłowych opisu).
-            ['pages' => $pageSnippets, 'cut' => $manufacturerOnly, 'listed' => $listedOnly, 'list_sites' => $listSitesPool] = $this->manufacturerOnlyPages($product, $pageSnippets);
+            ['pages' => $pageSnippets, 'cut' => $manufacturerOnly, 'listed' => $listedOnly, 'list_sites' => $listSitesPool, 'missing' => $manufacturerMissing] = $this->manufacturerOnlyPages($product, $pageSnippets);
+            // Etap 3 (W2/W4): marka „tylko od producenta” bez jego karty (także po drugiej próbie) — sklepy odpadły, a bez
+            // katalogu PDF i adresu wskazanego ręcznie nie ma z czego pisać opisu: model nie jest wołany.
+            if ($pageSnippets === [] && $manufacturerMissing) {
+                throw $this->manufacturerPageMissing($product, $searchEmptyDetail);
+            }
             // „Tylko producent i strony cennika” bez strony z cennika, katalogu PDF i adresu zaufanego — sklepy spoza
             // listy nie wchodzą, więc nie ma z czego pisać opisu (model nie jest wołany).
             if ($pageSnippets === [] && $this->listSources?->onlyMode()) {
@@ -1268,8 +1334,9 @@ final class ProductEnrichmentService
             $rawDescription = $this->composeFullDescription($extracted);
             // Opis wyłącznie od modelu — tekstu strony jako opisu zapasowego nie bierzemy
             // (audyt 22.09.2026: CAPTCHA, cenniki i banery cookies zapisane jako opis).
-            $description = ProductDescriptionText::plain($this->modelDescription($extracted));
-            if (! $this->isUsableModelDescription($description, $product, array_column($pageSnippets, 'url'))) {
+            $description = $this->modelText($this->modelDescription($extracted));
+            if (! $this->isUsableModelDescription($description, $product, array_column($pageSnippets, 'url'))
+                || $this->descriptionContradictsCard($product, $description)) {
                 $description = '';
             }
 
@@ -1293,12 +1360,16 @@ final class ProductEnrichmentService
                     $description,
                     $listedOnly
                 );
-                $description = ProductDescriptionText::plain($supplement['description']);
+                $description = $this->modelText($supplement['description']);
+                if ($this->descriptionContradictsCard($product, $description)) {
+                    $description = '';
+                }
                 $extracted = $this->enrichStructuredFieldsFromPages(
                     $supplement['extracted'],
                     $supplement['pages']
                 );
-                $supplementedPages = $this->keepConfirmedCardPages($product, $supplement['pages']);
+                // Etap 3 (W1): strony uzupełnienia przez tę samą bramkę wariantu i cech co pierwsza pula
+                $supplementedPages = $this->withoutForeignOrConflictingPages($product, $this->keepConfirmedCardPages($product, $supplement['pages']));
                 if ($supplementedPages !== []) {
                     $pageSnippets = $this->rememberOptionSizes(
                         $supplementedPages,
@@ -1556,16 +1627,35 @@ final class ProductEnrichmentService
             // sklepu bywa logo, budynkiem firmy albo zupełnie innym wyrobem (kurtka przy
             // płatku zaworu). Takie kandydatury ogląda model; przechodzą bez oglądania
             // tylko pliki, których adres sam nazywa produkt.
+            // Etap 3 (W5): zdjęcie z kodem innej karty marki w nazwie pliku („…-model-1011-r.jpg” przy 1011) albo ze
+            // sprzeczną cechą bezpieczeństwa („…-20kv.jpg” przy 30 kV) odpada przed potwierdzaniem i oglądaniem.
+            // Zdjęcie z pickera lidera modelu (etap 2b) przechodzi przez tę samą bramkę — idzie potem bez weryfikatora.
+            $allowedImages = array_flip($this->withoutForeignImages(
+                $product,
+                array_values(array_unique(array_filter(
+                    [$modelPickUrl, ...$imageUrls, ...$fromCards['all'], ...$fromCards['trusted']],
+                    static fn (mixed $url): bool => is_string($url) && $url !== ''
+                )))
+            ));
+            if ($modelPickUrl !== null && ! isset($allowedImages[$modelPickUrl])) {
+                $modelPickUrl = null;
+            }
+            $keepImages = static fn (array $urls): array => array_values(array_filter(
+                $urls,
+                static fn (mixed $url): bool => is_string($url) && isset($allowedImages[$url])
+            ));
+            $imageUrls = $keepImages($imageUrls);
+            $verifierPool = $keepImages($fromCards['all']);
             $proven = $this->provenProductImages($imageUrls, $product);
             if ($proven !== []) {
                 $imageUrls = $proven;
             } else {
                 $imageUrls = $this->imageVerifier->select(
                     $product,
-                    $fromCards['all'] !== [] ? $fromCards['all'] : $imageUrls,
+                    $verifierPool !== [] ? $verifierPool : $imageUrls,
                     $descPages,
                     3,
-                    $fromCards['trusted']
+                    $keepImages($fromCards['trusted'])
                 );
             }
             $imageUrls = array_values(array_unique($imageUrls));
@@ -1591,9 +1681,20 @@ final class ProductEnrichmentService
                 $fetched['pages'] ?? [],
                 static fn ($page): bool => is_array($page) && isset($descriptionUrls[mb_strtolower((string) ($page['url'] ?? ''))])
             ));
+            // Etap 3 (W7): zdania powtarzające polecenie i zdania ze sprzecznym oznaczeniem normy wypadają przed sitem norm
+            $textCheck = $this->withoutPromptEchoAndNormProblems($description);
+            $description = $textCheck['description'];
             $claimCheck = $this->withoutUnsupportedNormClaims($product, $description, $extracted, [...$pageSnippets, ...$rawDescriptionPages]);
             $description = $claimCheck['description'];
-            $extracted = $claimCheck['extracted'];
+            // Etap 3 (W7): pole norm bez poziomów cudzych norm, kategorii i pozycji bez oznaczenia normy; echa polecenia z list
+            $listCheck = $this->withSaneNormLists($claimCheck['extracted']);
+            $extracted = $listCheck['extracted'];
+            $claimCheck['dropped_norm_claims'] = array_values(array_unique([
+                ...$textCheck['dropped_norm_claims'],
+                ...$claimCheck['dropped_norm_claims'],
+                ...$listCheck['dropped_norm_claims'],
+            ]));
+            $droppedMetaSentences = array_values(array_unique([...$textCheck['dropped_meta_sentences'], ...$listCheck['dropped_meta_sentences']]));
             $fields = $this->payloadFromExtraction($product, $extracted, $description, $pageSnippets);
             $packaging = $fields['packaging'];
             // Strony opisu z tekstem surowym (dziennik przebiegu) i po filtrze — do dowodów i do zapisu źródeł
@@ -1620,6 +1721,12 @@ final class ProductEnrichmentService
             // normy z poprzedniego (złego) pobrania na zawsze — AJ GROUP 906, 304/K, 604/K. Poza wzbogacaniem kolumnę
             // piszą tylko opis B2B (karta z nim nie przechodzi tej ścieżki bez potwierdzenia nadpisania) i Presta
             // (nasz własny dawny tekst, wykluczony jako źródło) — w obu przypadkach nowy opis i tak je zastępuje.
+            // Marka ścisła: opis ze sklepu nie jest bazą dla opisu ze strony producenta — cofany dopiero w transakcji
+            // zapisu (publishDescription); tu tylko wpis w śladzie (ślad karty jest zamykany przed zapisem)
+            $shopBase = $this->shopBaseYieldsTo($product, $primarySourceUrl) ? $this->shopDescriptionSource($product) : null;
+            if ($shopBase !== null) {
+                $this->attemptLog()->add('desc', 'obecny opis ze sklepu nie jest bazą — zastąpi go opis ze strony producenta (wersja sklepu do historii)', urls: [$shopBase]);
+            }
             if ($this->writeNormsColumn($product, $payload['norms'])) {
                 $runWrites['norms'] = $product->norms;
             }
@@ -1650,7 +1757,15 @@ final class ProductEnrichmentService
             // zdjęcie z innej karty (tryImagesFromOtherCards) nie pochodzi z żadnej strony opisu — rola „image” w źródłach
             $imagesFromOtherCards = false;
             $imageFailure = $this->imageFailureSummary($primaryImageUrls);
-            if ($imageFailure === '' && $modelOtherColour) {
+            // galeria strony lidera tylko w innych kolorach: zamiennik z innej karty tego modelu w partii (pliki z dysku)
+            if ($savedImages === [] && $modelOtherColour) {
+                $siblingCopy = $this->siblingImageCopy($product, $cardColours, $batchId, $this->modelKeys()->for($product)?->stem);
+                if ($siblingCopy !== null) {
+                    $savedImages = [$siblingCopy];
+                    $imagesFromOtherCards = true;
+                }
+            }
+            if ($imageFailure === '' && $modelOtherColour && $savedImages === []) {
                 $imageFailure = 'zdjęcia strony w innym kolorze';
             }
             // przed tryImagesFromOtherCards — kolejne downloadMany czyści listę
@@ -1697,8 +1812,9 @@ final class ProductEnrichmentService
                 }
             }
             $fetchedLabels = is_array($fetched['document_labels'] ?? null) ? $fetched['document_labels'] : [];
+            // etap 3 (W6c): numer wpisu sklepu w adresie („pdf.php?id_product=103”, „/102-plaszcz-model-1102”) to nie kod
             $namesProduct = fn (string $url): bool => isset($descriptionPageDocs[$url]) || $this->identity->hayHasProductCode(
-                mb_strtolower(urldecode($url).' '.($fetchedLabels[$url] ?? '')),
+                mb_strtolower(urldecode(ShopEntryId::strip($url)).' '.($fetchedLabels[$url] ?? '')),
                 $product,
             );
             foreach ($extracted['document_urls'] ?? [] as $url) {
@@ -1716,13 +1832,23 @@ final class ProductEnrichmentService
                 // PDF wprost z wyszukiwarki — tylko z kodem wyrobu w adresie, tytule albo opisie (27.09.2026: bez strony
                 // nic go nie wiąże z wyrobem, a trafiały arkusze sąsiednich wyrobów producenta)
                 $bound = $this->identity->hayHasProductCode(
-                    mb_strtolower(urldecode($u).' '.($row['title'] ?? '').' '.($row['snippet'] ?? '')),
+                    mb_strtolower(urldecode(ShopEntryId::strip($u)).' '.($row['title'] ?? '').' '.($row['snippet'] ?? '')),
                     $product,
                 );
                 if ($bound && ProductDocumentDownloader::looksLikeDocumentUrl($u)) {
                     $documentUrls[] = $u;
                 }
             }
+            // Etap 3 (W6a/b/d): plik innego wyrobu marki, plik wpisu sklepu innej strony i — przy marce „tylko od
+            // producenta” — plik spoza stron opisu i hostów producenta odpadają, także ze strony opisu.
+            $documentUrls = $this->withoutForeignDocuments(
+                $product,
+                array_values(array_unique(array_filter($documentUrls, 'is_string'))),
+                $fetchedLabels,
+                $descPages,
+                $manufacturerOnly,
+                $descriptionPageDocs,
+            );
             // Katalog marki nie jest dokumentem wyrobu — opisuje setki wyrobów naraz.
             // Jako źródło opisu owszem, w „Plikach PDF” produktu byłby mylącym załącznikiem.
             $documentUrls = array_values(array_filter(
@@ -1810,6 +1936,10 @@ final class ProductEnrichmentService
             if ($claimCheck['unverified_claims'] !== []) {
                 $productPayload['unverified_claims'] = $claimCheck['unverified_claims'];
             }
+            // zdania i pozycje list, w których model powtórzył polecenie zamiast opisać wyrób (etap 3, W7)
+            if ($droppedMetaSentences !== []) {
+                $productPayload['dropped_meta_sentences'] = $droppedMetaSentences;
+            }
             // Pochodzenie opisu (etap 1): werdykt tożsamości źródła i dowody wartości krytycznych — tylko na karcie
             // i w wersji opisu, pamięć SKU dostaje $payload bez nich.
             $productPayload['identity'] = $identity;
@@ -1865,7 +1995,7 @@ final class ProductEnrichmentService
             // Decyzja i zapis atomowo (publishRun): pod blokadą karty ponowne decide — w międzyczasie inny przebieg mógł
             // zapisać lepszy opis albo handlowiec odrzucić stronę źródła. Opis gorszy od obecnego (albo ze strony
             // odrzuconej) zostaje propozycją, a karta wraca do stanu sprzed przebiegu.
-            $version = $this->publishDescription($product, ProductDescriptionVersion::ORIGIN_ENRICHMENT, $candidate, $versionData, $saved, $before, runWrites: $runWrites);
+            $version = $this->publishDescription($product, ProductDescriptionVersion::ORIGIN_ENRICHMENT, $candidate, $versionData, $saved, $before, runWrites: $runWrites, newSourceUrl: $primarySourceUrl);
             if ($version === null) {
                 // nic nie znika przy propozycji — ślad wersji nie może mówić o usuniętym zdjęciu
                 $versionData['enrichment_trace'] = self::traceWithStaleColourKept($versionData['enrichment_trace'], $staleColourImages);
@@ -1881,8 +2011,9 @@ final class ProductEnrichmentService
             if ($staleColourImages !== []) {
                 $this->clearProductImages($product, array_keys($staleColourImages));
             }
-            // od tej chwili pliki należą do nowego opisu — błąd dalszych kroków nie może ich cofać (catch)
+            // od tej chwili pliki i normy należą do nowego opisu — błąd dalszych kroków nie może ich cofać (catch)
             $previousWebFiles = null;
+            $runWrites = [];
             $this->refineCategoryFromDescription($product, $description);
             $this->rememberAccessories($product, $pageSnippets);
 
@@ -1922,6 +2053,8 @@ final class ProductEnrichmentService
                     if ($previousWebFiles !== null) {
                         $this->dropWebFilesAddedSince($product, $previousWebFiles);
                     }
+                    // normy zapisane przez przebieg przed decyzją należą do opisu, który się nie zapisał
+                    $this->undoRunColumnWrites($product, $before, $runWrites ?? []);
                 } catch (Throwable) {
                     // jak niżej — pliki sprzątnie kolejny przebieg
                 }
@@ -1929,17 +2062,39 @@ final class ProductEnrichmentService
             }
             try {
                 $this->attemptLog()->add('fail', $e->getMessage());
+                // Etap 3 (W4, decyzja właściciela 08.10.2026): brak strony producenta przy marce „tylko od producenta” —
+                // przy pełnym pobraniu opis ze sklepu cofany do historii wersji (zdjęcia i pliki zostają).
+                // czekająca propozycja (gorszy opis / strona odrzucona) jest ważniejsza niż brak strony producenta —
+                // handlowiec ma ją zobaczyć w „Do przeglądu” pod jej powodem (czytana przed cofnięciem, które ustawia
+                // manufacturer_missing w magazynie wersji)
+                $waitingReview = $e instanceof ManufacturerPageMissingException ? $this->waitingProposalReview($product) : null;
+                $withdrawn = $force && $e instanceof ManufacturerPageMissingException
+                    && $this->withdrawShopDescription($product);
                 $failed = [
                     'enrichment_status' => $this->enrichmentStatusForFailure($e),
                     'enrichment_error' => mb_substr($e->getMessage(), 0, 2000),
                     'enrichment_trace' => $this->attemptLog()->snapshot($product),
                 ];
+                if ($waitingReview !== null) {
+                    $failed = [...$failed, ...$waitingReview];
+                } elseif ($e instanceof ManufacturerPageMissingException) {
+                    $failed['review_reason'] = Product::REVIEW_MANUFACTURER_MISSING;
+                    $failed['review_since'] = $this->reviewSince($product, Product::REVIEW_MANUFACTURER_MISSING);
+                }
                 // Opis się nie zapisał (błąd modelu, zatrzymanie partii) — zdjęcia i pliki pobrane w tym przebiegu
                 // znikają, stare zostają przy starym opisie; bez tego karta miała oba komplety naraz.
                 if ($previousWebFiles !== null) {
                     $this->dropWebFilesAddedSince($product, $previousWebFiles);
                 }
-                if ($force && $e instanceof ProductSourcesNotFoundException) {
+                // normy zapisane przez przebieg przed decyzją należą do opisu, który się nie zapisał — wracają (jak przy
+                // propozycji), o ile nikt ich w międzyczasie nie zmienił
+                $this->undoRunColumnWrites($product, $before, $runWrites ?? []);
+                // opis cofnięty przez W4 jest już w historii wersji — bez kasowania czegokolwiek więcej. Brak strony
+                // producenta (marka ścisła) nie czyści karty wcale: opis, który W4 zostawił (producent, katalog PDF,
+                // adres wskazany ręcznie, wersja chroniona, bez źródła), nie jest „cudzy” tylko dlatego, że nie nazywa
+                // marki — bez tego warunku tracił tekst, payload, normy, zdjęcia i pliki.
+                if ($force && $e instanceof ProductSourcesNotFoundException && ! $withdrawn
+                    && ! $e instanceof ManufacturerPageMissingException) {
                     $old = trim((string) $product->description);
                     if ($old !== '' && ! $this->descriptionMentionsProduct($old, $product)) {
                         $failed['description'] = '';
@@ -1968,6 +2123,9 @@ final class ProductEnrichmentService
             $this->rejectedSourceKeys = [];
             // nota modelu należy do lidera tego przebiegu — kolejna karta liczy ją od nowa (albo nie ma jej wcale)
             $this->modelContext = null;
+            $this->manufacturerRetryOutage = null;
+            // Etap 3 (W8): kody kart marki arbitra czytane na nowo przy kolejnej karcie — katalog rośnie między zadaniami
+            app(CardCodeArbiter::class)->forget();
         }
     }
 
@@ -2048,7 +2206,11 @@ final class ProductEnrichmentService
 
         return "\n\nOpis wspólny dla ".count($members).' wariantów tego modelu'.($stem !== '' ? ' „'.$stem.'”' : '')." (lista: sku — nazwa):\n"
             .implode("\n", $lines)
-            ."\nOpisz model bez wymiaru, koloru i kodu pojedynczego wariantu w description; warianty/rozmiary/kolory ze źródła podaj w specs.";
+            ."\nOpisz model bez wymiaru, koloru i kodu pojedynczego wariantu w description; warianty/rozmiary/kolory ze źródła podaj w specs."
+            // audyt Coby 08.10.2026: COBAswitch 9,5 mm z parametrami wariantu 6 mm (11 000 V / 450 V zamiast 15 000 V /
+            // 650 V), Tough Lock pomarańczowy „w kolorze żółtym”, listwy GRP z wymiarem i wagą jednego wariantu
+            ."\nW tekście description nie podawaj wartości jednego wariantu — wymiarów, grubości, koloru, wagi, napięcia ani innych parametrów elektrycznych, długości rolki — tylko cechy wspólne wszystkich wariantów."
+            .' Wartości poszczególnych wariantów podawaj wyłącznie w specs, każdą z kodem wariantu (sku), którego dotyczy.';
     }
 
     /**
@@ -2149,8 +2311,68 @@ final class ProductEnrichmentService
     }
 
     /**
+     * Zamiennik zdjęcia z innej karty TEGO SAMEGO modelu w tej partii (ModelImagePicker::pickFromModelSiblings — ponowny
+     * audyt Coby 08.10.2026: Entra-Plush Szary 11162 ← „…_Grey.jpg” z 11163): karty z tym samym model_key w partii, bez
+     * samej karty, ich zdjęcia z internetu (bez plików z panelu B2B) w kolejności główne → sort_order → id. Kopia pliku
+     * na karcie (właścicielem źródła jest karta-rodzeństwo, nie lider). null = bez partii, bez koloru karty, bez
+     * pasującego zdjęcia albo kopia się nie udała (plik zniknął z dysku, karta odrzuciła ten plik).
+     *
+     * @param  list<string>  $colours  kolory karty
+     */
+    private function siblingImageCopy(Product $card, array $colours, ?int $batchId, ?string $modelStem): ?ProductImage
+    {
+        if ($batchId === null || $colours === [] || ! self::batchItemsHaveModelColumns()) {
+            return null;
+        }
+        $key = ProductEnrichmentBatchItem::query()->where('batch_id', $batchId)->where('product_id', $card->id)->value('model_key');
+        if (! is_string($key) || trim($key) === '') {
+            return null;
+        }
+        $siblingIds = ProductEnrichmentBatchItem::query()
+            ->where('batch_id', $batchId)
+            ->where('model_key', $key)
+            ->where('product_id', '!=', $card->id)
+            ->pluck('product_id')
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
+        if ($siblingIds === []) {
+            return null;
+        }
+        $images = ProductImage::query()
+            ->with('product:id,sku,name')
+            ->whereIn('product_id', $siblingIds)
+            ->whereNull('b2b_account_id')
+            ->orderByDesc('is_primary')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get()
+            ->all();
+        // W5 jak przy każdej kandydaturze: zdjęcie innego wyrobu marki albo ze sprzeczną cechą (kV, klasa) odpada
+        $allowed = array_flip($this->withoutForeignImages($card, array_values(array_filter(array_map(
+            static fn (ProductImage $image): string => trim((string) $image->source_url),
+            $images
+        )))));
+        $images = array_values(array_filter(
+            $images,
+            static fn (ProductImage $image): bool => isset($allowed[trim((string) $image->source_url)])
+        ));
+        $sibling = $this->imagePicker()->pickFromModelSiblings($card, $colours, $images, $modelStem);
+        if ($sibling === null || $sibling->product === null) {
+            return null;
+        }
+        $copy = $this->copier()->copyImage($sibling->product, $sibling, $card);
+        $this->attemptLog()->add(
+            'image',
+            ModelImagePicker::REASON_SIBLING_COPY.' ('.$sibling->product->sku.')'.($copy === null ? ' — kopia nie powiodła się' : ''),
+            urls: [(string) $sibling->source_url]
+        );
+
+        return $copy;
+    }
+
+    /**
      * Zdjęcia z internetu karty (bez plików z panelu B2B, z adresem źródła) spośród podanych, których nazwa pliku mówi
-     * o kolorach rozłącznych z kolorami karty — id => adres (etap 2b, decyzja właściciela 08.10.2026: takie zdjęcie przy
+     * o innym zbiorze kolorów niż karta (ColourWords::sameSet — plik dwubarwny przy karcie jednobarwnej też) — id => adres (etap 2b, decyzja właściciela 08.10.2026: takie zdjęcie przy
      * pełnym pobraniu bez zamiennika jest usuwane). Zdjęcie bez koloru w nazwie pliku zostaje — nie wiemy, co
      * przedstawia; zdjęcia ręczne (bez adresu) i z B2B nietknięte.
      *
@@ -2174,7 +2396,8 @@ final class ProductEnrichmentService
             ->get(['id', 'source_url']);
         foreach ($images as $image) {
             $fileColours = ColourWords::allInUrl((string) $image->source_url);
-            if ($fileColours !== [] && array_intersect($fileColours, $colours) === []) {
+            // plik dwubarwny („BlackYellow” na karcie Żółtej, „Yel_Bk” na Czarnej) to też zdjęcie innego wariantu
+            if ($fileColours !== [] && ! ColourWords::sameSet($fileColours, $colours)) {
                 $out[(int) $image->id] = (string) $image->source_url;
             }
         }
@@ -2516,15 +2739,29 @@ final class ProductEnrichmentService
             }
             $savedImages = [];
             $imageNote = $pick['reason'];
-            if ($pick['url'] !== null) {
+            // bez adresu w kolorze karty: zamiennik z innej karty modelu w partii przed kopią zdjęcia lidera
+            $siblingCopy = $pick['url'] === null && $memberColours !== [] && ! $leaderProposal
+                ? $this->siblingImageCopy($member, $memberColours, $batchId, $memberKey?->stem)
+                : null;
+            if ($siblingCopy !== null) {
+                $savedImages = [$siblingCopy];
+                $imageNote = ModelImagePicker::REASON_SIBLING_COPY;
+            } elseif ($pick['url'] !== null) {
                 $savedImages = $this->images->downloadMany($member, [$pick['url']], 1);
                 if ($savedImages === []) {
                     $failure = $this->imageFailureSummary([$pick['url']]);
                     $imageNote .= ' — nie pobrano'.($failure !== '' ? ' ('.$failure.')' : '');
-                    // adres z galerii nie pobrał się — kopia zdjęcia lidera z tą samą regułą kolorów (pickFor bez galerii:
-                    // lider bez koloru albo z tym samym zbiorem kolorów; inaczej nic)
-                    $fallback = $this->imagePicker()->pickFor($member, $memberColours, [], $leaderImages ?? [], $memberKey?->stem);
-                    if ($fallback['copy_of'] !== null) {
+                    // adres z galerii nie pobrał się — najpierw zamiennik z innej karty modelu w partii, potem kopia zdjęcia
+                    // lidera z tą samą regułą kolorów (pickFor bez galerii: lider bez koloru albo z tym samym zbiorem
+                    // kolorów; inaczej nic)
+                    $siblingCopy = $memberColours !== [] ? $this->siblingImageCopy($member, $memberColours, $batchId, $memberKey?->stem) : null;
+                    $fallback = $siblingCopy === null
+                        ? $this->imagePicker()->pickFor($member, $memberColours, [], $leaderImages ?? [], $memberKey?->stem)
+                        : ['copy_of' => null];
+                    if ($siblingCopy !== null) {
+                        $savedImages = [$siblingCopy];
+                        $imageNote = 'adres z galerii nie pobrał się — '.ModelImagePicker::REASON_SIBLING_COPY;
+                    } elseif ($fallback['copy_of'] !== null) {
                         $copy = $this->copier()->copyImage($leader, $fallback['copy_of'], $member);
                         if ($copy !== null) {
                             $savedImages = [$copy];
@@ -2638,7 +2875,7 @@ final class ProductEnrichmentService
             }
             // decyzja per karta pod blokadą (publishRun): twarda baza i słabszy werdykt → propozycja, karta wraca do stanu
             // sprzed przebiegu; inaczej zapis z pochodzeniem model_shared
-            $version = $this->publishDescription($member, ProductDescriptionVersion::ORIGIN_MODEL_SHARED, $candidate, $versionData, $saved, $before, runWrites: $runWrites);
+            $version = $this->publishDescription($member, ProductDescriptionVersion::ORIGIN_MODEL_SHARED, $candidate, $versionData, $saved, $before, runWrites: $runWrites, newSourceUrl: $primaryUrl);
             if ($version === null) {
                 // nic nie znika przy propozycji — ślad wersji nie może mówić o usuniętym zdjęciu
                 $versionData['enrichment_trace'] = self::traceWithStaleColourKept($versionData['enrichment_trace'], $staleColourImages);
@@ -2838,6 +3075,13 @@ final class ProductEnrichmentService
      * @param  array<string, mixed>  $before  DescriptionVersionStore::snapshot sprzed przebiegu
      * @param  (callable(): bool)|null  $stillValid  sprawdzenie pod blokadą przed zapisem karty; false = wersja cofnięta, wynik null
      * @param  array<string, mixed>  $runWrites  kolumna => wartość zapisana przez ten przebieg przed decyzją (norms, manufacturer_norms)
+     * @param  string|null  $newSourceUrl  źródło nowego opisu (shopBaseYieldsTo)
+     *
+     * Etap 3, runda 3: marka „tylko od producenta” ze źródłem nowego opisu u producenta — wersja ze sklepu (bez ochrony:
+     * nie wybór człowieka, nie B2B) przechodzi w superseded jako cofnięta (DescriptionVersionStore::supersedeAsWithdrawn,
+     * karta bez zmian) w tej samej transakcji, pod blokadą, tuż przed decide — decide widzi kartę bez bazy i publikuje.
+     * Propozycja mimo to (np. strona odrzucona), wyjątek albo anulowanie przed zapisem cofają też to (rollback) — karta
+     * zostaje z dotychczasowym opisem i jego wersją.
      */
     private function publishDescription(
         Product $product,
@@ -2848,50 +3092,98 @@ final class ProductEnrichmentService
         array $before,
         ?callable $stillValid = null,
         array $runWrites = [],
+        ?string $newSourceUrl = null,
     ): ?ProductDescriptionVersion {
         // dane techniczne przebiegu (pliki, normy producenta) obok tych od wołającego (page_image_urls lidera modelu)
         $versionData[DescriptionVersionStore::META_KEY] = $this->versions()->versionMeta($product, $before, $runWrites)
             + (is_array($versionData[DescriptionVersionStore::META_KEY] ?? null) ? $versionData[DescriptionVersionStore::META_KEY] : []);
         $this->lastRunDecision = null;
         $abandoned = new RuntimeException('karta zmieniona w trakcie przebiegu — opis nie zapisany');
+        $shopBaseYields = $this->shopBaseYieldsTo($product, $newSourceUrl);
+        $keepShopBase = new RuntimeException('propozycja — wersja ze sklepu zostaje bazą');
+        $keptDecision = null;
         try {
-            $result = $this->versions()->publishRun(
-                $product,
-                $candidate,
-                $versionData,
-                function (ProductDescriptionVersion $version, array $decision) use ($product, $cardUpdates, $stillValid, $abandoned): void {
-                    if ($stillValid !== null && ! $stillValid()) {
-                        throw $abandoned;
-                    }
-                    $payload = is_array($cardUpdates['enrichment_payload'] ?? null) ? $cardUpdates['enrichment_payload'] : [];
-                    $payload['description_version_id'] = (int) $version->id;
-                    $product->update([
-                        ...$cardUpdates,
-                        'enrichment_payload' => $payload,
-                        'review_reason' => $decision['review_reason'],
-                        'review_since' => $this->reviewSince($product, $decision['review_reason']),
-                    ]);
-                },
-                $origin,
-            );
-        } catch (Throwable $e) {
-            // publishRun cofnął wersję i zapis karty — model w pamięci trzyma jednak atrybuty z nieudanego update();
-            // bez odświeżenia zapis statusu błędu (catch w enrichProduct) zapisałby je razem z nim
-            try {
-                $product->refresh();
-            } catch (Throwable) {
-                // baza niedostępna — catch w enrichProduct i tak nie zapisze karty
-            }
-            if ($e !== $abandoned) {
-                throw $e;
-            }
+            $result = DB::transaction(function () use ($product, $candidate, $versionData, $cardUpdates, $stillValid, $abandoned, $origin, $shopBaseYields, $keepShopBase, &$keptDecision): array {
+                $withdrawn = $shopBaseYields ? $this->supersedeShopBase($product) : null;
+                $result = $this->publishRunWithCard($product, $candidate, $versionData, $cardUpdates, $stillValid, $abandoned, $origin);
+                if ($withdrawn !== null && $result['version'] === null) {
+                    // propozycja: cofnięcie wersji ze sklepu też wraca (rollback całej transakcji)
+                    $keptDecision = $result['decision'];
+                    throw $keepShopBase;
+                }
 
-            return null;
+                return $result;
+            });
+        } catch (Throwable $e) {
+            if ($e === $keepShopBase && $keptDecision !== null) {
+                $result = ['decision' => $keptDecision, 'version' => null];
+            } else {
+                // publishRun cofnął wersję i zapis karty — model w pamięci trzyma jednak atrybuty z nieudanego update();
+                // bez odświeżenia zapis statusu błędu (catch w enrichProduct) zapisałby je razem z nim
+                try {
+                    $product->refresh();
+                } catch (Throwable) {
+                    // baza niedostępna — catch w enrichProduct i tak nie zapisze karty
+                }
+                if ($e !== $abandoned) {
+                    throw $e;
+                }
+
+                return null;
+            }
         }
         $this->lastRunDecision = $result['decision'];
         $this->lastRunVersion = $result['version'];
 
         return $result['version'];
+    }
+
+    /**
+     * publishRun z zapisem karty (description_version_id, klucze stanu karty z obecnego wiersza, powód przeglądu
+     * z decyzji) — część publishDescription, w jego transakcji.
+     *
+     * @param  array<string, mixed>  $candidate
+     * @param  array<string, mixed>  $versionData
+     * @param  array<string, mixed>  $cardUpdates
+     * @param  (callable(): bool)|null  $stillValid
+     * @return array{decision: array{action: string, review_reason: string|null, reason: string}, version: ProductDescriptionVersion|null}
+     */
+    private function publishRunWithCard(
+        Product $product,
+        array $candidate,
+        array $versionData,
+        array $cardUpdates,
+        ?callable $stillValid,
+        RuntimeException $abandoned,
+        string $origin,
+    ): array {
+        return $this->versions()->publishRun(
+            $product,
+            $candidate,
+            $versionData,
+            function (ProductDescriptionVersion $version, array $decision) use ($product, $cardUpdates, $stillValid, $abandoned): void {
+                if ($stillValid !== null && ! $stillValid()) {
+                    throw $abandoned;
+                }
+                $payload = is_array($cardUpdates['enrichment_payload'] ?? null) ? $cardUpdates['enrichment_payload'] : [];
+                // Klucze stanu karty (scalone rozmiary, ślady B2B — DescriptionVersionStore::CARD_STATE_PAYLOAD_KEYS)
+                // nie należą do opisu: zostają z obecnej karty (wiersz zablokowany w publishRun), jak w publish().
+                // Payload przebiegu budowany od zera kasował je przy każdym pobraniu (np. merged_size_skus).
+                $current = Product::query()->whereKey($product->id)->value('enrichment_payload');
+                $current = is_string($current) ? json_decode($current, true) : $current;
+                $keys = array_flip(DescriptionVersionStore::CARD_STATE_PAYLOAD_KEYS);
+                $payload = array_diff_key($payload, $keys)
+                    + (is_array($current) ? array_intersect_key($current, $keys) : []);
+                $payload['description_version_id'] = (int) $version->id;
+                $product->update([
+                    ...$cardUpdates,
+                    'enrichment_payload' => $payload,
+                    'review_reason' => $decision['review_reason'],
+                    'review_since' => $this->reviewSince($product, $decision['review_reason']),
+                ]);
+            },
+            $origin,
+        );
     }
 
     /**
@@ -2967,6 +3259,41 @@ final class ProductEnrichmentService
             'reason' => $decision['reason'],
         ]);
         $this->recordSourceDocuments($product, $sourcePages, $identity, $primarySourceUrl, $primarySourceKind, [], (int) $version->id);
+    }
+
+    /**
+     * Przebieg skończył się bez zapisu opisu (wyjątek, anulowanie partii): kolumny norm zapisane przez przebieg przed
+     * decyzją ($runWrites) wracają do stanu sprzed przebiegu — każda tylko wtedy, gdy na karcie stoi dalej wartość
+     * z tego przebiegu (jak w keepAsProposal). Model w pamięci dostaje stan z bazy.
+     *
+     * @param  array<string, mixed>  $before
+     * @param  array<string, mixed>  $runWrites
+     */
+    private function undoRunColumnWrites(Product $product, array $before, array $runWrites): void
+    {
+        if ($runWrites === []) {
+            return;
+        }
+        DB::transaction(static function () use ($product, $before, $runWrites): void {
+            /** @var Product|null $current */
+            $current = Product::query()->lockForUpdate()->find($product->id);
+            if ($current === null) {
+                return;
+            }
+            foreach (['norms', 'manufacturer_norms'] as $column) {
+                if (array_key_exists($column, $runWrites) && self::sameColumnValue($column, $current->{$column}, $runWrites[$column])) {
+                    $current->{$column} = $before[$column];
+                }
+            }
+            if ($current->isDirty()) {
+                // przez model — hak saving przelicza indeks wyszukiwania
+                $current->save();
+            }
+        });
+        foreach (['norms', 'manufacturer_norms'] as $column) {
+            $product->setAttribute($column, Product::query()->whereKey($product->id)->value($column));
+            $product->syncOriginalAttribute($column);
+        }
     }
 
     /**
@@ -3396,6 +3723,29 @@ final class ProductEnrichmentService
                 }
             }
         }
+        // Marka „tylko od producenta” (etap 3): wpis bierzemy tylko ze źródłem na hoście producenta, w katalogu PDF albo
+        // pod adresem wskazanym przez człowieka — opis ze sklepu (albo bez znanego źródła) z pamięci SKU omijałby W2/W4.
+        if ($this->identity->usesManufacturerSourcesOnly($product)) {
+            $cacheSource = $payload['primary_source_url'] ?? null;
+            if (! is_string($cacheSource) || trim($cacheSource) === '') {
+                $cacheSource = null;
+                foreach ([...(is_array($cache->source_urls) ? $cache->source_urls : []), ...(is_array($payload['source_urls'] ?? null) ? $payload['source_urls'] : [])] as $url) {
+                    if (is_string($url) && trim($url) !== '') {
+                        $cacheSource = $url;
+                        break;
+                    }
+                }
+            }
+            if ($cacheSource === null || ! $this->isManufacturerSourceUrl($product, trim($cacheSource))) {
+                $this->attemptLog()->add(
+                    'search',
+                    'pamięć SKU pominięta — marka tylko od producenta, wpis '.($cacheSource === null ? 'bez źródła' : 'ze źródła spoza stron producenta'),
+                    urls: $cacheSource !== null ? [trim($cacheSource)] : []
+                );
+
+                return false;
+            }
+        }
         // Pewność 0 (albo jej brak) to wpis, w którym model nie dał opisu: przed audytem 22.09.2026
         // opisem zostawał wtedy tekst strony (CAPTCHA, cennik, baner cookies). Taki wpis wracał
         // do karty manual/failed ze statusem „done” — produkt idzie normalną ścieżką.
@@ -3706,7 +4056,8 @@ final class ProductEnrichmentService
     {
         foreach ($candidates as $row) {
             $fetched = $this->pages->fetch([$row], (string) $product->sku, 1, [], $product);
-            $pages = $this->keepConfirmedCardPages($product, $fetched['pages']);
+            // etap 3 (W1): strona innego wyrobu marki albo ze sprzeczną cechą nie daje zdjęcia
+            $pages = $this->withoutForeignOrConflictingPages($product, $this->keepConfirmedCardPages($product, $fetched['pages']));
             if ($pages === []) {
                 continue;
             }
@@ -3745,6 +4096,8 @@ final class ProductEnrichmentService
                     fn (string $url): bool => ! $this->imageOnAnotherModelCard($url, $product)
                 ));
             }
+            // etap 3 (W5, decyzja właściciela 08.10.2026: zdjęcie ze sklepu przy markach ścisłych tylko po tych filtrach)
+            $picked = $this->withoutForeignImages($product, $picked);
             $saved = $this->images->downloadMany($product, $picked, 1);
             if ($saved !== []) {
                 return $saved;
@@ -3880,7 +4233,8 @@ final class ProductEnrichmentService
         if ($product->trustedShopUrl() === null && $pages === []) {
             return [];
         }
-        $urls = $this->cardImagesAfterConfirmation($trusted, $all, $pages, $product);
+        // etap 3 (W5): bez zdjęć z kodem innej karty marki i ze sprzeczną cechą bezpieczeństwa
+        $urls = $this->withoutForeignImages($product, $this->cardImagesAfterConfirmation($trusted, $all, $pages, $product));
         if ($urls === []) {
             return [];
         }
@@ -4762,7 +5116,8 @@ final class ProductEnrichmentService
             // Druga tura przechodzi TĘ SAMĄ bramkę tożsamości co pierwsza. Bez niej karta
             // innego wyrobu (zestaw SECURA 3100 przy nagłowiu, karta półmaski przy pierścieniu
             // zaczepowym) dokładała „bogatszy” opis i podmieniała ten z właściwej karty.
-            $extraCards = $this->keepConfirmedCardPages($product, $extraFetched['pages']);
+            // Etap 3 (W1): także strona innego wyrobu marki i ze sprzeczną cechą bezpieczeństwa nie idzie do modelu.
+            $extraCards = $this->withoutForeignOrConflictingPages($product, $this->keepConfirmedCardPages($product, $extraFetched['pages']));
             if ($listSites !== null) {
                 // strona cennika idzie przed innymi tylko jako strona tego wariantu (jak w priceListSitePagesFirst)
                 $extraCards = array_values(array_filter(
@@ -5081,43 +5436,46 @@ final class ProductEnrichmentService
      * z konfiguracji (pula bywa pusta), a tryb „najpierw” idzie dawną drogą (listedSitePagesFirst). Karta producenta tnie
      * pulę jak dotąd.
      *
+     * Etap 3 (W2, decyzja właściciela 08.10.2026): marka z listy przy zwykłym pobieraniu ($sourceHierarchy) BEZ karty
+     * producenta w puli nie bierze już opisu ze sklepów — zostają katalog PDF i adres wskazany przez człowieka
+     * (cut = true, missing = true); strony cennika z pliku i lista „Strony wyszukiwarka” nie otwierają dla niej sklepów.
+     * Pusta pula z missing = brak strony producenta (enrichProduct: ManufacturerPageMissingException, model nie jest
+     * wołany). Uzupełnianie opisów B2B ($sourceHierarchy = false) — bez zmian.
+     *
      * @param  list<array<string, mixed>>  $pages
-     * @return array{pages: list<array<string, mixed>>, cut: bool, listed: bool, list_sites: bool}
+     * @return array{pages: list<array<string, mixed>>, cut: bool, listed: bool, list_sites: bool, missing: bool}
      */
     private function manufacturerOnlyPages(Product $product, array $pages, bool $sourceHierarchy = true): array
     {
         if ($pages === []) {
-            return ['pages' => $pages, 'cut' => false, 'listed' => false, 'list_sites' => false];
+            return ['pages' => $pages, 'cut' => false, 'listed' => false, 'list_sites' => false, 'missing' => false];
         }
         $byLink = $this->trustedManufacturerCardInPool($product, $pages);
         $hasCard = $byLink;
+        $strict = $this->identity->usesManufacturerSourcesOnly($product);
         $everyBrand = $sourceHierarchy && (bool) config('enrichment.manufacturer_first_every_brand', false);
-        if (! $hasCard && ($everyBrand || $this->identity->usesManufacturerSourcesOnly($product))) {
-            foreach ($pages as $page) {
-                $url = (string) ($page['url'] ?? '');
-                if ($url !== '' && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS
-                    && $this->identity->isOfficialCatalogUrl($url, $product)) {
-                    $hasCard = true;
-                    break;
-                }
-            }
+        if (! $hasCard && ($everyBrand || $strict)) {
+            $hasCard = $this->officialCardInPool($product, $pages);
         }
         if (! $hasCard) {
             if (! $sourceHierarchy) {
-                return ['pages' => $pages, 'cut' => false, 'listed' => false, 'list_sites' => false];
+                return ['pages' => $pages, 'cut' => false, 'listed' => false, 'list_sites' => false, 'missing' => false];
+            }
+            if ($strict) {
+                return ['pages' => $this->manufacturerSourcesWithoutCard($product, $pages), 'cut' => true, 'listed' => false, 'list_sites' => false, 'missing' => true];
             }
             if ($this->listSources !== null) {
                 $fromList = $this->priceListSitePagesFirst($product, $pages);
                 if ($fromList !== null) {
-                    return ['pages' => $fromList, 'cut' => false, 'listed' => true, 'list_sites' => true];
+                    return ['pages' => $fromList, 'cut' => false, 'listed' => true, 'list_sites' => true, 'missing' => false];
                 }
                 if ($this->listSources->onlyMode()) {
-                    return ['pages' => $this->withoutPagesOutsideListSites($product, $pages), 'cut' => false, 'listed' => true, 'list_sites' => true];
+                    return ['pages' => $this->withoutPagesOutsideListSites($product, $pages), 'cut' => false, 'listed' => true, 'list_sites' => true, 'missing' => false];
                 }
             }
             $listed = $this->listedSitePagesFirst($product, $pages);
 
-            return ['pages' => $listed['pages'], 'cut' => false, 'listed' => $listed['cut'], 'list_sites' => false];
+            return ['pages' => $listed['pages'], 'cut' => false, 'listed' => $listed['cut'], 'list_sites' => false, 'missing' => false];
         }
         $kept = [];
         $dropped = [];
@@ -5141,7 +5499,683 @@ final class ProductEnrichmentService
             );
         }
 
-        return ['pages' => $kept, 'cut' => true, 'listed' => false, 'list_sites' => false];
+        return ['pages' => $kept, 'cut' => true, 'listed' => false, 'list_sites' => false, 'missing' => false];
+    }
+
+    /**
+     * Strona z treścią karty (≥ MFR_CARD_MIN_CHARS) na hoście producenta z konfiguracji (isOfficialCatalogUrl — nie na
+     * domenie odgadniętej z wyników).
+     *
+     * @param  list<array<string, mixed>>  $pages
+     */
+    private function officialCardInPool(Product $product, array $pages): bool
+    {
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS
+                && $this->identity->isOfficialCatalogUrl($url, $product)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Karta producenta w puli tak, jak liczy ją manufacturerOnlyPages: zapisany link na stronę producenta z treścią
+     * albo strona z treścią na jego hoście z konfiguracji.
+     *
+     * @param  list<array<string, mixed>>  $pages
+     */
+    private function manufacturerCardInPool(Product $product, array $pages): bool
+    {
+        return $this->trustedManufacturerCardInPool($product, $pages) || $this->officialCardInPool($product, $pages);
+    }
+
+    /**
+     * Marka „tylko od producenta” bez jego karty (etap 3, W2): zostają blok katalogu PDF i adres wskazany przez
+     * człowieka, sklepy odpadają (wpis w przebiegu).
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return list<array<string, mixed>>
+     */
+    private function manufacturerSourcesWithoutCard(Product $product, array $pages): array
+    {
+        $kept = [];
+        $dropped = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && ($this->catalogPdf()->isConfiguredCatalogUrl($url) || $product->isTrustedShopUrl($url))) {
+                $kept[] = $page;
+
+                continue;
+            }
+            $dropped[] = $url;
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->add(
+                'page',
+                'tylko strony producenta — karty producenta brak, pominięte strony sklepów: '.count($dropped),
+                urls: array_values(array_filter($dropped))
+            );
+        }
+
+        return $kept;
+    }
+
+    /**
+     * Etap 3 (W1): strona innego wyrobu marki albo ze sprzeczną cechą bezpieczeństwa odpada z puli — razem ze swoimi
+     * zdjęciami i plikami (biorą się ze stron opisu). Inny wyrób: arbiter najdłuższego kodu (SourceIdentity::
+     * pageCodeRelation — „1011 R” na stronie przy karcie 1011, „102” z numeru wpisu przy stronie modelu 1102, etykieta
+     * „REF/Indeks” z innym kodem producenta; tylko profile z longest_code_wins). Sprzeczna cecha: kV, klasa izolacji,
+     * klasa filtra, gaz z nazwy karty bez części wspólnej z adresem i tytułem strony (SafetyFeatures; brak cechy w źródle
+     * to nie sprzeczność). Adres wskazany przez człowieka i blok katalogu PDF zwolnione. Tytuł, mikrodane i surowy tekst
+     * strony biorą się z dziennika przebiegu — pula po scaleniu (mergePageSnippets) ich nie niesie.
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return list<array<string, mixed>>
+     */
+    private function withoutForeignOrConflictingPages(Product $product, array $pages): array
+    {
+        if ($pages === []) {
+            return [];
+        }
+        $profile = $this->profiles()->for($product);
+        $card = SafetyFeatures::ofCard($product);
+        $logged = [];
+        foreach ($this->pages->runLog() as $page) {
+            $url = is_array($page) ? (string) ($page['url'] ?? '') : '';
+            if ($url !== '') {
+                $logged[Product::normalizeShopUrl($url)] = $page;
+            }
+        }
+        $kept = [];
+        $dropped = [];
+        $why = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url === '' || $product->isTrustedShopUrl($url) || $this->catalogPdf()->isConfiguredCatalogUrl($url)) {
+                $kept[] = $page;
+
+                continue;
+            }
+            $judged = $page;
+            $fromLog = $logged[Product::normalizeShopUrl($url)] ?? null;
+            if (is_array($fromLog)) {
+                $judged = [...$page, ...$fromLog];
+            }
+            $reason = null;
+            $relation = $this->sourceIdentity()->pageCodeRelation($product, $judged, $profile);
+            if (($relation['verdict'] ?? null) === CardCodeArbiter::FOREIGN) {
+                $code = trim((string) ($relation['code'] ?? ''));
+                $reason = 'inny wyrób marki'.($code !== '' ? ' ('.$code.')' : '');
+            } else {
+                $found = [SafetyFeatures::inUrl($url), SafetyFeatures::in((string) ($judged['title'] ?? ''))];
+                $final = trim((string) ($judged['final_url'] ?? ''));
+                if ($final !== '' && $final !== $url) {
+                    $found[] = SafetyFeatures::inUrl($final);
+                }
+                // suma cech po kluczach (SafetyFeatures::merge) — „+” na tablicach zgubiłby cechy z tytułu
+                $conflict = SafetyFeatures::conflict($card, SafetyFeatures::merge(...$found));
+                if ($conflict !== null) {
+                    $reason = 'sprzeczna cecha: '.$conflict;
+                }
+            }
+            if ($reason === null) {
+                $kept[] = $page;
+
+                continue;
+            }
+            $dropped[] = $url;
+            $why[] = $reason;
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->add(
+                'page',
+                'strony innego wyrobu albo ze sprzeczną cechą bezpieczeństwa — pominięte: '.count($dropped),
+                urls: $dropped,
+                why: $why,
+            );
+        }
+
+        return $kept;
+    }
+
+    /**
+     * Etap 3 (W5): zdjęcie z kodem innej karty marki w nazwie pliku albo adresie (SourceIdentity::fileCodeRelation —
+     * „…-model-1011-r.jpg” przy karcie 1011) albo ze sprzeczną cechą bezpieczeństwa w adresie („…-20kv.jpg” przy 30 kV)
+     * odpada. Zdjęcie bez kodu i bez cechy zostaje — o nim decydują dalsze bramki jak dotąd.
+     *
+     * @param  list<mixed>  $urls
+     * @return list<string>
+     */
+    private function withoutForeignImages(Product $product, array $urls): array
+    {
+        if ($urls === []) {
+            return [];
+        }
+        $profile = $this->profiles()->for($product);
+        $card = SafetyFeatures::ofCard($product);
+        $kept = [];
+        $dropped = [];
+        $why = [];
+        foreach ($urls as $url) {
+            if (! is_string($url) || $url === '') {
+                continue;
+            }
+            $relation = $this->sourceIdentity()->fileCodeRelation($product, $url, $profile);
+            $reason = null;
+            if (($relation['verdict'] ?? null) === CardCodeArbiter::FOREIGN) {
+                $code = trim((string) ($relation['code'] ?? ''));
+                $reason = 'zdjęcie innego wyrobu marki'.($code !== '' ? ' ('.$code.')' : '');
+            } else {
+                $conflict = SafetyFeatures::conflict($card, SafetyFeatures::inUrl($url));
+                if ($conflict !== null) {
+                    $reason = 'sprzeczna cecha: '.$conflict;
+                }
+            }
+            if ($reason === null) {
+                $kept[] = $url;
+
+                continue;
+            }
+            $dropped[] = $url;
+            $why[] = $reason;
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->add('image', 'zdjęcia innego wyrobu albo ze sprzeczną cechą — pominięte: '.count($dropped), urls: $dropped, why: $why);
+        }
+
+        return array_values(array_unique($kept));
+    }
+
+    /**
+     * Etap 3 (W6): pliki PDF wyrobu.
+     * (a) plik z kodem innej karty marki w adresie albo opisie linku (fileCodeRelation = foreign) odpada — także plik ze
+     *     strony opisu (CEDERROTH „51011003-v03.pdf” przy 51011013);
+     * (b) plik z numerem wpisu sklepu (pdf.php?id_product=N, ShopEntryId::entryId) na hoście strony opisu zostaje tylko
+     *     wtedy, gdy N to numer wpisu którejś strony opisu na tym hoście (AJ GROUP id_product=105 przy stronie 104);
+     * (c) — w enrichProduct: kod wyrobu szukany w adresie bez numerów wpisów sklepu;
+     * (d) marka „tylko od producenta” z pulą zawężoną do producenta ($manufacturerOnly): tylko pliki ze stron opisu,
+     *     z hostów producenta albo katalogu (PDF-y MAPA z cas-technik.eu z wyników wyszukiwania odpadają).
+     *
+     * @param  list<string>  $urls
+     * @param  array<string, string>  $labels  adres pliku => opis linku
+     * @param  list<array<string, mixed>>  $descPages  strony opisu
+     * @param  array<string, true>  $fromDescriptionPages  pliki wymienione przez strony opisu
+     * @return list<string>
+     */
+    private function withoutForeignDocuments(
+        Product $product,
+        array $urls,
+        array $labels,
+        array $descPages,
+        bool $manufacturerOnly = false,
+        array $fromDescriptionPages = [],
+    ): array {
+        if ($urls === []) {
+            return [];
+        }
+        $profile = $this->profiles()->for($product);
+        $hostOf = static fn (string $url): string => (string) preg_replace(
+            '/^www\./',
+            '',
+            mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))
+        );
+        // numery wpisów sklepu stron opisu, po hoście — tylko hosty, których strony opisu same niosą numer wpisu
+        // (porównanie ma sens tylko w obrębie jednego sklepu; „file.php?id=55” producenta bez numerów stron zostaje)
+        $entryIds = [];
+        foreach ($descPages as $page) {
+            foreach (array_unique(array_filter([(string) ($page['url'] ?? ''), (string) ($page['final_url'] ?? '')])) as $address) {
+                $host = $hostOf($address);
+                $id = ShopEntryId::entryId($address);
+                if ($host !== '' && $id !== null) {
+                    $entryIds[$host][$id] = true;
+                }
+            }
+        }
+        $strictPool = $manufacturerOnly && $this->identity->usesManufacturerSourcesOnly($product);
+        $kept = [];
+        $dropped = [];
+        $why = [];
+        foreach ($urls as $url) {
+            if (! is_string($url) || $url === '') {
+                continue;
+            }
+            $reason = null;
+            $relation = $this->sourceIdentity()->fileCodeRelation($product, $url.' '.($labels[$url] ?? ''), $profile);
+            $host = $hostOf($url);
+            $entry = ShopEntryId::entryId($url);
+            if (($relation['verdict'] ?? null) === CardCodeArbiter::FOREIGN) {
+                $code = trim((string) ($relation['code'] ?? ''));
+                $reason = 'plik innego wyrobu marki'.($code !== '' ? ' ('.$code.')' : '');
+            } elseif ($entry !== null && $host !== '' && isset($entryIds[$host]) && ! isset($entryIds[$host][$entry])) {
+                $reason = 'plik wpisu sklepu '.$entry.' spoza stron opisu';
+            } elseif ($strictPool && ! isset($fromDescriptionPages[$url])
+                && ! ($profile?->ownsUrl($url) ?? false)
+                && ! $this->identity->isOfficialCatalogUrl($url, $product)
+                && ! $this->catalogPdf()->isConfiguredCatalogUrl($url)) {
+                $reason = 'tylko strony producenta — plik spoza stron opisu i hostów producenta';
+            }
+            if ($reason === null) {
+                $kept[] = $url;
+
+                continue;
+            }
+            $dropped[] = $url;
+            $why[] = $reason;
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->add('docs', 'pliki innego wyrobu albo spoza stron opisu — pominięte: '.count($dropped), urls: $dropped, why: $why);
+        }
+
+        return array_values(array_unique($kept));
+    }
+
+    /**
+     * Etap 3 (W3): marka „tylko od producenta” bez jego karty w puli — druga próba na hostach producenta z innymi
+     * zapisami kodu (ManufacturerCodeForms według profilu: „SBA01B” → „SBA01”). Dla każdego zapisu kopia karty z tym
+     * SKU (nigdy nie zapisywana) szuka w indeksie hostów producenta, a bez trafienia w wyszukiwarce (site:). Zostają strony
+     * na hoście producenta, które werdykt tożsamości uznaje za twarde dla kopii i które nie są stroną innej karty marki
+     * (arbiter, cechy bezpieczeństwa — withoutForeignOrConflictingPages na prawdziwej karcie). Werdykt karty dla takiej
+     * strony to najwyżej soft (SourceIdentity: kod karty w innym zapisie) — opis idzie do przeglądu jako identity_soft.
+     * Awaria wyszukiwarki zapamiętana w manufacturerRetryOutage (wtedy „failed”, nie manufacturer_missing).
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function retryManufacturerHosts(Product $product): array
+    {
+        $profile = $this->profiles()->for($product);
+        if ($profile === null || $profile->hosts === []) {
+            return [];
+        }
+        $forms = app(ManufacturerCodeForms::class)->alternatives($product, $profile);
+        if ($forms === []) {
+            $this->attemptLog()->add('search', 'druga próba na stronach producenta — brak innych zapisów kodu '.$product->sku);
+
+            return [];
+        }
+        $sku = mb_strtolower(trim((string) $product->sku));
+        foreach ($forms as $form) {
+            $code = trim((string) ($form['code'] ?? ''));
+            $rule = trim((string) ($form['rule'] ?? ''));
+            if ($code === '' || mb_strtolower($code) === $sku) {
+                continue;
+            }
+            $label = 'druga próba: kod '.$code.($rule !== '' ? ' ('.$rule.')' : '');
+            // kopia tylko do szukania i werdyktu — nigdy nie zapisywana
+            $clone = clone $product;
+            $clone->sku = $code;
+            $hits = $this->search->catalogHitsOnHosts($clone, $profile->hosts, $label);
+            if ($hits === []) {
+                $hits = $this->search->searchOnHosts($clone, $profile->hosts, $label);
+                foreach ($this->search->lastHostSearchErrors() as $error) {
+                    if ($this->searchFailedDueToEngineOutage($error)) {
+                        $this->manufacturerRetryOutage ??= $error;
+                    }
+                }
+            }
+            $hits = array_values(array_filter(
+                $this->withoutRejectedSources($hits, $product),
+                static fn (mixed $row): bool => is_array($row) && $profile->ownsUrl((string) ($row['url'] ?? ''))
+            ));
+            if ($hits === []) {
+                $this->attemptLog()->add('search', $label.' — brak strony na hostach producenta');
+
+                continue;
+            }
+            $fetched = $this->pages->fetch($hits, $code, 3, $profile->hosts, $clone);
+            $found = [];
+            $skipped = [];
+            $why = [];
+            foreach ($fetched['pages'] as $page) {
+                $url = is_array($page) ? (string) ($page['url'] ?? '') : '';
+                if ($url === '' || ! $profile->ownsUrl($url)) {
+                    continue;
+                }
+                $verdict = $this->sourceIdentity()->judgePage($clone, $page, $profile);
+                if (($verdict['verdict'] ?? null) !== SourceIdentity::HARD) {
+                    $skipped[] = $url;
+                    $why[] = 'bez kodu '.$code.': '.(string) ($verdict['reason'] ?? '');
+
+                    continue;
+                }
+                if ($this->withoutForeignOrConflictingPages($product, [$page]) === []) {
+                    continue;
+                }
+                $found[] = $page;
+            }
+            if ($skipped !== []) {
+                $this->attemptLog()->add('page', $label.' — strony bez potwierdzenia kodu', urls: $skipped, why: $why);
+            }
+            $this->attemptLog()->add('search', $label.' — stron producenta: '.count($found), urls: array_column($found, 'url'));
+            if ($found !== []) {
+                return $found;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Etap 3 (W4): wyjątek końca przebiegu bez strony producenta przy marce „tylko od producenta”. Awaria wyszukiwarki
+     * (w pierwszym szukaniu albo w drugiej próbie) to nie brak strony — zwykły ProductSourcesNotFoundException z frazą
+     * awarii, przebieg kończy się w „failed” i nic nie jest cofane.
+     */
+    private function manufacturerPageMissing(Product $product, string $searchEmptyDetail): ProductSourcesNotFoundException
+    {
+        $outage = $this->engineOutageDetail($searchEmptyDetail) ?? $this->manufacturerRetryOutage;
+        if ($outage !== null) {
+            return new ProductSourcesNotFoundException(
+                'Wyszukiwarka nie odpowiedziała przy produkcie '.$product->sku
+                    .' — nie wiadomo, czy strona producenta istnieje. Ponów po przywróceniu wyszukiwarki. '.$outage
+            );
+        }
+        $hosts = [];
+        foreach ($this->profiles()->for($product)?->hosts ?? [] as $host) {
+            $host = (string) preg_replace('/^www\./', '', mb_strtolower(trim((string) $host)));
+            if ($host !== '') {
+                $hosts[$host] = $host;
+            }
+        }
+
+        return new ManufacturerPageMissingException(
+            'Strony producenta nie znaleziono (hosty: '.($hosts !== [] ? implode(', ', array_slice(array_values($hosts), 0, 4)) : 'brak w konfiguracji')
+                .') — marka tylko od producenta, sklepy pominięte. Wskaż adres w Do przeglądu.'
+        );
+    }
+
+    /**
+     * Etap 3 (W4, decyzja właściciela 08.10.2026): przy pełnym pobraniu bez strony producenta opis karty marki „tylko od
+     * producenta”, który przyszedł spoza hostów producenta (sklep), wraca do historii wersji
+     * (DescriptionVersionStore::withdrawCurrent: wersja → superseded, opis i normy karty puste, powód przeglądu
+     * manufacturer_missing; „Przywróć wersję” go oddaje). Opis ze strony producenta, z katalogu PDF, z adresu wskazanego
+     * przez człowieka i bez znanego źródła zostaje; wersję chronioną i opis z B2B odmawia cofnąć sam magazyn wersji.
+     * Zdjęć i plików nie usuwamy. Błąd cofania nie zmienia wyniku przebiegu (karta i tak idzie do przeglądu).
+     */
+    private function withdrawShopDescription(Product $product): bool
+    {
+        try {
+            $product->refresh();
+            if (! $product->hasDescriptionText()) {
+                return false;
+            }
+            $source = $this->shopDescriptionSource($product);
+            if ($source === null) {
+                return false;
+            }
+            $host = (string) (parse_url($source, PHP_URL_HOST) ?? $source);
+            $version = $this->versions()->withdrawCurrent(
+                $product,
+                'brak strony producenta — opis ze sklepu '.$host.' cofnięty (marka tylko od producenta)'
+            );
+            if ($version === null) {
+                $this->attemptLog()->add('desc', 'opis ze sklepu zostaje — wersja chroniona albo opis z B2B', urls: [$source]);
+
+                return false;
+            }
+            $this->attemptLog()->add('desc', 'opis ze sklepu cofnięty do historii wersji — marka tylko od producenta, strony producenta brak (zdjęcia i pliki zostają)', urls: [$source]);
+            $product->refresh();
+
+            return true;
+        } catch (Throwable $e) {
+            Log::warning('Withdrawing shop description failed', ['product_id' => $product->id, 'error' => $e->getMessage()]);
+
+            return false;
+        }
+    }
+
+    /**
+     * Adres źródła obecnego opisu karty, gdy to sklep: spoza hostów producenta (profil i konfiguracja), katalogu PDF
+     * i adresu wskazanego przez człowieka. null = opis ze źródła producenta, wskazany ręcznie albo bez znanego źródła.
+     * Czyta enrichment_payload karty (primary_source_url, a bez niego pierwszy z source_urls).
+     */
+    private function shopDescriptionSource(Product $product): ?string
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        if (($payload['primary_source_kind'] ?? null) === 'manual') {
+            return null;
+        }
+        $source = $payload['primary_source_url'] ?? null;
+        if (! is_string($source) || trim($source) === '') {
+            $source = null;
+            foreach ((array) ($payload['source_urls'] ?? []) as $url) {
+                if (is_string($url) && trim($url) !== '') {
+                    $source = $url;
+                    break;
+                }
+            }
+        }
+        if ($source === null) {
+            return null;
+        }
+        $source = trim($source);
+
+        return $this->isManufacturerSourceUrl($product, $source) ? null : $source;
+    }
+
+    /** Strona producenta (host z profilu albo z konfiguracji), blok katalogu PDF albo adres wskazany przez człowieka. */
+    private function isManufacturerSourceUrl(Product $product, string $url): bool
+    {
+        return $product->isTrustedShopUrl($url)
+            || $this->catalogPdf()->isConfiguredCatalogUrl($url)
+            || ($this->profiles()->for($product)?->ownsUrl($url) ?? false)
+            || $this->identity->isOfficialCatalogUrl($url, $product);
+    }
+
+    /**
+     * Etap 3: marka „tylko od producenta”, a nowy opis ma źródło u producenta (strona producenta — także z drugiej próby,
+     * werdykt soft — katalog PDF albo adres wskazany przez człowieka): obecny opis ze sklepu nie jest bazą dla decide().
+     * Bez tego decide() porównywał werdykt soft strony producenta z hard sklepu (roboczystyl przy SBA01B, członkowie
+     * Coby z opisem lidera z coba.com) i opis producenta zostawał tylko propozycją.
+     */
+    private function shopBaseYieldsTo(Product $product, ?string $newSourceUrl): bool
+    {
+        return $newSourceUrl !== null && trim($newSourceUrl) !== ''
+            && $this->identity->usesManufacturerSourcesOnly($product)
+            && $this->isManufacturerSourceUrl($product, trim($newSourceUrl));
+    }
+
+    /**
+     * W transakcji publishDescription, pod blokadą wiersza karty: bieżąca wersja opisu ze sklepu → superseded jako
+     * cofnięta (karta bez zmian — nowy opis zapisuje zaraz publishRun). null = karta bez opisu, opis spoza sklepu,
+     * wersja chroniona albo opis z B2B (decyzja idzie wtedy jak dotąd).
+     */
+    private function supersedeShopBase(Product $product): ?ProductDescriptionVersion
+    {
+        /** @var Product|null $locked */
+        $locked = Product::query()->lockForUpdate()->find($product->id);
+        if ($locked === null || ! $locked->hasDescriptionText()) {
+            return null;
+        }
+        $source = $this->shopDescriptionSource($locked);
+        if ($source === null) {
+            return null;
+        }
+        $version = $this->versions()->supersedeAsWithdrawn($locked, 'opis ze sklepu zastąpiony stroną producenta');
+        if ($version === null) {
+            $this->attemptLog()->add('desc', 'opis ze sklepu zostaje bazą — wersja chroniona albo opis z B2B', urls: [$source]);
+        }
+
+        return $version;
+    }
+
+    /**
+     * Powód i chwila przeglądu karty, która czeka na decyzję w „Do przeglądu” z propozycją opisu (worse_version albo
+     * rejected_source i wersja proposed bez decyzji); null = bez czekającej propozycji. Stan z bazy — model w pamięci
+     * przebiegu bywa sprzed zapisu propozycji.
+     *
+     * @return array{review_reason: string, review_since: CarbonInterface}|null
+     */
+    private function waitingProposalReview(Product $product): ?array
+    {
+        $row = Product::query()->whereKey($product->id)->first(['id', 'review_reason', 'review_since']);
+        if ($row === null || ! in_array($row->review_reason, [Product::REVIEW_WORSE_VERSION, Product::REVIEW_REJECTED_SOURCE], true)) {
+            return null;
+        }
+        $waiting = ProductDescriptionVersion::query()
+            ->where('product_id', $product->id)
+            ->where('status', ProductDescriptionVersion::STATUS_PROPOSED)
+            ->whereNull('decision')
+            ->exists();
+
+        return $waiting ? ['review_reason' => (string) $row->review_reason, 'review_since' => $row->review_since ?? now()] : null;
+    }
+
+    /**
+     * Opis od modelu jako zwykły tekst (ProductDescriptionText::plain) bez urwanego końca (etap 3, W7): ostatni akapit
+     * kończący się na „:”, „,”, „(”, myślnik albo bez kropki jest obcinany do ostatniego pełnego zdania — ślad „desc”.
+     * Gdy z akapitu nic by nie zostało, tekst zostaje bez zmian.
+     */
+    private function modelText(string $raw): string
+    {
+        $text = ProductDescriptionText::plain($raw);
+        if ($text === '') {
+            return '';
+        }
+        $tail = ProductDescriptionText::withoutUnfinishedTail($text);
+        if (($tail['cut'] ?? '') === '') {
+            return $text;
+        }
+        $this->attemptLog()->add('desc', 'urwany koniec opisu obcięty: „'.mb_substr((string) $tail['cut'], 0, 200).'”');
+
+        return (string) $tail['text'];
+    }
+
+    /**
+     * Etap 3 (W7, §1.5): opis z jawnym kodem filtra (P1–P3, FFP1–3) albo gazu (A2, ABEK…) sprzecznym z nazwą karty
+     * („Pochłaniacz 3033 E2” z opisem tylko o klasie A2) jest odrzucany — model opisał inny wyrób. kV i klasy izolacji
+     * w opisie nie porównujemy (strona rodziny podaje wszystkie warianty); brak cechy w opisie to nie sprzeczność.
+     */
+    private function descriptionContradictsCard(Product $product, string $description): bool
+    {
+        if (trim($description) === '') {
+            return false;
+        }
+        $card = SafetyFeatures::ofCard($product);
+        $found = SafetyFeatures::in($description);
+        $found['kv'] = [];
+        $found['insulation'] = [];
+        $conflict = SafetyFeatures::conflict($card, $found);
+        if ($conflict === null) {
+            return false;
+        }
+        $this->attemptLog()->add('desc', 'opis sprzeczny z nazwą karty ('.$conflict.') — odrzucony');
+
+        return true;
+    }
+
+    /** Powód wycięcia zdania, które powtarza polecenie (PromptEcho) — rozdziela dropped_meta_sentences od norm. */
+    private const PROMPT_ECHO_REASON = 'powtórzenie polecenia';
+
+    /**
+     * Etap 3 (W7) przed sitem norm: „EN ISO 388” → „EN 388” w opisie (ślad), zdania powtarzające polecenie
+     * (PromptEcho: „Produkt należy do kategorii PPE (obuwie, rękawice, odzież), a tekst opisuje…”) i zdania ze sprzecznym
+     * oznaczeniem normy (NormListSanity::sentenceProblems: „EN ISO 13999” z literą, typ EN ISO 374-1 sprzeczny z liczbą
+     * liter) wypadają. Opis za krótki po wycięciu — wyjątek jak przy normach spoza źródeł.
+     *
+     * @return array{description: string, dropped_norm_claims: list<string>, dropped_meta_sentences: list<string>}
+     */
+    private function withoutPromptEchoAndNormProblems(string $description): array
+    {
+        $fixed = (string) preg_replace('/\bEN[\s\-]*ISO[\s\-]*388(?!\d)/u', 'EN 388', $description);
+        if ($fixed !== $description) {
+            $this->attemptLog()->add('desc', 'poprawiono „EN ISO 388” na „EN 388” w opisie');
+        }
+        $filtered = SourceClaimGuard::filterSentences($fixed, static function (string $sentence): array {
+            if (PromptEcho::isEcho($sentence)) {
+                return [self::PROMPT_ECHO_REASON];
+            }
+
+            return NormListSanity::sentenceProblems($sentence);
+        });
+        $meta = [];
+        $norms = [];
+        $echoPrefix = self::PROMPT_ECHO_REASON.': ';
+        foreach ($filtered['dropped'] as $dropped) {
+            if (str_starts_with($dropped, $echoPrefix)) {
+                $meta[] = mb_substr(mb_substr($dropped, mb_strlen($echoPrefix)), 0, 300);
+            } else {
+                $norms[] = mb_substr($dropped, 0, 300);
+            }
+        }
+        if ($filtered['dropped'] !== []) {
+            $this->attemptLog()->add('desc', 'usunięto zdania powtarzające polecenie albo ze sprzecznym oznaczeniem normy: '.mb_substr(implode(' | ', $filtered['dropped']), 0, 400));
+            if (! Product::isDescriptionText($filtered['text'])) {
+                throw new RuntimeException('Opis po usunięciu zdań powtarzających polecenie albo ze sprzecznym oznaczeniem normy jest za krótki: '.mb_substr(implode(' | ', $filtered['dropped']), 0, 300));
+            }
+        }
+
+        return [
+            'description' => $filtered['text'],
+            'dropped_norm_claims' => array_values(array_unique($norms)),
+            'dropped_meta_sentences' => array_values(array_unique($meta)),
+        ];
+    }
+
+    /**
+     * Etap 3 (W7) po sicie norm: pola norm (norms, attributes.normy_en) przez NormListSanity::clean — poziom, który do
+     * normy nie należy, zdjęty („EN 388 15 gauge” → „EN 388”), „Kategoria 2” przeniesiona do certyfikatów, pozycja bez
+     * oznaczenia normy albo sprzeczna („EN ISO 13999 D”, „EN ISO 374-1 Type B JKLOPT”, „ATEX…”) odrzucona — poprawki
+     * i odrzucenia do dropped_norm_claims z przedrostkiem „pole norm: ”. Pozycje list powtarzające polecenie
+     * (PromptEcho) wypadają do dropped_meta_sentences.
+     *
+     * @param  array<string, mixed>  $extracted
+     * @return array{extracted: array<string, mixed>, dropped_norm_claims: list<string>, dropped_meta_sentences: list<string>}
+     */
+    private function withSaneNormLists(array $extracted): array
+    {
+        $meta = [];
+        foreach (['features', 'norms', 'certificates', 'materials', 'use_cases', 'specs'] as $key) {
+            if (! is_array($extracted[$key] ?? null)) {
+                continue;
+            }
+            $extracted[$key] = array_values(array_filter($extracted[$key], static function (mixed $item) use (&$meta): bool {
+                if (is_string($item) && PromptEcho::isEcho($item)) {
+                    $meta[] = mb_substr($item, 0, 300);
+
+                    return false;
+                }
+
+                return true;
+            }));
+        }
+
+        $notes = [];
+        $moved = [];
+        $clean = static function (array $list) use (&$notes, &$moved): array {
+            $items = array_values(array_filter($list, static fn (mixed $v): bool => is_string($v) && trim($v) !== ''));
+            if ($items === []) {
+                return [];
+            }
+            $result = NormListSanity::clean($items);
+            foreach ([...$result['fixed'], ...$result['dropped']] as $note) {
+                $notes[] = 'pole norm: '.$note;
+            }
+            $moved = [...$moved, ...$result['certificates']];
+
+            return array_values($result['norms']);
+        };
+        if (is_array($extracted['norms'] ?? null)) {
+            $extracted['norms'] = $clean($extracted['norms']);
+        }
+        if (is_array($extracted['attributes'] ?? null) && is_array($extracted['attributes']['normy_en'] ?? null)) {
+            $extracted['attributes']['normy_en'] = $clean($extracted['attributes']['normy_en']);
+        }
+        if ($moved !== []) {
+            $certificates = is_array($extracted['certificates'] ?? null) ? $extracted['certificates'] : [];
+            $extracted['certificates'] = array_values(array_unique([...$certificates, ...$moved]));
+        }
+        $notes = array_values(array_unique(array_map(static fn (string $n): string => mb_substr($n, 0, 300), $notes)));
+        if ($notes !== [] || $meta !== []) {
+            $this->attemptLog()->add('desc', 'pole norm i listy: '.mb_substr(implode(' | ', [...$notes, ...$meta]), 0, 400));
+        }
+
+        return [
+            'extracted' => $extracted,
+            'dropped_norm_claims' => $notes,
+            'dropped_meta_sentences' => array_values(array_unique($meta)),
+        ];
     }
 
     /**
@@ -7421,6 +8455,7 @@ Zwróć TYLKO JSON — bez pola thought/reasoning. Pierwszy znak to {.
 {"pages":[{"url":"…","text":"fakty o produkcie po polsku, akapity — bez HTML"}]}
 Karta jest TYM produktem tylko gdy w tytule, URL albo opisie jest producent ORAZ (SKU albo nazwa produktu). Inaczej "text":"".
 Nie zmyślaj cech. Cennik rozmiarów możesz pominąć, ale gdy to ten produkt zostaw nazwę, SKU, materiały i normy — nie zwracaj pustego text.
+Nie pisz w tekście, czy źródło pasuje do produktu ani jak sprawdzałeś warunki.
 Jeśli na stronie nie ma faktów o produkcie i nie ma SKU/nazwy → "text":"".
 Jeśli nazwa to PPE (obuwie, rękawice, odzież…), a tekst dotyczy odczynnika / numeru CAS / wzoru chemicznego — "text":"".
 SYS,
@@ -8797,7 +9832,9 @@ SYS,
                 $parts[] = (string) json_encode($structured, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }
         }
-        $sourceText = implode("\n", $parts);
+        // Etap 3 (W7): wiersz atrybutu szablonu sklepu bez oznaczenia normy („EN166 Lens Marking = PrB420”) nie
+        // potwierdza normy — sama etykieta atrybutu to nie źródło.
+        $sourceText = NormListSanity::withoutTemplateAttributeRows(implode("\n", $parts));
         $sources = self::claimKey($sourceText);
         $sourceNorms = self::normDesignations($sourceText);
         // Same cyfry („1200” z „1200 x 1800 mm” maty Coba przeliczonej z „1,2 m”) to poziom normy tylko w zdaniu

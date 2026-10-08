@@ -151,6 +151,25 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
         $this->assertStringContainsString('behapownia', $this->extractionPrompt($prompts), 'strona nic nie oddała — sklepy zostają');
     }
 
+    /**
+     * Ta sama sytuacja przy marce z listy „tylko producent” (AJ GROUP): decyzja właściciela 08.10.2026 (etap 3 opisów
+     * z cenników, §1.1) — bez strony producenta w puli sklepy NIE zostają źródłem. Zapisany link nic nie oddał, strony
+     * producenta w wynikach nie ma (404), druga próba nie ma innych zapisów kodu „906” — model nie jest wołany, karta
+     * idzie do ręki z powodem przeglądu manufacturer_missing („Wskaż adres”). Marki spoza listy — test wyżej, bez zmian.
+     */
+    public function test_strict_brand_pinned_manufacturer_link_without_content_leaves_no_shop_source(): void
+    {
+        $prompts = new \ArrayObject;
+        $product = $this->enrich($prompts, [], 'https://bemoregreen.eu/pl/plaszcz/906-usuniety.html', manufacturerPageUp: false, expectStatus: 422);
+
+        foreach ($prompts as $prompt) {
+            $this->assertStringNotContainsString('behapownia', (string) $prompt, 'sklep nie idzie do modelu');
+        }
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+        $this->assertSame(Product::REVIEW_MANUFACTURER_MISSING, $product->review_reason);
+        $this->assertStringStartsWith('Strony producenta nie znaleziono', (string) $product->enrichment_error);
+    }
+
     public function test_brand_rule_matches_brand_variants_but_not_a_brand_containing_the_word(): void
     {
         $identity = app(ProductSearchIdentity::class);
@@ -292,8 +311,13 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
     /**
      * @param  list<string>  $modelNorms
      */
-    private function enrich(?\ArrayObject $prompts = null, array $modelNorms = [], ?string $pinnedUrl = null): Product
-    {
+    private function enrich(
+        ?\ArrayObject $prompts = null,
+        array $modelNorms = [],
+        ?string $pinnedUrl = null,
+        bool $manufacturerPageUp = true,
+        int $expectStatus = 200,
+    ): Product {
         Queue::fake();
         Storage::fake('public');
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
@@ -312,12 +336,12 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
         $this->fakeModel($prompts ?? new \ArrayObject, $modelNorms);
         Http::fake([
             // od 07.10.2026 normy spoza tekstu źródeł wypadają z opisu i list — strona podaje te, które zwraca model
-            self::MFR => Http::response($this->manufacturerPage(implode(', ', $modelNorms)), 200),
+            self::MFR => $manufacturerPageUp ? Http::response($this->manufacturerPage(implode(', ', $modelNorms)), 200) : Http::response('', 404),
             self::SHOP => Http::response($this->shopPage(), 200),
             '*' => Http::response('', 404),
         ]);
 
-        $this->postJson("/api/products/{$product->id}/enrich", ['force' => true])->assertOk();
+        $this->postJson("/api/products/{$product->id}/enrich", ['force' => true])->assertStatus($expectStatus);
 
         return $product->fresh();
     }

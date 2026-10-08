@@ -9,6 +9,24 @@ namespace App\Support;
  */
 final class ProductDescriptionText
 {
+    /**
+     * Skróty z kropką w polskich opisach — kropka po nich nie musi kończyć zdania (bez rozróżniania wielkości liter,
+     * po spacji, nawiasie albo na początku tekstu). Wspólne dla cięcia urwanego końca (withoutUnfinishedTail) i pomiaru
+     * akapitów od małej litery (AuditDescriptionTextCommand). Jednostek bez kropki („mm”, „kg”) tu nie ma.
+     * „Taśma o szer. 75 mm i dł. 100 m” — bez „szer”/„dł” cięcie zostawiało „…i dł.” (audyt 08.10.2026).
+     */
+    public const ABBREVIATIONS = [
+        'al', 'ang', 'art', 'ca', 'dł', 'dot', 'ds', 'ew', 'gł', 'godz', 'gr', 'itd', 'itp', 'kat', 'kpl', 'm.in',
+        'maks', 'max', 'min', 'np', 'nr', 'ok', 'op', 'pkt', 'poz', 'r', 'rozm', 'szer', 'szt', 'śr', 'tj', 'tys',
+        'tzn', 'tzw', 'ul', 'wg', 'wys', 'zł', 'zob',
+    ];
+
+    /**
+     * Skróty, które zwykle stoją na końcu zdania („…okulary itp. Produkt…”, „Opakowanie: 12 szt. Kolor…”, „…od 2020 r.
+     * Wyrób…”) — przy cięciu urwanego końca kropka po nich kończy zdanie, gdy dalej jest wielka litera albo nowy wiersz.
+     */
+    public const SENTENCE_FINAL_ABBREVIATIONS = ['godz', 'itd', 'itp', 'kpl', 'op', 'r', 'szt', 'tys', 'zł'];
+
     public static function plain(?string $text): string
     {
         $text = trim((string) $text);
@@ -18,6 +36,10 @@ final class ProductDescriptionText
         $text = preg_replace('#<(script|style|noscript)[^>]*>.*?</\1>#is', ' ', $text) ?? $text;
         $text = preg_replace('#<\s*br\s*/?\s*>#i', "\n", $text) ?? $text;
         $text = preg_replace('#</(?:p|div|li|h[1-6]|tr|section|article|table)>#i', "\n", $text) ?? $text;
+        // „<0,5%”, „<9 kN” to wartości, nie znaczniki: strip_tags brał „<” bez litery za początek znacznika i zjadał
+        // resztę opisu (6× COBAtape „Pozostałość rozpuszczalnika:”, Exonit 852 „(średnia siła uderzenia”). Znacznik
+        // zaczyna się literą, „/”, „!” (komentarz) albo „?” — każdy inny „<” zostaje tekstem.
+        $text = preg_replace('/<(?![\p{L}\/!?])/u', '&lt;', $text) ?? $text;
         $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $text = preg_replace('/\{[^{}]{0,240}\}/u', ' ', $text) ?? $text;
         $text = self::stripShopUi($text);
@@ -30,6 +52,132 @@ final class ProductDescriptionText
         $text = preg_replace('/(\S{72})(?=\S)/u', '$1 ', $text) ?? $text;
 
         return trim($text);
+    }
+
+    /**
+     * Opis urwany w pół zdania — limit odpowiedzi modelu (domknięty JSON), zjedzona końcówka — obcinamy do ostatniego
+     * pełnego zdania, a obcięty kawałek oddajemy do śladu. Urwany jest ostatni akapit, który:
+     * - kończy się na „:”, „,”, „(” albo myślnik (6× COBAtape „…Pozostałość rozpuszczalnika:”),
+     * - ma niezamknięty nawias (Exonit 852 „…rozpraszają energię (średnia siła uderzenia”),
+     * - jest jednym wierszem prozy i kończy się zwykłym słowem bez kropki (Coba PL010001 „…Ładowanie elektrostatyczne”).
+     *
+     * Bez kropki zostają: zdanie kończące się kodem, oznaczeniem albo wartością z jednostką („…zgodne z EN 388 4131X”,
+     * „…klasa S3”, „…ESD”, „…4,5 kg/m”), akapit z kilku wierszy (lista cech), wyliczenie w wierszu, „parametr: wartość”
+     * i krótki nagłówek. Pomiar na zapisanych opisach produkcji (08.10.2026, 43,5 tys. kart): bez tych wyjątków
+     * reguła „słowo bez kropki” cięła ~1,8 tys. opisów — głównie listy cech z B2B (Bollé, Anro). Gdy przed urwanym
+     * końcem nie ma pełnego zdania, tekst zostaje bez zmian (cut = '').
+     *
+     * @return array{text: string, cut: string}
+     */
+    public static function withoutUnfinishedTail(string $text): array
+    {
+        $trimmed = trim($text);
+        if ($trimmed === '' || ! self::endsUnfinished($trimmed)) {
+            return ['text' => $text, 'cut' => ''];
+        }
+        $end = self::lastSentenceEnd($trimmed);
+        if ($end === null) {
+            return ['text' => $text, 'cut' => ''];
+        }
+        $kept = rtrim(substr($trimmed, 0, $end));
+        $cut = trim(substr($trimmed, $end));
+        if ($kept === '' || $cut === '') {
+            return ['text' => $text, 'cut' => ''];
+        }
+
+        return ['text' => $kept, 'cut' => $cut];
+    }
+
+    private static function endsUnfinished(string $text): bool
+    {
+        $paragraphs = preg_split('/\n[ \t]*\n\s*/u', $text) ?: [$text];
+        $last = trim((string) end($paragraphs));
+        if ($last === '') {
+            return false;
+        }
+        if (preg_match('/[:,(\-–—]$/u', $last) === 1) {
+            return true;
+        }
+        if (substr_count($last, '(') > substr_count($last, ')')) {
+            return true;
+        }
+        // Akapit z kilku wierszy bez kropek to lista cech (opisy B2B Bollé, Anro: „Ochrona górna\nPowłoka odporna na
+        // zarysowania”), nie urwane zdanie — model pisze akapity jednym wierszem, a limit odpowiedzi tnie w ich środku.
+        if (preg_match('/\R/u', $last) === 1 || preg_match('/\p{L}$/u', $last) !== 1) {
+            return false;
+        }
+        // „Kolor: czarny”, krótki nagłówek, wyliczenie w wierszu („Właściwości: - dobry chwyt - wysoka elastyczność”,
+        // „• … • …”) — pełna treść bez kropki
+        if (preg_match('/^[^.!?]{1,60}:\s*\S/u', $last) === 1
+            || preg_match('/:\s*[-–•▪]\s/u', $last) === 1
+            || preg_match_all('/(?:^|\s)[•▪]\s/u', $last) >= 2
+            || count(preg_split('/\s+/u', $last) ?: []) < 4) {
+            return false;
+        }
+        $lastWord = (string) preg_replace('/^.*\s/us', '', $last);
+        // wartość z jednostką („…4,5 kg/m”, „…o długości 25 cm”) kończy wyliczenie, nie urywa zdania
+        if (self::isUnitToken($lastWord) && preg_match('/\d[\d.,]*\s*'.preg_quote($lastWord, '/').'$/u', $last) === 1) {
+            return false;
+        }
+
+        // kod, norma, skrót („4131X”, „S3”, „ESD”, „PU”) kończą pełne zdanie; urwane zdanie kończy się zwykłym słowem
+        return preg_match('/\d/u', $lastWord) !== 1 && preg_match('/\p{Ll}/u', $lastWord) === 1;
+    }
+
+    /**
+     * Pozycja tuż za ostatnim końcem zdania (z cudzysłowem albo nawiasem za kropką). Koniec zdania to znak [.!?…], za
+     * którym jest koniec tekstu, nowy wiersz albo (po spacji) wielka litera, cudzysłów albo nawias otwierający, punktor —
+     * „dł. 100 m”, „np. rękawice” to nie koniec zdania, także przy skrócie spoza listy. Kropka po skrócie
+     * (ABBREVIATIONS) się nie liczy — chyba że skrót zwykle kończy zdanie (SENTENCE_FINAL_ABBREVIATIONS); „1.” na
+     * początku wiersza to numer punktu listy.
+     */
+    private static function lastSentenceEnd(string $text): ?int
+    {
+        if (preg_match_all('/[.!?…]["”»)\]]*(?=\s|$)/u', $text, $m, PREG_OFFSET_CAPTURE) < 1) {
+            return null;
+        }
+        $notFinal = array_values(array_diff(self::ABBREVIATIONS, self::SENTENCE_FINAL_ABBREVIATIONS));
+        for ($i = count($m[0]) - 1; $i >= 0; $i--) {
+            [$mark, $offset] = $m[0][$i];
+            $end = $offset + strlen($mark);
+            $before = substr($text, 0, $offset);
+            if (! self::startsNextSentence(substr($text, $end))
+                || ($mark[0] === '.' && self::endsWithAbbreviationIn($before, $notFinal))
+                || preg_match('/(?:^|\n)\s*\d{1,2}$/u', $before) === 1) {
+                continue;
+            }
+
+            return $end;
+        }
+
+        return null;
+    }
+
+    /** Tekst za kandydatem na koniec zdania zaczyna nowe zdanie (albo go nie ma). */
+    private static function startsNextSentence(string $after): bool
+    {
+        return trim($after) === ''
+            || preg_match('/^[ \t]*\R/u', $after) === 1
+            || preg_match('/^\s+[\p{Lu}„"“«\'(\[•▪]/u', $after) === 1;
+    }
+
+    /**
+     * Tekst przed kropką kończy się skrótem z ABBREVIATIONS („…o szer”, „…wersja kat”) — kropka za nim nie musi kończyć
+     * zdania. $textBeforePeriod: tekst bez tej kropki.
+     */
+    public static function endsWithAbbreviation(string $textBeforePeriod): bool
+    {
+        return self::endsWithAbbreviationIn($textBeforePeriod, self::ABBREVIATIONS);
+    }
+
+    /**
+     * @param  list<string>  $abbreviations
+     */
+    private static function endsWithAbbreviationIn(string $textBeforePeriod, array $abbreviations): bool
+    {
+        $alternatives = implode('|', array_map(static fn (string $a): string => preg_quote($a, '/'), $abbreviations));
+
+        return preg_match('/(?:^|[\s(])(?:'.$alternatives.')$/iu', $textBeforePeriod) === 1;
     }
 
     /**
@@ -264,16 +412,36 @@ final class ProductDescriptionText
     {
         $lines = preg_split('/\R/u', $text) ?: [];
         $out = [];
-        foreach ($lines as $line) {
+        foreach ($lines as $i => $line) {
             $drop = self::isComparisonDumpRow($line)
                 || self::isGluedSpecRow($line)
-                || self::isSpacedSpecRow($line);
+                || (self::isSpacedSpecRow($line) && ! self::nextLineContinuesSentence($lines, $i));
             $out[] = $drop ? '' : $line;
         }
         $text = implode("\n", $out);
         $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
 
         return trim($text);
+    }
+
+    /**
+     * Następna niepusta linia zaczyna się małą literą — wiersz „nazwa + wymiar” to początek zdania, które model
+     * złamał po nazwie, nie wiersz tabeli. CEDERROTH 26589: „Soft Foam Bandage Blue 6 cm x 200 cm” + „o symbolu
+     * 51011011 ma wymiary…” — po wycięciu pierwszej linii w opisie zostawało samo „o symbolu…” (też Coba CM0500-6,
+     * Ansell 55110).
+     *
+     * @param  list<string>  $lines
+     */
+    private static function nextLineContinuesSentence(array $lines, int $index): bool
+    {
+        for ($j = $index + 1, $n = count($lines); $j < $n; $j++) {
+            $next = trim($lines[$j]);
+            if ($next !== '') {
+                return preg_match('/^\p{Ll}/u', $next) === 1;
+            }
+        }
+
+        return false;
     }
 
     /** Tabela porównawcza kilku produktów spłaszczona do jednej linii — wartości cudzych modeli. */

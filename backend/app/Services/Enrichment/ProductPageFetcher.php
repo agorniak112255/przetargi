@@ -5,13 +5,17 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use App\Support\HtmlBareLessThan;
 use App\Support\ImageUrlBlocklist;
 use App\Support\NormCode;
 use App\Support\ProductAccessoryExtractor;
 use App\Support\ProductDescriptionText;
 use App\Support\ProductSizeVariant;
+use App\Support\ShopEntryId;
 use GuzzleHttp\Cookie\CookieJar;
+use GuzzleHttp\Psr7\Request as Psr7Request;
 use GuzzleHttp\Psr7\Response as Psr7Response;
+use GuzzleHttp\TransferStats;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
@@ -25,9 +29,45 @@ final class ProductPageFetcher
     // v2: wpis niesie też etykiety odsyłaczy (document_labels) — stare wpisy nie mają tego klucza
     private const READER_CACHE_PREFIX = 'enrich_page_reader_v2:';
 
+    /** Adres po przekierowaniach dla strony z pamięci podręcznej (HTML trzymany pod adresem z zapytania). */
+    private const FINAL_URL_CACHE_PREFIX = 'enrich_page_final_v1:';
+
     private const CACHE_TTL_HOURS = 24;
 
     private const MAX_CACHED_HTML_BYTES = 3_000_000;
+
+    /**
+     * Klasy i id bloków z innymi wyrobami (człon klasy: „related”, „product-related”, „block upsell”, „crosssell”,
+     * „product-also”, „products-slider”, „recently-viewed”, „prev-next”). Bez „carousel”/„slider” w liczbie pojedynczej
+     * — tak nazywa się też galeria zdjęć karty (gloves.co.uk: „carousel lightbox magnify”).
+     */
+    private const FOREIGN_BLOCK = '/(?:^|[\s_-])(?:related|upsell|up-sell|cross-?sell|similars?|recommend\w*|'
+        .'also(?=[\s_-]|$)|also-?bought|alsobought|you-may-also|customers-also|recently-?viewed|viewed-products|'
+        .'ostatnio-ogladane|podobne|polecane|polecamy|czesto-kupowane|frequently-bought|products-(?:slider|carousel)|'
+        .'prev-next|product-prev|product-next)/i';
+
+    /**
+     * Blok „related” z plikami albo akcesoriami tego wyrobu („related-documents”, coba.com: <section id="accessories"
+     * class="is-section related products"> w zakładce „Akcesoria”) — zostaje. Akcesoria to części wyrobu (krawędzie
+     * Tough-Lock z kodami w tabeli części); ProductAccessoryExtractor i tak czyta je z pełnego HTML.
+     */
+    private const OWN_BLOCK = '/(?:^|[\s_-])(?:docs?|documents?|dokumenty|downloads?|files?|pliki|pdfs?|attachments?|'
+        .'certificates?|certyfikaty|datasheets?|norms?|normy|accessor(?:y|ies)|akcesoria|zubeh(?:ö|oe?)r)(?:[\s_-]|$)/iu';
+
+    /**
+     * Nagłówek bloku innych wyrobów, poradników i kategorii — tylko na początku krótkiego nagłówka. „Więcej” tylko
+     * z grupą wyrobów: „Więcej ochrony dzięki powłoce” to treść karty. Bez „Akcesoria”/„Zubehör” (części wyrobu).
+     */
+    private const FOREIGN_HEADING = '/^\s*(?:podobne\s+produkty|produkty\s+podobne|powiązane\s+produkty|produkty\s+powiązane|'
+        .'polecane\s+produkty|produkty\s+polecane|polecamy(?:\s+(?:również|też|także))?\s*:?\s*$|inni\s+kupili|klienci\s+(?:kupili|którzy|oglądali)|'
+        .'często\s+kupowane|zobacz\s+(?:też|także|również)|inne\s+produkty|znaleźliśmy\s+inne|'
+        .'(?:mogą|może)\s+cię\s+(?:również\s+|także\s+)?zainteresować|ostatnio\s+oglądane|'
+        .'więcej\s+(?:produktów|rękawic|wyrobów|modeli|z\s+(?:tej\s+)?(?:kategorii|serii|kolekcji)|od\s+producenta)|'
+        .'wybrane\s+kategorie|przewodniki?\s+zakupu|przewodniki?\s+zakupowe?|poradniki\b|'
+        .'related\s+(?:products|items)|similar\s+products|you\s+may\s+also|customers\s+(?:also|who)|people\s+also|'
+        .'frequently\s+bought|recently\s+viewed|more\s+from|other\s+products|buying\s+guides?|from\s+(?:the|our)\s+blog|'
+        .'ähnliche\s+(?:produkte|artikel)|das\s+könnte\s+(?:sie|dich)\s+auch|kunden\s+kauften|zuletzt\s+angesehen|'
+        .'weitere\s+produkte|ratgeber\b)/iu';
 
     private bool $bypassCache = false;
 
@@ -293,7 +333,7 @@ final class ProductPageFetcher
         $dom = new \DOMDocument;
         $previous = libxml_use_internal_errors(true);
         try {
-            $loaded = $dom->loadHTML('<?xml encoding="UTF-8">'.$html, LIBXML_NONET | LIBXML_COMPACT | LIBXML_NOERROR | LIBXML_NOWARNING);
+            $loaded = $dom->loadHTML('<?xml encoding="UTF-8">'.HtmlBareLessThan::escape($html), LIBXML_NONET | LIBXML_COMPACT | LIBXML_NOERROR | LIBXML_NOWARNING);
         } finally {
             libxml_clear_errors();
             libxml_use_internal_errors($previous);
@@ -388,6 +428,35 @@ final class ProductPageFetcher
      */
     private function mainJsonLdCodes(string $html): array
     {
+        $list = static fn (mixed $v): array => is_array($v) ? (array_is_list($v) ? $v : [$v]) : [];
+        $codes = [];
+        foreach ($this->mainJsonLdProductNodes($html) as $item) {
+            $offers = [];
+            foreach ($list($item['offers'] ?? null) as $offer) {
+                // AggregateOffer → offers → Offer
+                $offers = [...$offers, $offer, ...(is_array($offer) ? $list($offer['offers'] ?? null) : [])];
+            }
+            foreach ([$item, ...$offers] as $holder) {
+                if (! is_array($holder)) {
+                    continue;
+                }
+                foreach (['sku', 'mpn', 'gtin', 'gtin8', 'gtin12', 'gtin13', 'gtin14'] as $key) {
+                    $codes[] = [$key, $holder[$key] ?? null];
+                }
+            }
+        }
+
+        return $codes;
+    }
+
+    /**
+     * Węzły JSON-LD głównego wyrobu strony: pierwszy Product/ProductGroup (kolejność na stronie), jego warianty
+     * hasVariant (także odnośniki @id do @graph) i węzły Product z isVariantOf wskazującym na niego.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function mainJsonLdProductNodes(string $html): array
+    {
         if (! preg_match_all('#<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $blocks)) {
             return [];
         }
@@ -444,27 +513,7 @@ final class ProductPageFetcher
             }
         }
 
-        $codes = [];
-        foreach ($items as $item) {
-            if (! is_array($item)) {
-                continue;
-            }
-            $offers = [];
-            foreach ($list($item['offers'] ?? null) as $offer) {
-                // AggregateOffer → offers → Offer
-                $offers = [...$offers, $offer, ...(is_array($offer) ? $list($offer['offers'] ?? null) : [])];
-            }
-            foreach ([$item, ...$offers] as $holder) {
-                if (! is_array($holder)) {
-                    continue;
-                }
-                foreach (['sku', 'mpn', 'gtin', 'gtin8', 'gtin12', 'gtin13', 'gtin14'] as $key) {
-                    $codes[] = [$key, $holder[$key] ?? null];
-                }
-            }
-        }
-
-        return $codes;
+        return array_values(array_filter($items, 'is_array'));
     }
 
     /**
@@ -643,7 +692,7 @@ final class ProductPageFetcher
         foreach ($htmlRows as $i => $row) {
             $cached = $this->cachedHtml((string) ($row['url'] ?? ''));
             if ($cached !== null) {
-                $responses[(string) $i] = $this->htmlResponse($cached);
+                $responses[(string) $i] = $this->htmlResponse($cached, $this->cachedFinalUrl((string) ($row['url'] ?? '')));
 
                 continue;
             }
@@ -690,6 +739,7 @@ final class ProductPageFetcher
             $html = $response->body();
             if ($html !== '' && ! $this->looksLikeBotWall($html)) {
                 $this->storeHtml($url, $html);
+                $this->storeFinalUrl($url, $response);
             }
         }
 
@@ -714,6 +764,36 @@ final class ProductPageFetcher
         Cache::put($this->htmlCacheKey($url), $html, now()->addHours(self::CACHE_TTL_HOURS));
     }
 
+    /**
+     * Przekierowanie zapamiętane razem z HTML — inaczej kategoria, na którą sklep odsyła wycofany wyrób, z pamięci
+     * wracałaby jako strona pod adresem karty z wyników i omijała sprawdzenie adresu docelowego.
+     */
+    private function storeFinalUrl(string $url, Response $response): void
+    {
+        $final = $response->effectiveUri();
+        if ($url === '' || $final === null || ! $this->isRedirected($url, (string) $final)) {
+            Cache::forget($this->finalUrlCacheKey($url));
+
+            return;
+        }
+        Cache::put($this->finalUrlCacheKey($url), (string) $final, now()->addHours(self::CACHE_TTL_HOURS));
+    }
+
+    private function cachedFinalUrl(string $url): ?string
+    {
+        if ($url === '') {
+            return null;
+        }
+        $final = Cache::get($this->finalUrlCacheKey($url));
+
+        return is_string($final) && $final !== '' ? $final : null;
+    }
+
+    private function finalUrlCacheKey(string $url): string
+    {
+        return self::FINAL_URL_CACHE_PREFIX.hash('sha256', $url);
+    }
+
     private function htmlCacheKey(string $url): string
     {
         return self::HTML_CACHE_PREFIX.hash('sha256', $url);
@@ -724,11 +804,18 @@ final class ProductPageFetcher
         return self::READER_CACHE_PREFIX.hash('sha256', $url);
     }
 
-    private function htmlResponse(string $html): Response
+    private function htmlResponse(string $html, ?string $finalUrl = null): Response
     {
-        return new Response(new Psr7Response(200, [
+        $psr = new Psr7Response(200, [
             'Content-Type' => 'text/html; charset=UTF-8',
-        ], $html));
+        ], $html);
+        $response = new Response($psr);
+        if ($finalUrl !== null) {
+            // effectiveUri() jak po pobraniu z sieci — adres docelowy przekierowania
+            $response->transferStats = new TransferStats(new Psr7Request('GET', $finalUrl), $psr);
+        }
+
+        return $response;
     }
 
     /** Kody, którymi WAF-y odsyłają boty, zanim w ogóle dojdzie do treści karty. */
@@ -790,7 +877,7 @@ final class ProductPageFetcher
         $pageTrusted = [];
         if ($viaReader['text'] !== '') {
             $skuNorm = mb_strtolower(trim((string) ($this->matchingProduct?->sku ?? '')));
-            $text = $this->cleanFetchedPageText($viaReader['text'], $skuNorm);
+            $text = $this->cleanFetchedPageText($this->withoutForeignReaderSections($viaReader['text']), $skuNorm);
             $confirmed = $text !== ''
                 && ($this->matchingProduct === null || $this->pageConfirmsMatchingProduct($url, '', $text));
             if ($text !== '' && ! $confirmed) {
@@ -855,20 +942,73 @@ final class ProductPageFetcher
     /**
      * Ten sam próg co końcowe potwierdzenie karty. Przy SKU z wariantem („ARYA 300 673560 S1 P”)
      * karta innego wariantu tego modelu nie może zająć miejsca i zatrzymać pobierania kolejnych.
+     *
+     * @param  string|null  $finalUrl  adres po przekierowaniu, gdy inny niż z zapytania — tożsamość liczona na nim
+     *                                 (sklep odsyła wycofany wyrób na kategorię, a adres z wyników niesie nasz kod);
+     *                                 adres wskazany ręcznie zostaje zaufany pod adresem z zapytania
      */
-    private function pageConfirmsMatchingProduct(string $url, string $title, string $text): bool
+    private function pageConfirmsMatchingProduct(string $url, string $title, string $text, ?string $finalUrl = null): bool
     {
         $product = $this->matchingProduct;
         if ($product === null) {
             return false;
         }
-        if ($product->isTrustedShopUrl($url)
-            || $this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product)) {
+        if ($product->isTrustedShopUrl($url)) {
+            return true;
+        }
+        $pageUrl = $finalUrl ?? $url;
+        if ($this->identity->pageHasSkuOrNameAndManufacturer($pageUrl, $title, $text, $product)) {
             return true;
         }
 
         return ! $this->identity->requiresExactSkuOrNameOnCard($product)
-            && $this->identity->isConfirmedProductCard($url, $title, $text, $product);
+            && $this->identity->isConfirmedProductCard($pageUrl, $title, $text, $product);
+    }
+
+    /**
+     * Adres docelowy przekierowania albo null, gdy strona została pod adresem z zapytania (porównanie bez schematu,
+     * „www.”, końcowego „/” i kotwicy — http→https czy dopisany ukośnik to nie przekierowanie na inną stronę).
+     */
+    private function redirectedTo(string $url, ?Response $response): ?string
+    {
+        $final = $response?->effectiveUri();
+
+        return $final !== null && $this->isRedirected($url, (string) $final) ? (string) $final : null;
+    }
+
+    private function isRedirected(string $url, string $final): bool
+    {
+        $key = static fn (string $u): string => (string) preg_replace('/^www\./u', '', Product::normalizeShopUrl($u));
+
+        return $final !== '' && $key($final) !== $key($url);
+    }
+
+    /**
+     * Przekierowanie skończyło się na liście, nie na karcie: kategoria, wyniki wyszukiwania, strona producenta marki,
+     * strona główna albo „brak produktu” (IdoSell: /pol_m_Okulary-ochronne-Bolle-7342.html, /noproduct.php). Adres
+     * z naszym kodem (Shopify /collections/…/products/…) listą nie jest — o nim rozstrzyga potwierdzenie karty.
+     */
+    private function redirectLandsOnListing(string $final): bool
+    {
+        if ($this->identity->looksLikeNonProductCardUrl($final)) {
+            return true;
+        }
+        if ($this->matchingProduct !== null && $this->identity->hayHasProductCode(mb_strtolower(urldecode($final)), $this->matchingProduct)) {
+            return false;
+        }
+        $path = mb_strtolower(rawurldecode((string) (parse_url($final, PHP_URL_PATH) ?? '')));
+        if ($path === '' || preg_match('#^/(?:[a-z]{2}(?:[-_][a-z]{2})?/?)?$#u', $path) === 1) {
+            return true;
+        }
+        if (preg_match('#/(?:products?|produkt|produkty|p)/#u', $path) === 1) {
+            return false;
+        }
+
+        return preg_match(
+            '#(?:/[a-z]{3}_m_|/noproduct\.php|/search\.php|/c/|/(?:category|categories|kategoria|kategorie|kategorii|collections?|kolekcje?|'
+            .'manufacturer|producent|producenci|brand|brands|marka|marki|szukaj|search|wyszukiwanie)(?:/|$|\.html?))#u',
+            $path
+        ) === 1;
     }
 
     /**
@@ -877,10 +1017,10 @@ final class ProductPageFetcher
      *
      * @return array{url: string, reason: string, detail?: string}
      */
-    private function unconfirmedRejection(string $url, string $title, string $text): array
+    private function unconfirmedRejection(string $url, string $title, string $text, ?string $finalUrl = null): array
     {
         $families = $this->matchingProduct !== null
-            ? $this->identity->officialPageOtherCodeFamilies($url, $title, $text, $this->matchingProduct)
+            ? $this->identity->officialPageOtherCodeFamilies($finalUrl ?? $url, $title, $text, $this->matchingProduct)
             : [];
 
         return $families === []
@@ -998,27 +1138,50 @@ final class ProductPageFetcher
             return;
         }
 
-        $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($html);
-        $identityText = $this->extractProductIdentityText($html);
-        $text = $this->extractProductPageText($html, $skuNorm);
+        // Tekst, rozmiary, zdjęcia, pliki i ramka norm — ze strony bez bloków innych wyrobów i poradników; mikrodane
+        // (markup_codes, w tym data-part tabeli części) i akcesoria — z pełnego HTML, jak dotąd.
+        $mainHtml = $this->withoutRelatedProductHtml($html);
+        $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($mainHtml);
+        $identityText = $this->extractProductIdentityText($mainHtml);
+        $text = $this->extractProductPageText($mainHtml, $skuNorm);
         if ($identityText !== '') {
             $text = trim($identityText.($text !== '' ? "\n\n".$text : ''));
         }
         if ($optionSizes !== []) {
             $text = trim('Dostępne rozmiary: '.implode(', ', $optionSizes)."\n\n".$text);
         }
-        $title = (string) ($row['title'] ?? '');
+        // Meta-opis (name="description", og:description) nie trafia do tekstu strony — to hasło SEO, nie treść karty
+        // (coba.com/product/esd-senso-dial: „ESD approved, measured according to IEC 61340-4-5” tylko w meta, a karta
+        // szarego Senso Dial dostała ESD; audyt Coby 08.10.2026). Bramki tożsamości poniżej widzą go jak dotąd.
+        $seoText = $this->extractSeoDescriptionText($html);
+        $gateText = $seoText === '' || $text === '' ? $text : $text."\n\n".$seoText;
+        $hinted = $this->matchingProduct !== null && $this->matchingProduct->isTrustedShopUrl($url);
+        // Sklep odsyła wycofany wyrób na kategorię (specshop SILEXPSF, RUSHPSPSIS — Bolle, 08.10.2026), a strona szła
+        // dalej pod adresem karty z wyników: opis powstał z tekstu kategorii. Lista po przekierowaniu odpada od razu,
+        // inna strona docelowa musi się potwierdzić pod własnym adresem. Adres wskazany ręcznie — bez zmian.
+        $redirectedTo = $this->matchingProduct !== null && ! $hinted
+            ? $this->redirectedTo($url, $response)
+            : null;
+        if ($redirectedTo !== null && $this->redirectLandsOnListing($redirectedTo)) {
+            $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::LISTING, 'detail' => 'przekierowanie na listę: '.$redirectedTo];
+
+            return;
+        }
+        // Tytuł z wyników opisuje adres z zapytania — po przekierowaniu na inną ścieżkę liczy się tytuł strony docelowej
+        // (sama zmiana parametrów albo wielkości liter to ta sama strona).
+        $pageKey = static fn (string $u): string => mb_strtolower((string) preg_replace(['/^www\./u', '/\?.*$/su'], '', Product::normalizeShopUrl($u)));
+        $samePath = $redirectedTo === null || $pageKey($redirectedTo) === $pageKey($url);
+        $title = $samePath ? (string) ($row['title'] ?? '') : '';
         if ($title === '' && $identityText !== '') {
             $title = strtok($identityText, "\n") ?: $identityText;
         }
-        $hinted = $this->matchingProduct !== null && $this->matchingProduct->isTrustedShopUrl($url);
         // Karta rodziny producenta (coba.com/pl/produkt/cobastat) wymienia w tabeli części
         // „AS060003C” (na metr bieżący) i osobno „AS060003” (rolka) — dokładny numer obok
         // dłuższego to nasz produkt, nie cudzy. Batch #293: 65 takich kart poszło do kosza.
-        if (! $hinted && $this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$text, $skuNorm)
-            && ! $this->hayHasExactAlphanumericSku($title.' '.$text, $skuNorm)
+        if (! $hinted && $this->hayHasLongerAlphanumericSkuVariant($url.' '.$title.' '.$gateText, $skuNorm)
+            && ! $this->hayHasExactAlphanumericSku($title.' '.$gateText, $skuNorm)
             && ! ($this->matchingProduct !== null
-                && $this->identity->officialFamilyPageListsSizeCodes($url, $title, $text, $this->matchingProduct))) {
+                && $this->identity->officialFamilyPageListsSizeCodes($url, $title, $gateText, $this->matchingProduct))) {
             $this->rejections[] = ['url' => $url, 'reason' => CandidateRejection::LONGER_VARIANT];
 
             return;
@@ -1031,21 +1194,20 @@ final class ProductPageFetcher
             return;
         }
         $pageLooksLikeProduct = $this->matchingProduct !== null
-            ? $this->pageConfirmsMatchingProduct($url, $title, $text)
-            : ($this->pageMentionsSku($url, $text, $title, $skuNorm)
-                || $this->pageMatchesProductIdentity($url, $text, $title));
+            ? $this->pageConfirmsMatchingProduct($url, $title, $gateText, $redirectedTo)
+            : ($this->pageMentionsSku($url, $gateText, $title, $skuNorm)
+                || $this->pageMatchesProductIdentity($url, $gateText, $title));
 
         $pageImages = [];
         $pageTrusted = [];
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
-            $htmlForImages = $this->withoutRelatedProductHtml($html);
-            foreach ($this->extractImageUrls($htmlForImages, $url, $skuNorm) as $img) {
+            foreach ($this->extractImageUrls($mainHtml, $url, $skuNorm) as $img) {
                 if ($this->imageAllowedForProduct($img)) {
                     $pageImages[] = $img;
                     $images[] = $img;
                 }
             }
-            foreach ($this->extractStructuredImageUrls($htmlForImages) as $img) {
+            foreach ($this->extractStructuredImageUrls($mainHtml) as $img) {
                 $absolute = $this->absolutize($img, $url);
                 if ($absolute !== null) {
                     $absolute = ProductImageDownloader::preferFullSizeUrl($absolute);
@@ -1066,7 +1228,8 @@ final class ProductPageFetcher
         // nie podają domen producenta, stąd druga droga przez listę oficjalnych hostów.
         $bindsGeneratedCard = $this->matchingProduct !== null && $pageLooksLikeProduct && $text !== ''
             && ($fromManufacturer || $this->identity->isOfficialCatalogUrl($url, $this->matchingProduct));
-        $pageDocuments = $this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer, $bindsGeneratedCard);
+        // pliki z kafelków innych wyrobów odpadają razem z kafelkami (mainHtml)
+        $pageDocuments = $this->extractDocumentUrls($mainHtml, $url, $skuNorm, $fromManufacturer, $bindsGeneratedCard);
         // Strona innego wyrobu (albo bez treści) nie daje swoich plików jak zdjęć — zostają tylko pliki z kodem naszego
         // wyrobu w adresie albo opisie linku (27.09.2026: karty siostrzane coba.com dokładały cudze arkusze danych).
         $strict = $this->matchingProduct !== null && ($text === '' || ! $pageLooksLikeProduct);
@@ -1095,7 +1258,7 @@ final class ProductPageFetcher
                 $page['option_sizes'] = $optionSizes;
             }
             // Pary z ramki norm — ProductEnrichmentService bierze je za normy producenta tylko ze strony producenta.
-            $normFacts = $this->normFacts($html);
+            $normFacts = $this->normFacts($mainHtml);
             if ($normFacts !== []) {
                 $page['norm_facts'] = $normFacts;
             }
@@ -1105,7 +1268,7 @@ final class ProductPageFetcher
             }
             $goodPages[] = $page;
         } elseif ($this->matchingProduct !== null) {
-            $this->rejections[] = $this->unconfirmedRejection($url, $title, $text);
+            $this->rejections[] = $this->unconfirmedRejection($url, $title, $gateText, $redirectedTo);
         }
     }
 
@@ -1118,7 +1281,8 @@ final class ProductPageFetcher
         if ($this->matchingProduct === null) {
             return true;
         }
-        $hay = mb_strtolower(urldecode($doc).' '.($this->documentLabels[$doc] ?? '').' '.$context);
+        // „pdf.php?id_product=103” to numer wpisu sklepu, nie kod wyrobu 103 (etap 3, §1.3)
+        $hay = mb_strtolower(urldecode(ShopEntryId::strip($doc)).' '.($this->documentLabels[$doc] ?? '').' '.$context);
 
         return $this->identity->hayHasProductCode($hay, $this->matchingProduct);
     }
@@ -1480,7 +1644,7 @@ final class ProductPageFetcher
     private function extractDocumentTitle(string $html): string
     {
         if (preg_match('#<title[^>]*>(.*?)</title>#is', $html, $m)) {
-            return trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            return trim(html_entity_decode(strip_tags(HtmlBareLessThan::escape($m[1])), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         }
 
         return '';
@@ -1489,7 +1653,7 @@ final class ProductPageFetcher
     private function extractFirstHeading(string $html): string
     {
         if (preg_match('#<h1[^>]*>(.*?)</h1>#is', $html, $m)) {
-            return trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            return trim(html_entity_decode(strip_tags(HtmlBareLessThan::escape($m[1])), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         }
 
         return '';
@@ -1520,13 +1684,21 @@ final class ProductPageFetcher
         return implode("\n", array_values(array_unique($bits)));
     }
 
+    /**
+     * Treść karty dla modelu. Bez meta-opisu i og:description (extractSeoDescriptionText) — hasło SEO bywa inne niż
+     * treść strony i niosło cechy, których karta nie podaje.
+     */
     private function extractProductPageText(string $html, string $skuNorm): string
     {
         $chunks = [];
-
-        $ogDesc = $this->usableExtractedChunk($this->extractOgDescription($html));
-        if ($ogDesc !== '') {
-            $chunks[] = $ogDesc;
+        // Meta-opis nie jest treścią, ale jak dotąd otwiera część o wyrobie przy odsiewaniu akapitów
+        // (keepProductRelevantParagraphs): bez niego krótkie punkty opisu za nim odpadały (coba.com po angielsku).
+        $seoContext = [];
+        foreach (preg_split('/\n{2,}/u', $this->extractSeoDescriptionText($html)) ?: [] as $chunk) {
+            $chunk = $this->usableExtractedChunk((string) $chunk);
+            if ($chunk !== '') {
+                $seoContext[] = $chunk;
+            }
         }
 
         foreach ($this->extractMetaProductFields($html) as $field) {
@@ -1545,7 +1717,7 @@ final class ProductPageFetcher
         }
 
         $text = trim(implode("\n\n", array_filter($chunks)));
-        $text = $this->cleanFetchedPageText($text, $skuNorm);
+        $text = $this->cleanFetchedPageText($text, $skuNorm, $seoContext);
         $norms = $this->extractNormBlocks($html);
         if ($text === '' || $norms === '' || str_contains($text, $norms)) {
             return $text;
@@ -1651,14 +1823,17 @@ final class ProductPageFetcher
             || preg_match('/^(?:kategori[ai]|category|kat\.)\s*(?:I{1,3}|[123])$/iu', $line) === 1;
     }
 
-    private function cleanFetchedPageText(string $text, string $skuNorm): string
+    /**
+     * @param  list<string>  $context  akapity przed tekstem (meta-opis), które przy odsiewaniu tylko otwierają część
+     *                                 o wyrobie, jakby stały na początku tekstu — w wyniku ich nie ma
+     */
+    private function cleanFetchedPageText(string $text, string $skuNorm, array $context = []): string
     {
-        $text = self::stripCookieConsentBlocks($text);
-        $text = $this->stripShopChromePhrases($text);
-        $text = self::stripExpandLinkChrome($text);
-        $text = ProductDescriptionText::stripShopUi($text);
-        $text = ProductDescriptionText::cutGenericCatalogAppendix($text);
-        $text = $this->keepProductRelevantParagraphs($text, $skuNorm);
+        $clean = fn (string $part): string => ProductDescriptionText::stripShopUi(
+            self::stripExpandLinkChrome($this->stripShopChromePhrases(self::stripCookieConsentBlocks($part)))
+        );
+        $text = ProductDescriptionText::cutGenericCatalogAppendix($clean($text));
+        $text = $this->keepProductRelevantParagraphs($text, $skuNorm, array_map($clean, $context));
         if (self::looksLikeCookieConsent($text) || self::looksLikeCjkDump($text)) {
             return '';
         }
@@ -1751,13 +1926,34 @@ final class ProductPageFetcher
         return (string) preg_replace('/[^a-z0-9]+/u', '', $key);
     }
 
-    private function extractMetaProductFields(string $html): array
+    /**
+     * Meta-opis strony (name="description") i og:description — tylko do bramek tożsamości w ingestFetchedRow, nie do
+     * tekstu strony.
+     */
+    private function extractSeoDescriptionText(string $html): string
     {
         $out = [];
         if (preg_match('#name=["\']description["\'][^>]*content=["\']([^"\']+)["\']#i', $html, $m)
             || preg_match('#content=["\']([^"\']+)["\'][^>]*name=["\']description["\']#i', $html, $m)) {
             $out[] = trim(html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         }
+        $og = $this->extractOgDescription($html);
+        if ($og !== '') {
+            $out[] = $og;
+        }
+
+        return implode("\n\n", array_values(array_unique(array_filter($out, static fn (string $s): bool => $s !== ''))));
+    }
+
+    /**
+     * Pola wyrobu z mikrodanych i JSON-LD, dosłownie: kody itemprop sku/mpn i pola GŁÓWNEGO wyrobu JSON-LD z jego
+     * wariantami (jak markupIdentifiers) — węzeł Product innego wyrobu w @graph nie niesie cech tej karty.
+     *
+     * @return list<string>
+     */
+    private function extractMetaProductFields(string $html): array
+    {
+        $out = [];
         // Kod z mikrodanych i z klasy Magento. Karta cxs.net.pl (Canis) ma „1010-001-703-00” tylko
         // w itemprop="sku" i w body.catalog_product_view_sku_…, a nagłówek po polsku („Bluza robocza
         // CXS Sirius Lucius”) nie pasuje do angielskiej nazwy z cennika — bez kodu 37 kart
@@ -1765,31 +1961,14 @@ final class ProductPageFetcher
         foreach ($this->markupSkus($html) as $code) {
             $out[] = 'SKU: '.$code;
         }
-        // JSON-LD Product
-        if (preg_match_all('#<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $blocks)) {
-            foreach ($blocks[1] as $json) {
-                $data = json_decode(trim((string) $json), true);
-                if (! is_array($data)) {
-                    continue;
-                }
-                $nodes = isset($data['@graph']) && is_array($data['@graph']) ? $data['@graph'] : [$data];
-                foreach ($nodes as $node) {
-                    if (! is_array($node)) {
-                        continue;
-                    }
-                    $type = $node['@type'] ?? '';
-                    $types = is_array($type) ? $type : [$type];
-                    if (! in_array('Product', $types, true) && ! in_array('ProductGroup', $types, true)) {
-                        continue;
-                    }
-                    foreach (['description', 'name', 'sku', 'brand', 'material', 'category'] as $key) {
-                        $val = $node[$key] ?? null;
-                        if (is_string($val) && trim($val) !== '') {
-                            $out[] = trim($val);
-                        } elseif (is_array($val) && isset($val['name']) && is_string($val['name'])) {
-                            $out[] = trim($val['name']);
-                        }
-                    }
+        // JSON-LD: główny wyrób i jego warianty
+        foreach ($this->mainJsonLdProductNodes($html) as $node) {
+            foreach (['description', 'name', 'sku', 'brand', 'material', 'category'] as $key) {
+                $val = $node[$key] ?? null;
+                if (is_string($val) && trim($val) !== '') {
+                    $out[] = trim($val);
+                } elseif (is_array($val) && isset($val['name']) && is_string($val['name'])) {
+                    $out[] = trim($val['name']);
                 }
             }
         }
@@ -1870,7 +2049,8 @@ final class ProductPageFetcher
         // komórki tabeli części: „<td>AB010008C</td><td>2 m</td>” sklejało się w „AB010008C2 m”
         // i kod wariantu nie potwierdzał karty
         $html = preg_replace('#</(?:td|th)>#i', ' ', $html) ?? $html;
-        $text = strip_tags($html);
+        // „<35 megaomów”, „< 1000 V” to tekst, nie znacznik — strip_tags połykał go do najbliższego „>”
+        $text = strip_tags(HtmlBareLessThan::escape($html));
         $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
         $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
@@ -1897,12 +2077,22 @@ final class ProductPageFetcher
         return trim($text);
     }
 
-    private function keepProductRelevantParagraphs(string $text, string $skuNorm): string
+    /**
+     * @param  list<string>  $context  akapity oceniane przed tekstem (otwierają część o wyrobie), nie oddawane
+     */
+    private function keepProductRelevantParagraphs(string $text, string $skuNorm, array $context = []): string
     {
         $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
+        $contextParts = [];
+        foreach ($context as $chunk) {
+            foreach (preg_split('/\n{2,}/u', $chunk) ?: [$chunk] as $piece) {
+                $contextParts[] = (string) $piece;
+            }
+        }
         $kept = [];
         $haveProduct = false;
-        foreach ($parts as $part) {
+        foreach ([...$contextParts, ...$parts] as $i => $part) {
+            $isContext = $i < count($contextParts);
             $part = self::stripExpandLinkChrome(trim((string) $part));
             if ($part === '') {
                 continue;
@@ -1928,9 +2118,11 @@ final class ProductPageFetcher
                 $low
             );
             if ($productish || $mentionsSku || mb_strlen($part) >= 120) {
-                $kept[] = $part;
+                if (! $isContext) {
+                    $kept[] = $part;
+                }
                 $haveProduct = true;
-            } elseif ($haveProduct) {
+            } elseif ($haveProduct && ! $isContext) {
                 $kept[] = $part;
             }
         }
@@ -2614,33 +2806,313 @@ final class ProductPageFetcher
     }
 
     /**
-     * Bloki „Customers also bought” / „Podobne produkty” niosą zdjęcia cudzych SKU.
+     * Strona bez bloków innych wyrobów i zajawek spoza karty — przed tekstem dla modelu, zdjęciami i plikami strony.
+     * Kafelek „Podobne produkty” niesie hasło innego wyrobu (coba.com: „Mata elektroizolacyjna spełniająca wymogi
+     * normy BS EN 61111:2009” przy zwykłym COBAswitch, „o właściwościach elektrostatycznych” przy Tough-Lock Eco),
+     * blok „Customers also bought” sklepu — cudze cechy bezpieczeństwa (gloves.co.uk przy HexArmor 4062: „class 00,
+     * do 500 V” z rękawicy Ansella), a kafelek poradnika — normy z tytułu artykułu („DIN 51097 and DIN 51130” na
+     * coba.com/pc/cable-protectors). Audyty Coby i UVEX, 08.10.2026.
+     *
+     * Wycinany jest cały element, z zagnieżdżeniem (dawny regex kończył blok na pierwszym „</div>” i reszta kafelków
+     * zostawała): (a) po klasie/id (FOREIGN_BLOCK), (b) po nagłówku (FOREIGN_HEADING) — przodek, którego tekst tym
+     * nagłówkiem się zaczyna, albo nagłówek z rodzeństwem do następnego nagłówka tego samego lub wyższego stopnia.
+     * Nigdy blok z <h1> (tytuł karty) ani <html>/<body>/<main>. Reszta HTML zostaje bajt w bajt — tabela części,
+     * mikrodane i JSON-LD głównego wyrobu stoją poza tymi blokami. Akcesoriów („Akcesoria”, „Zubehör”) nie tniemy:
+     * to części tego wyrobu (krawędzie Tough-Lock z kodami w tabeli części), a ProductAccessoryExtractor czyta je
+     * osobno z pełnego HTML.
      */
     private function withoutRelatedProductHtml(string $html): string
     {
-        $stripped = preg_replace(
-            '#<(section|div|aside|ul)[^>]*(?:class|id)=["\'][^"\']*'
-            .'(?:related|upsell|cross-?sell|also-bought|alsobought|customers-also|'
-            .'you-may-also|podobne|polecane|polecamy|czesto-kupowane|frequently-bought)'
-            .'[^"\']*["\'][^>]*>.*?</\1>#is',
-            '',
-            $html
-        );
-        if (is_string($stripped)) {
-            $html = $stripped;
+        if ($html === '' || ! str_contains($html, '<')) {
+            return $html;
+        }
+        $tree = $this->htmlElementRanges($html);
+        $count = count($tree['name']);
+        if ($count === 0) {
+            return $html;
+        }
+        $h1Starts = [];
+        /** @var list<array{0: int, 1: int}> $headings początek i stopień każdego <h1>–<h6> */
+        $headings = [];
+        foreach ($tree['name'] as $i => $name) {
+            if (preg_match('/^h([1-6])$/', $name, $hm) === 1) {
+                $headings[] = [$tree['start'][$i], (int) $hm[1]];
+                if ($hm[1] === '1') {
+                    $h1Starts[] = $tree['start'][$i];
+                }
+            }
+        }
+        $holdsTitle = static function (int $i) use ($tree, $h1Starts): bool {
+            foreach ($h1Starts as $start) {
+                if ($start >= $tree['start'][$i] && $start < $tree['end'][$i]) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+        $protected = ['html', 'head', 'body', 'main'];
+
+        /** @var list<array{0: int, 1: int}> $cuts */
+        $cuts = [];
+        for ($i = 0; $i < $count; $i++) {
+            $marks = $tree['marks'][$i];
+            if ($marks === '' || in_array($tree['name'][$i], $protected, true)
+                || preg_match(self::FOREIGN_BLOCK, $marks) !== 1 || preg_match(self::OWN_BLOCK, $marks) === 1
+                || $holdsTitle($i)) {
+                continue;
+            }
+            $cuts[] = [$tree['start'][$i], $tree['end'][$i]];
         }
 
-        $cut = preg_replace(
-            '#<(h[1-4]|p|div|legend|strong)[^>]*>[^<]*(?:'
-            .'customers?\s+also\s+bought|related\s+items|related\s+products|'
-            .'you\s+may\s+also\s+like|klienci\s+kupili|podobne\s+produkty|'
-            .'polecane\s+produkty|często\s+kupowane|czesto\s+kupowane|frequently\s+bought'
-            .')[^<]*</(?:h[1-4]|p|div|legend|strong)>.*?(?=<(?:h[1-3]|footer)|$)#is',
-            '',
-            $html
-        );
+        for ($i = 0; $i < $count; $i++) {
+            $level = $this->foreignHeadingLevel($html, $tree, $i);
+            if ($level === null) {
+                continue;
+            }
+            $headingText = $this->elementText($html, $tree['start'][$i], $tree['end'][$i]);
+            // Inny nagłówek tego samego albo wyższego stopnia w przodku = przodek obejmuje też inną sekcję (np. opis
+            // wyrobu pod <h2>, gdy <h1> to logo w nagłówku strony) — tam już nie wchodzimy.
+            $holdsOtherHeading = static function (int $scope) use ($tree, $headings, $i, $level): bool {
+                foreach ($headings as [$start, $headingLevel]) {
+                    if ($start !== $tree['start'][$i] && $headingLevel <= $level
+                        && $start >= $tree['start'][$scope] && $start < $tree['end'][$scope]) {
+                        return true;
+                    }
+                }
 
-        return is_string($cut) ? $cut : $html;
+                return false;
+            };
+            // w górę, dopóki nagłówek otwiera tekst przodka (coba.com: div.mb-8 > h2 „Buying Guides” w kontenerze z kafelkami)
+            $node = $i;
+            while (($parent = $tree['parent'][$node]) >= 0
+                && ! in_array($tree['name'][$parent], [...$protected, 'article'], true)
+                && ! $holdsTitle($parent)
+                && ! $holdsOtherHeading($parent)
+                && str_starts_with($this->elementText($html, $tree['start'][$parent], $tree['end'][$parent]), $headingText)) {
+                $node = $parent;
+            }
+            if ($node !== $i) {
+                $cuts[] = [$tree['start'][$node], $tree['end'][$node]];
+
+                continue;
+            }
+            // nagłówek wśród rodzeństwa: on i elementy za nim do następnego nagłówka tego samego albo wyższego stopnia
+            $parent = $tree['parent'][$i];
+            $end = $tree['end'][$i];
+            for ($j = $i + 1; $parent >= 0 && $j < $count && $tree['start'][$j] < $tree['innerEnd'][$parent]; $j++) {
+                if ($tree['parent'][$j] !== $parent || $tree['start'][$j] < $tree['end'][$i]) {
+                    continue;
+                }
+                $name = $tree['name'][$j];
+                if ((preg_match('/^h([1-6])$/', $name, $hm) === 1 && (int) $hm[1] <= $level)
+                    || in_array($name, ['footer', 'main', 'article'], true) || $holdsTitle($j)) {
+                    break;
+                }
+                $end = max($end, $tree['end'][$j]);
+            }
+            // bez rodzica albo bez rodzeństwa za nagłówkiem — sam nagłówek
+            $cuts[] = [$tree['start'][$i], $parent >= 0 ? min($end, max($tree['end'][$i], $tree['innerEnd'][$parent])) : $end];
+        }
+        if ($cuts === []) {
+            return $html;
+        }
+
+        usort($cuts, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
+        $out = '';
+        $pos = 0;
+        foreach ($cuts as [$start, $end]) {
+            if ($end <= $pos) {
+                continue;
+            }
+            if ($start > $pos) {
+                $out .= substr($html, $pos, $start - $pos);
+            }
+            // odstęp zamiast bloku — słowa po obu stronach się nie sklejają
+            $out .= "\n";
+            $pos = max($pos, $end);
+        }
+
+        return $out.substr($html, $pos);
+    }
+
+    /**
+     * To samo cięcie dla markdownu z czytnika zapór (BlockedPageReader — strona za WAF-em przychodzi tekstem, bez
+     * HTML): od nagłówka bloku innych wyrobów („## Related items”, „Customers also bought” podkreślone „---”) do
+     * następnego nagłówka tego samego lub wyższego stopnia albo do końca. Krótki samodzielny wiersz z takim hasłem
+     * (tytuł bloku jako zwykły akapit) — do następnego nagłówka dowolnego stopnia albo do końca.
+     */
+    private function withoutForeignReaderSections(string $markdown): string
+    {
+        $lines = preg_split('/\R/u', $markdown) ?: [];
+        $count = count($lines);
+        $plain = static fn (string $line): string => trim((string) preg_replace(
+            ['/!?\[([^\]]*)\]\([^)]*\)/u', '/^#{1,6}\s*/u', '/[*_`]+/u', '/\s+/u'],
+            ['$1', '', '', ' '],
+            $line
+        ));
+        // stopień nagłówka wiersza $i (0 = nie nagłówek); podkreślenie setext to wiersz $i + 1
+        $level = static function (int $i) use ($lines, $count): int {
+            $line = (string) $lines[$i];
+            if (preg_match('/^\s{0,3}(#{1,6})\s+\S/u', $line, $m) === 1) {
+                return strlen($m[1]);
+            }
+            if (trim($line) !== '' && $i + 1 < $count && preg_match('/^\s{0,3}(=+|-+)\s*$/u', (string) $lines[$i + 1], $m) === 1) {
+                return str_starts_with($m[1], '=') ? 1 : 2;
+            }
+
+            return 0;
+        };
+        $out = [];
+        for ($i = 0; $i < $count; $i++) {
+            $text = $plain((string) $lines[$i]);
+            $own = $level($i);
+            $standalone = $own === 0 && $text !== '' && mb_strlen($text) <= 40
+                && preg_match('/[.!?;]\s*\S/u', $text) !== 1;
+            if ($text === '' || mb_strlen($text) > 80 || ($own === 0 && ! $standalone)
+                || preg_match(self::FOREIGN_HEADING, $text) !== 1) {
+                $out[] = $lines[$i];
+
+                continue;
+            }
+            $stop = $own === 0 ? 6 : $own;
+            $j = $i + ($own > 0 && ! preg_match('/^\s{0,3}#/u', (string) $lines[$i]) ? 2 : 1);
+            while ($j < $count) {
+                $next = $level($j);
+                if ($next > 0 && $next <= $stop) {
+                    break;
+                }
+                $j++;
+            }
+            $out[] = '';
+            $i = $j - 1;
+        }
+
+        return implode("\n", $out);
+    }
+
+    /**
+     * Stopień nagłówka bloku innych wyrobów (h2–h6 → 2–6; <legend>, role="heading" i krótki tytuł z klasą „title”
+     * → 3) albo null, gdy element nie jest takim nagłówkiem.
+     *
+     * @param  array{name: list<string>, marks: list<string>, heading: list<bool>, start: list<int>, innerEnd: list<int>, end: list<int>, parent: list<int>}  $tree
+     */
+    private function foreignHeadingLevel(string $html, array $tree, int $i): ?int
+    {
+        $name = $tree['name'][$i];
+        if (preg_match('/^h([2-6])$/', $name, $m) === 1) {
+            $level = (int) $m[1];
+        } elseif ($name === 'legend' || $tree['heading'][$i]) {
+            $level = 3;
+        } else {
+            return null;
+        }
+        // tani filtr przed złożeniem tekstu: nagłówek to krótki element
+        if ($tree['end'][$i] - $tree['start'][$i] > 2000) {
+            return null;
+        }
+        $text = $this->elementText($html, $tree['start'][$i], $tree['end'][$i]);
+
+        return $text !== '' && mb_strlen($text) <= 80 && preg_match(self::FOREIGN_HEADING, $text) === 1 ? $level : null;
+    }
+
+    /**
+     * Elementy HTML z położeniem w oryginalnym tekście — lekkie drzewo do wycięcia bloków bez przepisywania strony
+     * (DOMDocument::saveHTML zmienia cudzysłowy i encje, a dalsze odczyty idą regexami po surowym HTML). Kolumny
+     * zamiast tablicy na element: strona do 3 MB to dziesiątki tysięcy znaczników, a CLI na serwerze ma 128 MB.
+     * Zawartość <script>/<style>/<textarea> i komentarze są pomijane: skrypt motywu buduje „<div class="…upsell…">”
+     * w tekście JS (cxs.net.pl). Zamknięcie domyka też niedomknięte elementy nad nim; niedomknięte do końca strony
+     * kończą się na końcu dokumentu.
+     *
+     * - marks: „klasa id” (pusty, gdy elementu nie mają), heading: role="heading" albo krótki tytuł z klasą
+     *   „title/heading/header” (p, div, span, strong, b), parent: indeks rodzica albo -1.
+     *
+     * @return array{name: list<string>, marks: list<string>, heading: list<bool>, start: list<int>, innerEnd: list<int>, end: list<int>, parent: list<int>}
+     */
+    private function htmlElementRanges(string $html): array
+    {
+        $tree = ['name' => [], 'marks' => [], 'heading' => [], 'start' => [], 'innerEnd' => [], 'end' => [], 'parent' => []];
+        $void = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
+        $length = strlen($html);
+        $stack = [];
+        $pos = 0;
+        while ($pos < $length
+            && preg_match('#<!--|<(/?)([a-zA-Z][a-zA-Z0-9:-]*)([^>]*)>#', $html, $m, PREG_OFFSET_CAPTURE, $pos) === 1) {
+            $offset = (int) $m[0][1];
+            if ($m[0][0] === '<!--') {
+                $close = strpos($html, '-->', $offset + 4);
+                $pos = $close === false ? $length : $close + 3;
+
+                continue;
+            }
+            $name = strtolower((string) $m[2][0]);
+            $end = $offset + strlen((string) $m[0][0]);
+            $pos = $end;
+            if ($m[1][0] === '/') {
+                for ($k = count($stack) - 1; $k >= 0; $k--) {
+                    if ($tree['name'][$stack[$k]] !== $name) {
+                        continue;
+                    }
+                    $target = $stack[$k];
+                    while (count($stack) > $k) {
+                        $idx = (int) array_pop($stack);
+                        $tree['innerEnd'][$idx] = $offset;
+                        $tree['end'][$idx] = $idx === $target ? $end : $offset;
+                    }
+                    break;
+                }
+
+                continue;
+            }
+            $attrs = (string) $m[3][0];
+            $class = $attrs === '' ? '' : $this->attributeValue($attrs, 'class');
+            $marks = $attrs === '' ? '' : trim($class.' '.$this->attributeValue($attrs, 'id'));
+            $idx = count($tree['name']);
+            $tree['name'][] = $name;
+            $tree['marks'][] = $marks;
+            $tree['heading'][] = $attrs !== '' && (preg_match('/\brole\s*=\s*["\']?heading/i', $attrs) === 1
+                || (in_array($name, ['p', 'div', 'span', 'strong', 'b'], true)
+                    && preg_match('/(?:^|[\s_-])(?:title|heading|header)(?:[\s_-]|$)/i', $class) === 1));
+            $tree['start'][] = $offset;
+            $tree['innerEnd'][] = $length;
+            $tree['end'][] = $length;
+            $tree['parent'][] = $stack === [] ? -1 : (int) $stack[count($stack) - 1];
+            if (in_array($name, $void, true) || str_ends_with(rtrim($attrs), '/')) {
+                $tree['innerEnd'][$idx] = $end;
+                $tree['end'][$idx] = $end;
+
+                continue;
+            }
+            if (in_array($name, ['script', 'style', 'textarea'], true)) {
+                $close = stripos($html, '</'.$name, $end);
+                $closeEnd = $close === false ? $length : (strpos($html, '>', $close) ?: $length - 1) + 1;
+                $tree['innerEnd'][$idx] = $close === false ? $length : $close;
+                $tree['end'][$idx] = $closeEnd;
+                $pos = $closeEnd;
+
+                continue;
+            }
+            $stack[] = $idx;
+        }
+
+        return $tree;
+    }
+
+    /** Tekst fragmentu HTML jednym ciągiem, bez skryptów i znaczników. */
+    private function elementText(string $html, int $start, int $end): string
+    {
+        $inner = substr($html, $start, $end - $start);
+        $inner = preg_replace('#<(script|style|noscript)\b[^>]*>.*?</\1>#is', ' ', $inner) ?? $inner;
+        $text = html_entity_decode((string) preg_replace('/<[^>]+>/', ' ', HtmlBareLessThan::escape($inner)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        return trim((string) preg_replace('/\s+/u', ' ', $text));
+    }
+
+    private function attributeValue(string $attrs, string $name): string
+    {
+        return preg_match('/(?:^|\s)'.preg_quote($name, '/').'\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))/i', $attrs, $m) === 1
+            ? html_entity_decode(($m[1] ?? '').($m[2] ?? '').($m[3] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8')
+            : '';
     }
 
     private function isJunkImageUrl(string $url): bool

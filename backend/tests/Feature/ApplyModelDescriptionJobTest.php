@@ -93,6 +93,77 @@ final class ApplyModelDescriptionJobTest extends TestCase
         $this->assertNull($batch->current_sku);
     }
 
+    public function test_relayed_leader_without_description_gets_the_model_description_without_touching_counters(): void
+    {
+        // pełne pobranie Coby #501: pierwszy lider (DP0106) nie znalazł strony → „ręcznie”, kolejny lider dał wersję —
+        // upadły lider ma dostać opis modelu jak członek, a partia nie liczy go drugi raz
+        [$batch, $leader, $version, $members] = $this->group(1);
+        $failed = $this->card('DP0106', 'Deckplate Czarny 0.6m x 0.9m (15mm)', ['description' => null, 'enrichment_status' => Product::ENRICHMENT_MANUAL, 'enrichment_error' => 'Nie znaleziono karty potwierdzającej produkt DP0106']);
+        ProductEnrichmentBatchItem::query()->create([
+            'batch_id' => $batch->id, 'product_id' => $failed->id, 'sku' => $failed->sku, 'name' => $failed->name,
+            'status' => ProductEnrichmentBatchItem::STATUS_MANUAL, 'model_key' => self::MODEL_KEY, 'model_leader_id' => $failed->id,
+        ]);
+        $batch->update(['total' => 3, 'done' => 2]);
+        // sztafeta: upadły lider oddaje model temu liderowi — jego pozycja też przechodzi pod nowego lidera
+        ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->update(['model_leader_id' => $leader->id]);
+        $seen = [];
+        $job = $this->job($batch, $leader, $version, function (Product $member) use (&$seen): string {
+            $seen[] = $member->sku;
+
+            return ApplyModelDescriptionJob::RESULT_PUBLISHED;
+        });
+
+        $job->handle($this->service(), app(ModelGroupPlanner::class));
+
+        $this->assertSame([$members[0]->sku, 'DP0106'], $seen, 'najpierw czekający członkowie, potem upadły lider');
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_DONE, $this->item($failed)->status);
+        $this->assertStringContainsString('sztafecie', (string) $this->item($failed)->message);
+        $batch->refresh();
+        $this->assertSame(3, $batch->done, 'upadły lider był już policzony — bez drugiego liczenia');
+        $this->assertSame(0, $batch->failed);
+    }
+
+    public function test_relayed_leader_counted_as_failed_moves_to_done_once(): void
+    {
+        [$batch, $leader, $version] = $this->group(0);
+        $failed = $this->card('DS0106', 'DeckStep Matting Czarny 0.6m x 10m (11.5mm)', ['description' => null, 'enrichment_status' => Product::ENRICHMENT_FAILED]);
+        ProductEnrichmentBatchItem::query()->create([
+            'batch_id' => $batch->id, 'product_id' => $failed->id, 'sku' => $failed->sku, 'name' => $failed->name,
+            'status' => ProductEnrichmentBatchItem::STATUS_FAILED, 'model_key' => self::MODEL_KEY, 'model_leader_id' => $leader->id,
+        ]);
+        $batch->update(['total' => 2, 'done' => 1, 'failed' => 1]);
+        $apply = static fn (): string => ApplyModelDescriptionJob::RESULT_PUBLISHED;
+
+        $this->job($batch, $leader, $version, $apply)->handle($this->service(), app(ModelGroupPlanner::class));
+        // druga instancja (ponowienie po retry_after) — pozycja już „gotowe”, liczniki bez zmian
+        $this->job($batch, $leader, $version, $apply)->handle($this->service(), app(ModelGroupPlanner::class));
+
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_DONE, $this->item($failed)->status);
+        $batch->refresh();
+        $this->assertSame([2, 0], [$batch->done, $batch->failed], 'błąd upadłego lidera przechodzi do gotowych raz');
+    }
+
+    public function test_relayed_leader_keeps_its_state_when_applying_fails(): void
+    {
+        [$batch, $leader, $version] = $this->group(0);
+        $failed = $this->card('DP0106', 'Deckplate Czarny 0.6m x 0.9m (15mm)', ['description' => null, 'enrichment_status' => Product::ENRICHMENT_MANUAL, 'enrichment_error' => 'brak strony']);
+        ProductEnrichmentBatchItem::query()->create([
+            'batch_id' => $batch->id, 'product_id' => $failed->id, 'sku' => $failed->sku, 'name' => $failed->name,
+            'status' => ProductEnrichmentBatchItem::STATUS_MANUAL, 'model_key' => self::MODEL_KEY, 'model_leader_id' => $leader->id,
+        ]);
+        $job = $this->job($batch, $leader, $version, static function (Product $member): string {
+            $member->update(['enrichment_status' => Product::ENRICHMENT_RUNNING]);
+            throw new RuntimeException('dysk pełny');
+        });
+
+        $job->handle($this->service(), app(ModelGroupPlanner::class));
+
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_MANUAL, $this->item($failed)->status);
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $failed->fresh()->enrichment_status);
+        $this->assertSame('brak strony', $failed->fresh()->enrichment_error);
+        $this->assertSame(0, $batch->fresh()->failed);
+    }
+
     public function test_exception_for_one_member_marks_it_failed_and_continues_with_the_rest(): void
     {
         [$batch, $leader, $version, $members] = $this->group(2);

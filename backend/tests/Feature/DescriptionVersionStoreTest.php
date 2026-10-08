@@ -6,15 +6,18 @@ namespace Tests\Feature;
 
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\B2bAccount;
+use App\Models\B2bProductLink;
 use App\Models\Product;
 use App\Models\ProductDescriptionVersion;
 use App\Models\ProductDocument;
+use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Models\ProductSourceDocument;
 use App\Models\User;
 use App\Services\B2b\AnroB2bClient;
 use App\Services\Enrichment\DescriptionVersionStore;
 use App\Services\Enrichment\SourceDocumentStore;
+use App\Services\ProductReviewService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -464,6 +467,314 @@ final class DescriptionVersionStoreTest extends TestCase
         }
 
         $this->assertSame(0, ProductDescriptionVersion::query()->where('product_id', $card->id)->count());
+    }
+
+    /**
+     * Etap 3, W4 (decyzja właściciela 08.10.2026 §9.1): opis spoza strony producenta marki „tylko od producenta” zdjęty
+     * z karty — wersja w historii, karta bez opisu, norm i payloadu, „manual” z powodem manufacturer_missing; zdjęcia
+     * i pliki zostają, wpis pamięci SKU z tym tekstem znika (przebieg bez force nie położy go z powrotem).
+     */
+    public function test_withdraw_current_moves_shop_description_to_history_and_keeps_files(): void
+    {
+        $card = $this->card([
+            'sku' => '987',
+            'name' => 'Rękawice SOLO 987',
+            'manufacturer' => 'MAPA',
+            'norms' => 'EN 388',
+            'manufacturer_norms' => ['rows' => ['EN 388']],
+            'packaging' => 'para',
+            'enrichment_payload' => ['features' => ['nitryl'], 'norms' => ['EN 388'], 'primary_source_url' => 'https://bpbhp.pl/solo-987'],
+        ]);
+        $version = $this->store->record($card, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => self::DESCRIPTION,
+            'enrichment_payload' => $card->enrichment_payload,
+            'primary_source_url' => 'https://bpbhp.pl/solo-987',
+            'identity_verdict' => 'hard',
+            'evidence_count' => 4,
+            'reason' => 'karta bez opisu',
+        ]);
+        $image = ProductImage::query()->create(['product_id' => $card->id, 'path' => 'products/solo.jpg', 'source_url' => 'https://bpbhp.pl/solo.jpg', 'checksum' => 'solo', 'sort_order' => 0]);
+        $document = ProductDocument::query()->create(['product_id' => $card->id, 'path' => 'products/solo.pdf', 'source_url' => 'https://bpbhp.pl/solo.pdf', 'title' => 'Karta', 'kind' => ProductDocument::KIND_CERTIFICATE]);
+        $sameText = ProductEnrichmentCache::query()->create(['manufacturer' => 'mapa', 'sku' => '987', 'description' => self::DESCRIPTION,
+            'enrichment_payload' => ['confidence' => 0.9], 'source_urls' => ['https://inny-sklep.pl/x']]);
+
+        $withdrawn = $this->store->withdrawCurrent($card, 'strona spoza hostów producenta (bpbhp.pl)');
+
+        $this->assertNotNull($withdrawn);
+        $this->assertSame($version->id, $withdrawn->id);
+        $this->assertSame(ProductDescriptionVersion::STATUS_SUPERSEDED, $withdrawn->status);
+        $this->assertSame(self::DESCRIPTION, $withdrawn->description);
+        $this->assertSame('karta bez opisu | cofnięty: strona spoza hostów producenta (bpbhp.pl)', $withdrawn->reason);
+        $this->assertSame('strona spoza hostów producenta (bpbhp.pl)', $this->store->meta($withdrawn)['withdrawn_reason']);
+        $this->assertNotEmpty($this->store->meta($withdrawn)['withdrawn_at']);
+        // kopia payloadu wersji zostaje — „Przywróć wersję” odtwarza z niej cechy i normy
+        $this->assertSame(['nitryl'], $withdrawn->enrichment_payload['features']);
+
+        $fresh = $card->fresh();
+        $this->assertNull($fresh->description);
+        $this->assertNull($fresh->norms);
+        $this->assertNull($fresh->enrichment_payload);
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $fresh->enrichment_status);
+        $this->assertSame(Product::REVIEW_MANUFACTURER_MISSING, $fresh->review_reason);
+        $this->assertNotNull($fresh->review_since);
+        // norm producenta, opakowania, zdjęć i plików nie rusza
+        $this->assertSame(['rows' => ['EN 388']], $fresh->manufacturer_norms);
+        $this->assertSame('para', $fresh->packaging);
+        $this->assertNotNull($image->fresh());
+        $this->assertNotNull($document->fresh());
+        $this->assertNull($sameText->fresh());
+        // instancja wołającego bez starego opisu — jej późniejszy zapis nie przeliczy indeksu ze starego tekstu
+        $this->assertNull($card->description);
+        $this->assertFalse($card->isDirty());
+        $this->assertStringNotContainsString('nitrylem', (string) $fresh->search_blob);
+        $this->assertNull($this->store->current($fresh));
+        $this->assertSame(0, ProductDescriptionVersion::query()->where('product_id', $card->id)->where('status', ProductDescriptionVersion::STATUS_PUBLISHED)->count());
+
+        // drugie wywołanie: nie ma już czego cofać
+        $this->assertNull($this->store->withdrawCurrent($card, 'ponownie'));
+
+        // „Przywróć wersję” kładzie cofnięty tekst z powrotem
+        $restored = $this->store->publish($withdrawn, null, ProductDescriptionVersion::ORIGIN_RESTORE);
+        $this->assertSame(self::DESCRIPTION, $restored->description);
+        $this->assertSame('EN 388', $restored->norms);
+        $this->assertSame(['nitryl'], $restored->enrichment_payload['features']);
+        $this->assertSame(Product::ENRICHMENT_DONE, $restored->enrichment_status);
+        $this->assertNull($restored->review_reason);
+    }
+
+    public function test_withdraw_current_keeps_sku_cache_from_another_page(): void
+    {
+        $card = $this->card(['sku' => '987', 'manufacturer' => 'MAPA']);
+        $this->published($card, 'hard', 4, 'https://bpbhp.pl/solo-987');
+        $other = ProductEnrichmentCache::query()->create(['manufacturer' => 'mapa', 'sku' => '987', 'description' => 'Opis ze strony producenta MAPA, rękawice nitrylowe SOLO.',
+            'enrichment_payload' => ['primary_source_url' => 'https://mapa-pro.pl/solo-987'], 'source_urls' => ['https://mapa-pro.pl/solo-987']]);
+        $sameUrl = $this->card(['sku' => '988', 'manufacturer' => 'MAPA']);
+        $this->published($sameUrl, 'hard', 4, 'https://bpbhp.pl/solo-988');
+        $fromPage = ProductEnrichmentCache::query()->create(['manufacturer' => 'mapa', 'sku' => '988', 'description' => 'Inny tekst wpisu ze sklepu bpbhp, rękawice SOLO 988.',
+            'enrichment_payload' => ['primary_source_url' => 'https://www.bpbhp.pl/solo-988'], 'source_urls' => []]);
+
+        $this->assertNotNull($this->store->withdrawCurrent($card, 'sklep'));
+        $this->assertNotNull($this->store->withdrawCurrent($sameUrl, 'sklep'));
+
+        $this->assertNotNull($other->fresh());
+        // ta sama strona pod wariantem hosta („www.”) — wpis znika
+        $this->assertNull($fromPage->fresh());
+    }
+
+    public function test_withdraw_current_refuses_human_choices_b2b_description_and_card_without_version(): void
+    {
+        $check = function (Product $card, string $why): void {
+            $before = $card->fresh();
+            $this->assertNull($this->store->withdrawCurrent($card, 'sklep'), $why);
+            $after = $card->fresh();
+            $this->assertSame($before->description, $after->description, $why);
+            $this->assertSame($before->enrichment_status, $after->enrichment_status, $why);
+            $this->assertNull($after->review_reason, $why);
+            $this->assertNotNull($this->store->current($after), $why);
+        };
+
+        $approved = $this->card(['sku' => 'H-1']);
+        $this->store->record($approved, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_REVIEW_APPROVE, ['description' => self::DESCRIPTION, 'primary_source_url' => 'https://sklep.pl/h-1']);
+        $check($approved, 'zatwierdzenie w przeglądzie (origin review_approve)');
+
+        $decided = $this->card(['sku' => 'H-2']);
+        $this->published($decided, 'soft', 2, 'https://sklep.pl/h-2')->forceFill(['decision' => ProductDescriptionVersion::DECISION_APPROVED])->save();
+        $check($decided, 'opis zatwierdzony na karcie (decyzja approved)');
+
+        $manualReason = $this->card(['sku' => 'H-3']);
+        $this->store->record($manualReason, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => self::DESCRIPTION, 'primary_source_url' => 'https://sklep.pl/h-3', 'reason' => DescriptionVersionStore::MANUAL_URL_REASON,
+        ]);
+        $check($manualReason, 'opis z adresu podanego ręcznie (powód decide)');
+
+        $trusted = $this->card(['sku' => 'H-4', 'shop_source_url' => 'https://www.sklep.pl/h-4']);
+        $this->published($trusted, 'soft', 2, 'https://sklep.pl/h-4');
+        $check($trusted, 'źródło = zaufany adres karty');
+
+        $b2b = $this->card(['sku' => 'H-5']);
+        $this->published($b2b, 'hard', 3, 'https://sklep.pl/h-5');
+        B2bProductLink::query()->create(['b2b_account_id' => $this->b2bAccount()->id, 'remote_id' => 'H-5', 'product_id' => $b2b->id,
+            'remote_sku' => 'H-5', 'remote_name' => 'Rękawice', 'description_hash' => sha1(self::DESCRIPTION)]);
+        $check($b2b, 'opis z cennika B2B');
+
+        // „Przywróć wersję” przez człowieka: kopia origin restore, decyzja restored przy wersji źródłowej
+        $restored = $this->card(['sku' => 'H-6']);
+        $source = $this->published($restored, 'soft', 2, 'https://sklep.pl/h-6');
+        $restored->update(['description' => 'Nowszy opis z innej strony, rękawice powlekane lateksem.']);
+        $this->store->record($restored, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, ['description' => 'Nowszy opis z innej strony, rękawice powlekane lateksem.']);
+        $source->forceFill(['decision' => ProductDescriptionVersion::DECISION_RESTORED])->save();
+        $this->store->publish($source->fresh(), null, ProductDescriptionVersion::ORIGIN_RESTORE);
+        $check($restored, 'opis przywrócony przez człowieka');
+
+        // „Przywróć” wersji odrzuconej (decyzja rejected) — tylko człowiek kładzie odrzuconą wersję z powrotem
+        $fromRejected = $this->card(['sku' => 'H-8']);
+        $rejected = $this->published($fromRejected, 'none', 1, 'https://sklep.pl/h-8');
+        $fromRejected->update(['description' => 'Nowszy opis z innej strony, rękawice powlekane lateksem.']);
+        $this->store->record($fromRejected, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, ['description' => 'Nowszy opis z innej strony, rękawice powlekane lateksem.']);
+        $rejected->forceFill(['status' => ProductDescriptionVersion::STATUS_REJECTED, 'decision' => ProductDescriptionVersion::DECISION_REJECTED])->save();
+        $this->store->publish($rejected->fresh(), null, ProductDescriptionVersion::ORIGIN_RESTORE);
+        $check($fromRejected, 'odrzucona wersja przywrócona przez człowieka');
+
+        // opis bez wersji (zapisany innym torem) — nie ma gdzie zachować tekstu
+        $noVersion = $this->card(['sku' => 'H-7']);
+        $this->assertNull($this->store->withdrawCurrent($noVersion, 'sklep'));
+        $this->assertSame(self::DESCRIPTION, $noVersion->fresh()->description);
+        $this->assertSame(Product::ENRICHMENT_DONE, $noVersion->fresh()->enrichment_status);
+    }
+
+    public function test_withdraw_current_takes_back_restore_copy_without_human_decision(): void
+    {
+        // kopia origin restore z odrzucenia albo wycofania partii — źródło bez decyzji człowieka, opis można cofnąć
+        $card = $this->card();
+        $source = $this->published($card, 'soft', 2, 'https://sklep.pl/a-1');
+        $card->update(['description' => 'Nowszy opis z innej strony, rękawice powlekane lateksem.']);
+        $this->store->record($card, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, ['description' => 'Nowszy opis z innej strony, rękawice powlekane lateksem.']);
+        $copy = $this->store->publish($source->fresh(), null, ProductDescriptionVersion::ORIGIN_RESTORE);
+        $current = $this->store->current($copy);
+        $this->assertSame(ProductDescriptionVersion::ORIGIN_RESTORE, $current?->origin);
+
+        $withdrawn = $this->store->withdrawCurrent($card, 'sklep');
+
+        $this->assertSame($current->id, $withdrawn?->id);
+        $this->assertNull($card->fresh()->description);
+    }
+
+    /**
+     * Cofnięcie zdejmuje z payloadu karty tylko dane opisu — scalone rozmiary (czyta je ProductSizeMergeService przy
+     * łączeniu rozmiarów; bez nich kolejny import zrobiłby duplikaty) i łączenie duplikatów zostają. Ślady pochodzenia
+     * opisu z B2B (b2b_sources, b2b_supplement, replaced_description) należą do opisu i znikają razem z nim.
+     * „Przywróć wersję” oddaje dane opisu z wersji, a stan karty bierze z karty, nie ze starej kopii wersji.
+     */
+    public function test_withdraw_current_keeps_card_state_payload_keys_and_restore_brings_description_back(): void
+    {
+        $card = $this->card([
+            'sku' => '987',
+            'manufacturer' => 'MAPA',
+            'norms' => 'EN 388',
+            'enrichment_payload' => [
+                'features' => ['nitryl'],
+                'norms' => ['EN 388'],
+                'primary_source_url' => 'https://bpbhp.pl/solo-987',
+                'identity' => ['verdict' => 'hard'],
+                'model_group' => ['key' => 'solo', 'shared' => true],
+                'attributes' => ['normy_en' => ['EN 388']],
+                'description_version_id' => 1,
+                'merged_size_skus' => ['987-8', '987-9'],
+                'size_merge' => ['at' => '2026-10-01T10:00:00+02:00', 'sizes' => []],
+                'merged_duplicate_skus' => ['987-DUP'],
+                'replaced_description' => 'Opis z cennika sprzed wzbogacania.',
+                'b2b_sources' => ['konto' => 3],
+                'b2b_supplement' => ['result_sha1' => 'abc'],
+            ],
+        ]);
+        $version = $this->store->record($card, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => self::DESCRIPTION,
+            // kopia wersji z chwili zapisu opisu — scalanie rozmiarów przyszło później, lista w kopii jest stara
+            'enrichment_payload' => ['features' => ['nitryl'], 'norms' => ['EN 388'], 'merged_size_skus' => ['987-7']],
+            'primary_source_url' => 'https://bpbhp.pl/solo-987',
+        ]);
+
+        $withdrawn = $this->store->withdrawCurrent($card, 'strona spoza hostów producenta (bpbhp.pl)');
+
+        $this->assertSame($version->id, $withdrawn?->id);
+        $payload = $card->fresh()->enrichment_payload;
+        ksort($payload);
+        $this->assertSame([
+            'merged_duplicate_skus' => ['987-DUP'],
+            'merged_size_skus' => ['987-8', '987-9'],
+            'size_merge' => ['at' => '2026-10-01T10:00:00+02:00', 'sizes' => []],
+        ], $payload);
+        $this->assertNull($card->fresh()->description);
+        $this->assertNull($card->fresh()->norms);
+
+        $restored = $this->store->publish($withdrawn, null, ProductDescriptionVersion::ORIGIN_RESTORE);
+
+        $this->assertSame(self::DESCRIPTION, $restored->description);
+        $this->assertSame('EN 388', $restored->norms);
+        $this->assertSame(['nitryl'], $restored->enrichment_payload['features']);
+        $this->assertSame(['987-8', '987-9'], $restored->enrichment_payload['merged_size_skus']);
+        $this->assertSame(['987-DUP'], $restored->enrichment_payload['merged_duplicate_skus']);
+        foreach (['replaced_description', 'b2b_sources', 'b2b_supplement'] as $key) {
+            $this->assertArrayNotHasKey($key, $restored->enrichment_payload, $key);
+        }
+        $copy = $this->store->current($restored);
+        $this->assertSame($copy?->id, $restored->enrichment_payload['description_version_id']);
+        // kopia nowej wersji niesie payload wersji źródłowej bez zmian
+        $this->assertSame(['987-7'], $copy?->enrichment_payload['merged_size_skus']);
+    }
+
+    /**
+     * „Przywróć wersję” przez człowieka wersji, która miała już decyzję url_given (przywrócenie jej nie nadpisuje) —
+     * kopia jest wyborem człowieka i kolejny przebieg z cofaniem jej nie zdejmuje. Ta sama wersja położona automatem
+     * (powrót po odrzuceniu) — url_given nie chroni.
+     */
+    public function test_human_restore_of_version_with_url_given_decision_is_not_withdrawn(): void
+    {
+        $user = User::factory()->create();
+        $newer = 'Nowszy opis z innej strony, rękawice powlekane lateksem.';
+
+        $card = $this->card();
+        $source = $this->published($card, 'soft', 2, 'https://sklep.pl/a-1');
+        $source->forceFill(['decision' => ProductDescriptionVersion::DECISION_URL_GIVEN])->save();
+        $card->update(['description' => $newer]);
+        $this->store->record($card, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, ['description' => $newer]);
+
+        app(ProductReviewService::class)->restore($card, $source->fresh(), $user, null);
+
+        $this->assertSame(self::DESCRIPTION, $card->fresh()->description);
+        $this->assertSame(ProductDescriptionVersion::DECISION_URL_GIVEN, $source->fresh()->decision);
+        $this->assertTrue($this->store->meta($this->store->current($card->fresh()))['human_choice'] ?? false);
+        $this->assertNull($this->store->withdrawCurrent($card, 'sklep'));
+        $this->assertSame(self::DESCRIPTION, $card->fresh()->description);
+
+        $auto = $this->card(['sku' => 'A-2']);
+        $autoSource = $this->published($auto, 'soft', 2, 'https://sklep.pl/a-2');
+        $autoSource->forceFill(['decision' => ProductDescriptionVersion::DECISION_URL_GIVEN])->save();
+        $auto->update(['description' => $newer]);
+        $this->store->record($auto, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, ['description' => $newer]);
+        $this->store->publish($autoSource->fresh(), $user, ProductDescriptionVersion::ORIGIN_RESTORE);
+
+        $this->assertNotNull($this->store->withdrawCurrent($auto, 'sklep'));
+        $this->assertNull($auto->fresh()->description);
+    }
+
+    /**
+     * Etap 3, runda 3: supersedeAsWithdrawn — bieżąca wersja do historii jako cofnięta (reason + withdrawn_at/
+     * withdrawn_reason), karta bez zmian (opis, normy, status, powód przeglądu); wersja chroniona albo opis z B2B — null.
+     */
+    public function test_supersede_as_withdrawn_keeps_card_and_refuses_protected_versions(): void
+    {
+        $card = $this->card(['norms' => 'EN 388', 'enrichment_payload' => ['primary_source_url' => 'https://sklep.pl/a-1']]);
+        $version = $this->published($card, 'hard', 3, 'https://sklep.pl/a-1');
+
+        $withdrawn = $this->store->supersedeAsWithdrawn($card, 'opis ze sklepu zastąpiony stroną producenta');
+
+        $this->assertNotNull($withdrawn);
+        $this->assertSame((int) $version->id, (int) $withdrawn->id);
+        $this->assertSame(ProductDescriptionVersion::STATUS_SUPERSEDED, $withdrawn->status);
+        $this->assertStringContainsString('cofnięty: opis ze sklepu zastąpiony stroną producenta', (string) $withdrawn->reason);
+        $meta = $this->store->meta($withdrawn);
+        $this->assertSame('opis ze sklepu zastąpiony stroną producenta', $meta['withdrawn_reason'] ?? null);
+        $this->assertNotEmpty($meta['withdrawn_at'] ?? null);
+        $fresh = $card->fresh();
+        $this->assertSame(self::DESCRIPTION, $fresh->description, 'karta bez zmian');
+        $this->assertSame('EN 388', $fresh->norms);
+        $this->assertSame(Product::ENRICHMENT_DONE, $fresh->enrichment_status);
+        $this->assertNull($fresh->review_reason);
+        $this->assertNull($this->store->current($fresh), 'karta bez wersji bazowej');
+
+        $approved = $this->card(['sku' => 'H-1']);
+        $this->store->record($approved, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_REVIEW_APPROVE, ['description' => self::DESCRIPTION, 'primary_source_url' => 'https://sklep.pl/h-1']);
+        $this->assertNull($this->store->supersedeAsWithdrawn($approved, 'sklep'), 'wybór człowieka');
+        $this->assertNotNull($this->store->current($approved->fresh()));
+
+        $b2b = $this->card(['sku' => 'H-5']);
+        $this->published($b2b, 'hard', 3, 'https://sklep.pl/h-5');
+        B2bProductLink::query()->create(['b2b_account_id' => $this->b2bAccount()->id, 'remote_id' => 'H-5', 'product_id' => $b2b->id,
+            'remote_sku' => 'H-5', 'remote_name' => 'Rękawice', 'description_hash' => sha1(self::DESCRIPTION)]);
+        $this->assertNull($this->store->supersedeAsWithdrawn($b2b, 'sklep'), 'opis z B2B');
+
+        $this->assertNull($this->store->supersedeAsWithdrawn($this->card(['sku' => 'N-1']), 'sklep'), 'bez wersji');
     }
 
     private function b2bAccount(): B2bAccount

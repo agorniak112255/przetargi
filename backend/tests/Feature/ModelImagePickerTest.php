@@ -283,6 +283,194 @@ final class ModelImagePickerTest extends TestCase
         $this->assertSame(ModelImagePicker::REASON_PAGE_IN_COLOUR, $copy(['https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Yellow-1.jpg'])['reason']);
     }
 
+    public function test_coba_file_names_with_card_code_and_abbreviated_colours(): void
+    {
+        // Ponowny audyt Coby 08.10.2026 (partia #501): galeria lidera Orthomat Diamond (page_image_urls wersji #1363,
+        // prawdziwe adresy) — „BlkYel” nie był kolorem, wszystkie karty Czarny/Żółte dostały czarne
+        // af-orthomat-diamond-workplace-matting-1.jpg
+        $c = 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/';
+        $gallery = [
+            $c.'af-orthomat-diamond-workplace-matting-1.jpg',
+            $c.'DAF010701_Orthomat_Diamond_BlkYel_06x09.jpg',
+            $c.'af-orthomat-diamond-workplace-matting-2.jpg',
+            $c.'DAF010001_Orthomat_Diamond_Blk_06x09.jpg',
+            $c.'af-orthomat-diamond-workplace-matting-safety-3.jpg',
+            $c.'DAF010703C_OrthomatDiamond_09xLinear_BlkYel.jpg',
+        ];
+        $stem = 'Orthomat Diamond krawędzie';
+        $picker = new ModelImagePicker;
+        $leader = $this->coba('DAF010701', 'Orthomat Diamond Czarny/Żółte krawędzie 0.6m x 0.9m (9.5mm)');
+        $member = $this->coba('DAF0107-4', 'Orthomat Diamond Czarny/Żółte krawędzie 0.6m x 18.3m (9.5mm)');
+        $exactMember = $this->coba('DAF010703C', 'Orthomat Diamond Czarny/Żółte krawędzie 0.9m x mb. (9.5mm)');
+        $leaderImage = $this->image($leader, $gallery[0]);
+
+        $this->assertSame([$gallery[1], ModelImagePicker::REASON_PAGE_IN_COLOUR], $this->urlAndReason($picker->pickFor($leader, ['black', 'yellow'], $gallery, [], $stem)));
+        $this->assertSame([$gallery[1], ModelImagePicker::REASON_PAGE_IN_COLOUR], $this->urlAndReason($picker->pickFor($member, ['black', 'yellow'], $gallery, [$leaderImage], $stem)));
+        // plik z pełnym kodem TEJ karty wygrywa z wcześniejszym plikiem w tym samym kolorze
+        $this->assertSame($gallery[5], $picker->pickFor($exactMember, ['black', 'yellow'], $gallery, [$leaderImage], $stem)['url']);
+        // czarna karta tego modelu bierze plik „_Blk_”, nie „_BlkYel_”
+        $black = $this->coba('DAF010001', 'Orthomat Diamond Czarny 0.6m x 0.9m (9.5mm)');
+        $this->assertSame($gallery[3], $picker->pickFor($black, ['black'], $gallery, [$leaderImage], 'Orthomat Diamond')['url']);
+
+        // Orthomat Comfort Plus (wersja #1368): „OCP010002_OrthoComfortPlus_…_Blk_Coner.jpg” nie ma słowa „orthomat” —
+        // mówi o modelu kodem rodziny (OCP01…); karta Czarny/Żółte bierze „…_Blkyel_Corner_1.jpg”
+        $ocpBlack = 'https://www.coba.com/pl/wp-content/uploads/sites/6/2019/11/OCP010002_OrthoComfortPlus_09x15_Blk_Coner.jpg';
+        $ocpBlackYellow = 'https://www.coba.com/pl/wp-content/uploads/sites/6/2019/11/Orthomat%C2%AE-Comfort-Plus_06x09_Blkyel_Corner_1.jpg';
+        $ocpIndustrial = $c.'OCP0_Orthomat-Comfort-Plus-1_industrial.jpg';
+        $ocpLeader = $this->coba('OCP010701', 'Orthomat Comfort Plus Czarny/Żółte krawędzie 0.6m x 0.9m (15mm)');
+        $ocpMember = $this->coba('OCP010702', 'Orthomat Comfort Plus Czarny/Żółte krawędzie 0.9m x 1.5m (15mm)');
+        $ocpLeaderImage = $this->image($ocpLeader, $ocpBlack);
+        $ocpStem = 'Orthomat Comfort Plus krawędzie';
+        $this->assertSame($ocpBlackYellow, $picker->pickFor($ocpMember, ['black', 'yellow'], [$ocpBlack, $ocpIndustrial, $ocpBlackYellow], [$ocpLeaderImage], $ocpStem)['url']);
+        // bez pliku czarno-żółtego: czarny plik z kodem rodziny to „inny kolor” — bez kopii czarnego zdjęcia lidera
+        $this->assertSame(
+            ['url' => null, 'copy_of' => null, 'reason' => ModelImagePicker::REASON_PAGE_OTHER_COLOUR],
+            $picker->pickFor($ocpMember, ['black', 'yellow'], [$ocpBlack, $ocpIndustrial], [$ocpLeaderImage], $ocpStem)
+        );
+        // i bez galerii: zdjęcie lidera „…_Blk_…” to inny kolor niż Czarny/Żółte (dawniej kopia)
+        $this->assertSame(ModelImagePicker::REASON_LEADER_OTHER_COLOUR, $picker->pickFor($ocpMember, ['black', 'yellow'], [], [$ocpLeaderImage], $ocpStem)['reason']);
+    }
+
+    public function test_abbreviated_or_glued_other_colour_is_not_copied_to_one_colour_card(): void
+    {
+        // Orthomat Premium Czarny (wersja #1369): jedyny plik z kolorem to „…_Yel_Bk-…” (czarna z żółtą krawędzią)
+        $c = 'https://www.coba.com/pl/wp-content/uploads/sites/6/';
+        $yelBk = $c.'2016/06/FF01_0701-Orthomat-Premium_Yel_Bk-100_0.6-x-0.9m-Corner.jpg';
+        $gallery = [$yelBk, $c.'2022/10/FF01_16-Orthomat-Premium_industrial.jpg', $c.'2022/10/af-orthomat-premium-workplace-matting-2.jpg'];
+        $leader = $this->coba('FF010002', 'Orthomat Premium Czarny 0.9m x 1.5m (12.5mm)');
+        $member = $this->coba('FF010001', 'Orthomat Premium Czarny 0.6m x 0.9m (12.5mm)');
+        $leaderImage = $this->image($leader, $yelBk);
+        $picker = new ModelImagePicker;
+        $this->assertSame(
+            ['url' => null, 'copy_of' => null, 'reason' => ModelImagePicker::REASON_PAGE_OTHER_COLOUR],
+            $picker->pickFor($member, ['black'], $gallery, [$leaderImage], 'Orthomat Premium')
+        );
+        $this->assertSame(ModelImagePicker::REASON_LEADER_OTHER_COLOUR, $picker->pickFor($member, ['black'], [], [$leaderImage], 'Orthomat Premium')['reason']);
+
+        // COBAGRiP Osłona krawędzi Żółta (wersja #1506): „…-BlackYellow_isolated.jpg” to czarno-żółty kątownik
+        $blackYellow = $c.'2022/10/GRPN_COBAGRiP-Stair-Nosing-BlackYellow_isolated.jpg';
+        $nosingLeader = $this->coba('GRP070001N', 'COBAGRiP Osłona krawędzi Żółta 3m x 55mm x 55mm');
+        $nosing = $this->coba('GRP070005N', 'COBAGRiP Osłona krawędzi Żółta 0.75m x 55mm x 55mm');
+        $nosingImage = $this->image($nosingLeader, $blackYellow);
+        $this->assertSame(
+            ['url' => null, 'copy_of' => null, 'reason' => ModelImagePicker::REASON_PAGE_OTHER_COLOUR],
+            $picker->pickFor($nosing, ['yellow'], [$blackYellow], [$nosingImage], 'COBAGRiP Osłona krawędzi')
+        );
+    }
+
+    public function test_charcoal_file_goes_to_anthracite_card(): void
+    {
+        // Toughrib (wersja #1543) i Needlepunch (wersja #1534): karta „Antracyt”, plik „Charcoal” — dawniej „inny kolor”
+        $c = 'https://www.coba.com/pl/wp-content/uploads/sites/6/';
+        $toughrib = $this->coba('TR010002', 'Toughrib Antracyt 0.9m x 1.5m');
+        $charcoal = $c.'2022/10/TR010004_Toughrib_08x12_Charcoal.jpg';
+        $pick = (new ModelImagePicker)->pickFor($toughrib, ['anthracite'], [
+            $c.'2022/10/TR01_02-Toughrib-Brown_general.jpg', $c.'2022/10/TR01_02-Toughrib-Red_general.jpg', $charcoal,
+        ], [], 'Toughrib');
+        $this->assertSame([$charcoal, ModelImagePicker::REASON_PAGE_IN_COLOUR], $this->urlAndReason($pick));
+
+        $needlepunch = $this->coba('NP010003', 'Needlepunch Antracyt 1m x 21m / krawędź dodatkowo płatna P249-C63-C09');
+        $needleCharcoal = $c.'2022/10/af-needlepunch-entrance-matting-charcoal-3.jpg';
+        $this->assertSame($needleCharcoal, (new ModelImagePicker)->pickFor($needlepunch, ['Antracyt'], [
+            $c.'2022/10/af-needlepunch-entrance-matting-grey-1.jpg',
+            $c.'2025/05/Needlepuch-Edge-Corner-P249-scaled.jpg',
+            $needleCharcoal,
+            $c.'2020/02/af-needlepunch-entrance-matting-style-charcoal-4.jpg',
+        ], [], 'Needlepunch krawędź dodatkowo płatna P249-C63-C09')['url']);
+    }
+
+    public function test_card_code_family_in_file_name_counts_like_model_stem_word(): void
+    {
+        // plik nazwany samym kodem (bez słowa „deckstep”): kod rodziny tej karty mówi o modelu, kod innej rodziny nie
+        $c = 'https://www.coba.com/wp-content/uploads/2020/02/';
+        $redWide = $this->coba('DS031210C', 'DeckStep Matting Czerwony 1.2m x mb (11.5mm)');
+        $red = $this->coba('DS0306', 'DeckStep Matting Czerwony ~0.59m/0.6m x 10m (11.5mm)');
+        $green = $this->coba('DS0406', 'DeckStep Matting Zielony ~0.59m/0.6m x 10m (11.5mm)');
+        $redFile = $c.'DS030610_059x10_Red.jpg';
+        $picker = new ModelImagePicker;
+        foreach ([$redWide, $red] as $card) {
+            $this->assertSame([$redFile, ModelImagePicker::REASON_PAGE_IN_COLOUR], $this->urlAndReason($picker->pickFor($card, ['red'], [$redFile], [], 'DeckStep Matting')), (string) $card->sku);
+        }
+        // DS04… to inna rodzina kodu: bez słowa rdzenia czerwony plik nie mówi o zielonej karcie
+        $this->assertSame([null, ModelImagePicker::REASON_LEADER_NONE], $this->urlAndReason($picker->pickFor($green, ['green'], [$redFile], [], 'DeckStep Matting')));
+        // ze słowem rdzenia plik innego członka w innym kolorze to „inny kolor”, nie dowód
+        $this->assertSame(ModelImagePicker::REASON_PAGE_OTHER_COLOUR, $picker->pickFor($green, ['green'], [$c.'DS030610_DeckStep_059x10_Red.jpg'], [], 'DeckStep Matting')['reason']);
+
+        // końcówka kodu rozdziela modele: krawędź „męska” (…B1M) nie idzie na „żeńską” (…B1F), nasadka N na kratę G
+        $female = $this->coba('SS070002B1F', "Krawędź/narożnik 'żeński' Żółty (100% Nitryl) 75mm x 1m");
+        $this->assertSame(
+            [null, ModelImagePicker::REASON_LEADER_NONE],
+            $this->urlAndReason($picker->pickFor($female, ['yellow'], ['https://www.coba.com/x/SS070002B1M_FatStepEdgeB1_Yel_Male-scaled.jpg'], [], "Krawędź/narożnik 'żeński'"))
+        );
+        $grating = $this->coba('GRP070009G', 'COBAGRIP Krata GRP Żółty 3660mm x 1220mm x 50mm');
+        foreach (['GRP070005N_Nosing_Yellow.jpg', 'GRP0112_Strip_Yellow.jpg'] as $file) {
+            $this->assertSame([null, ModelImagePicker::REASON_LEADER_NONE], $this->urlAndReason($picker->pickFor($grating, ['yellow'], ['https://www.coba.com/x/'.$file], [], 'Krata GRP')), $file);
+        }
+    }
+
+    public function test_sibling_card_image_in_member_colour_is_a_substitute(): void
+    {
+        // Superdry (model coba|WH|superdry w partii #501): Szary 11216/11217 bez zdjęcia, 11218 ma szare zdjęcie
+        $black = $this->coba('WH010001', 'Superdry Czarny 0.6m x 0.9m');
+        $greySibling = $this->coba('WH0600', 'Superdry Szary 1.15m x 1.75m');
+        $member = $this->coba('WH060001', 'Superdry Szary 0.6m x 0.9m');
+        $blackImage = $this->image($black, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2026/08/Superdry-Corner-Black-WH02.png');
+        $greyImage = $this->image($greySibling, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/WH01_06-Superdry-Grey_general.jpg');
+        $picker = new ModelImagePicker;
+
+        $this->assertSame((int) $greyImage->id, (int) $picker->pickFromModelSiblings($member, ['grey'], [$blackImage, $greyImage], 'Superdry')?->id);
+        $this->assertSame((int) $greyImage->id, (int) $picker->pickFromModelSiblings($member, ['Szary'], [$blackImage, $greyImage], null)?->id);
+        $this->assertNull($picker->pickFromModelSiblings($member, ['grey'], [$blackImage], 'Superdry'), 'tylko inny kolor');
+        $this->assertNull($picker->pickFromModelSiblings($member, [], [$greyImage], 'Superdry'), 'karta bez koloru');
+
+        // Entra-Plush: Szary 11162/11164 ← „PP060002_EntraPlush_09x15_Grey.jpg” z 11163; niebieskie karty nie dają
+        $blue = $this->coba('PP020001', 'Entra-Plush Niebieski 0.6m x 0.9m');
+        $greyEntra = $this->coba('PP060002', 'Entra-Plush Szary 0.9m x 1.5m');
+        $entraMember = $this->coba('PP060001', 'Entra-Plush Szary 0.6m x 0.9m');
+        $blueImage = $this->image($blue, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2016/06/PP02_06-Entra-Plush-Blue_general.jpg');
+        $greyEntraImage = $this->image($greyEntra, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/PP060002_EntraPlush_09x15_Grey.jpg');
+        $this->assertSame((int) $greyEntraImage->id, (int) $picker->pickFromModelSiblings($entraMember, ['grey'], [$blueImage, $greyEntraImage], 'Entra-Plush')?->id);
+
+        // bez koloru w nazwie pliku — nie (tak powstały czarne kopie lidera); karta-właściciel w innym kolorze — nie;
+        // zdjęcie samej karty członka, miniatura i inny wyrób — nie
+        $neutral = $this->image($greySibling, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2026/08/Superdry-Isolated-WH050001.jpg');
+        $greyFileOnBlackCard = $this->image($black, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/WH01_06-Superdry-Grey_detail.jpg');
+        $own = $this->image($member, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/WH060001_SuperDry_06x09_Grey.jpg');
+        $thumb = $this->image($greySibling, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/WH01_06-Superdry-Grey_general-300x300.jpg');
+        $foreign = $this->image($greySibling, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/cobagrip-grey.jpg');
+        $this->assertNull($picker->pickFromModelSiblings($member, ['grey'], [$neutral, $greyFileOnBlackCard, $own, $thumb, $foreign, 'x'], 'Superdry'));
+
+        // plik z pełnym kodem karty członka wygrywa z wcześniejszym pasującym
+        $exact = $this->image($greySibling, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2022/10/WH060001_SuperDry_06x09_Grey.jpg');
+        $this->assertSame((int) $exact->id, (int) $picker->pickFromModelSiblings($member, ['grey'], [$greyImage, $exact], 'Superdry')?->id);
+    }
+
+    public function test_file_with_code_of_another_product_line_never_names_the_model(): void
+    {
+        // Symulacja na partii #501: karta HR Matting Niebieski ma ze sklepu zdjęcie DeckStepa z kodem DS020610C; ogólne
+        // słowo rdzenia „matting” („HR” ma 2 znaki) przepuszczało je jako zamiennik na inne niebieskie HR Matting
+        $shopDeckStep = 'https://sklep.example/pol_pl_Mata-DeckStep-Matting-Niebieski-0-6m-mb-DS020610C-COBA_%5B68876%5D_568.jpg';
+        $hrBlue = $this->coba('HR020001', 'HR Matting Niebieski 0.6m x 10m (2.4mm)');
+        $member = $this->coba('HR020004C', 'HR Matting Niebieski 0.6m x mb. (2.4mm) - maks. 10m');
+        $wrong = $this->image($hrBlue, $shopDeckStep);
+        $picker = new ModelImagePicker;
+
+        $this->assertNull($picker->pickFromModelSiblings($member, ['blue'], [$wrong], 'HR Matting'));
+        $this->assertSame([null, ModelImagePicker::REASON_LEADER_NONE], $this->urlAndReason($picker->pickFor($member, ['blue'], [$shopDeckStep], [], 'HR Matting')));
+        // ten sam plik bez obcego kodu liczy się przez słowo rdzenia jak dotąd; kod tych samych liter spoza rodziny nie
+        // jest obcy („HR060004C” przy HR02…: inny kolor, rozstrzyga słowo rdzenia), litery dopisku technicznego też nie
+        $plain = 'https://sklep.example/Mata-HR-Matting-Niebieski.jpg';
+        $this->assertSame($plain, $picker->pickFor($member, ['blue'], [$plain], [], 'HR Matting')['url']);
+        $this->assertSame(ModelImagePicker::REASON_PAGE_OTHER_COLOUR, $picker->pickFor($member, ['blue'], ['https://www.coba.com/x/HR060004C_HR-Matting_Grey.jpg'], [], 'HR Matting')['reason']);
+        $this->assertSame('https://www.coba.com/x/IMG20240901_HR-Matting_Blue.jpg', $picker->pickFor($member, ['blue'], ['https://www.coba.com/x/IMG20240901_HR-Matting_Blue.jpg'], [], 'HR Matting')['url']);
+    }
+
+    /** @return array{0: ?string, 1: string} */
+    private function urlAndReason(array $pick): array
+    {
+        return [$pick['url'], $pick['reason']];
+    }
+
     private function coba(string $sku, string $name): Product
     {
         return Product::query()->create(['sku' => $sku, 'name' => $name, 'manufacturer' => 'Coba']);

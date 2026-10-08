@@ -462,7 +462,29 @@ final class ProductImageDownloader
             }
         }
 
+        // poprawny obraz, który jest zaślepką („404 Not Found nginx” jako PNG 1280×1280) — trwałe odrzucenie z powodem
+        $placeholder = self::knownPlaceholderReason(hash('sha256', $bytes));
+        if ($placeholder !== null) {
+            throw new \RuntimeException($placeholder);
+        }
+
         return $this->storeBytes($product, $bytes, $mime, $url, $sortOrder);
+    }
+
+    /**
+     * Znana zaślepka po sumie kontrolnej (config/image_blocklist.php, sha256 bajtów jak product_images.checksum) —
+     * powód odrzucenia albo null.
+     */
+    public static function knownPlaceholderReason(string $checksum): ?string
+    {
+        $checksum = strtolower($checksum);
+        foreach ((array) config('image_blocklist.checksums', []) as $blocked) {
+            if (is_string($blocked) && hash_equals(strtolower(trim($blocked)), $checksum)) {
+                return 'Znana zaślepka zamiast zdjęcia (suma '.substr($checksum, 0, 12).'…)';
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -542,6 +564,13 @@ final class ProductImageDownloader
         }
 
         $checksum = hash('sha256', $bytes);
+        // znana zaślepka z poprawnym nagłówkiem obrazu — także z łącznika B2B (downloadOne odrzuca ją wcześniej)
+        $placeholder = self::knownPlaceholderReason($checksum);
+        if ($placeholder !== null) {
+            Log::info('Product image not stored', ['product_id' => $product->id, 'url' => $sourceUrl, 'error' => $placeholder]);
+
+            return null;
+        }
         // usunięte z karty świadomie (panel, audyt zdjęć) — ani pod tym adresem, ani ten sam plik pod innym
         if (ProductImageRejection::blocksUrl((int) $product->id, $sourceUrl)
             || ProductImageRejection::blocksChecksum((int) $product->id, $checksum)) {

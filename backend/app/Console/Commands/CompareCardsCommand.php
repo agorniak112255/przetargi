@@ -21,11 +21,12 @@ use Illuminate\Support\Facades\File;
  * w pliku) i zgodność zbioru jego kolorów ze zbiorem kolorów w nazwie karty (ColourWords::sameSet — karta dwubarwna
  * ze zdjęciem jednobarwnym to kolor sprzeczny), liczba zapisanych źródeł (product_source_documents). Podsumowanie
  * per grupa z pliku — kryteria pomiaru „po” z planu etapu 2 (§4 krok 6). --out: plik CSV, brakujący katalog powstaje.
+ * Czyta też plik audytu opisów (id;sku;nazwa;problem;waga;szczegóły;link — etap 3): grupa = problem (auditRows).
  */
 final class CompareCardsCommand extends Command
 {
     protected $signature = 'products:compare-cards
-                            {--csv= : Plik CSV pomiaru „przed” (;) — kolumny Grupa, Karta, SKU, Nazwa, Adres źródła opisu, Zdjęcie}
+                            {--csv= : Plik CSV pomiaru „przed” (;) — kolumny Grupa, Karta, SKU, Nazwa, Adres źródła opisu, Zdjęcie; albo plik audytu: id, sku, nazwa, problem}
                             {--out= : Plik CSV z porównaniem każdej karty}';
 
     protected $description = 'Karty z pomiaru „przed” a stan obecny: źródło opisu, werdykt, powód przeglądu, wersja, zdjęcie i kolor, liczba źródeł (niczego nie zmienia)';
@@ -38,8 +39,10 @@ final class CompareCardsCommand extends Command
         }
 
         $results = [];
+        // plik audytu ma kartę w kilku wierszach (po jednym na problem) — ta sama karta z tym samym „przed” liczona raz
+        $compared = [];
         foreach ($rows as $i => $row) {
-            $result = $this->compare($row);
+            $result = $compared[$row['id']."\n".($row['url'] ?? '')."\n".($row['image'] ?? '')] ??= $this->compare($row);
             $results[] = $row + ['result' => $result];
             $this->line(sprintf(
                 '[%d/%d] %s %s → źródło %s · werdykt %s · przegląd %s · wersja %s · zdjęcie %s (kolor %s) · źródeł %s',
@@ -161,6 +164,9 @@ final class CompareCardsCommand extends Command
         }
         $header = array_map(static fn (string $h): string => trim($h), str_getcsv((string) preg_replace('/^\xEF\xBB\xBF/', '', (string) array_shift($lines)), ';'));
         $col = array_flip($header);
+        if (isset($col['id'], $col['problem'])) {
+            return $this->auditRows($col, $lines);
+        }
         foreach (['Karta', 'SKU', 'Nazwa', 'Adres źródła opisu'] as $required) {
             if (! isset($col[$required])) {
                 $this->error("Brak kolumny „{$required}” w nagłówku pliku.");
@@ -180,6 +186,43 @@ final class CompareCardsCommand extends Command
                 'name' => $get('Nazwa'),
                 'url' => $get('Adres źródła opisu') !== '' ? $get('Adres źródła opisu') : null,
                 'image' => $get('Zdjęcie') !== '' ? $get('Zdjęcie') : null,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Plik audytu opisów (SUPON_AI_Audyt_<marka>_2026-10-08.csv: id;sku;nazwa;problem;waga;szczegóły;link, u UVEX
+     * dodatkowo „część”): wiersz = jeden problem jednej karty, grupa = problem (karta z kilkoma problemami jest
+     * w kilku grupach). Audyt nie zapisuje adresu źródła ani zdjęcia — porównanie pokazuje tylko stan obecny
+     * (adres „—”/„nowy”, zdjęcie „—”/„nowe”).
+     *
+     * @param  array<string, int>  $col  nagłówek => numer kolumny
+     * @param  list<string>  $lines
+     * @return list<array{group: string, id: string, sku: string, name: string, url: ?string, image: ?string}>|null
+     */
+    private function auditRows(array $col, array $lines): ?array
+    {
+        foreach (['sku', 'nazwa'] as $required) {
+            if (! isset($col[$required])) {
+                $this->error("Brak kolumny „{$required}” w nagłówku pliku audytu.");
+
+                return null;
+            }
+        }
+
+        $rows = [];
+        foreach ($lines as $line) {
+            $cells = str_getcsv($line, ';');
+            $get = static fn (string $name): string => isset($col[$name]) ? trim((string) ($cells[$col[$name]] ?? '')) : '';
+            $rows[] = [
+                'group' => $get('problem') !== '' ? $get('problem') : '(bez problemu)',
+                'id' => $get('id'),
+                'sku' => $get('sku'),
+                'name' => $get('nazwa'),
+                'url' => null,
+                'image' => null,
             ];
         }
 

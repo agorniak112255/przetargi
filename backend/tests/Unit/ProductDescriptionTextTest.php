@@ -239,6 +239,197 @@ Mata gumowa Bubblemat Czarny 0.9m x 1.2m (14mm) COBA (BF010702)'
         $this->assertStringContainsString('industrial machine up to 40 °C', $plain);
     }
 
+    /** Etap 3 (§1.4): „<” przed liczbą to wartość — strip_tags zjadał resztę opisu (6× COBAtape, Exonit 852). */
+    public function test_less_than_sign_before_a_value_is_text_not_a_tag(): void
+    {
+        $this->assertSame(
+            'Grubość powłoki: 15 µm. Pozostałość rozpuszczalnika: <0,5%. Przechowywanie w temperaturze 20-30°C.',
+            ProductDescriptionText::plain('Grubość powłoki: 15 µm. Pozostałość rozpuszczalnika: <0,5%. Przechowywanie w temperaturze 20-30°C.')
+        );
+        $this->assertSame(
+            'Ochraniacze rozpraszają energię (średnia siła uderzenia <9 kN) i chronią grzbiet dłoni.',
+            ProductDescriptionText::plain('Ochraniacze rozpraszają energię (średnia siła uderzenia <9 kN) i chronią grzbiet dłoni.')
+        );
+        $this->assertSame('Opór pary wodnej < 15 m²Pa/W, AQL <= 0,65.', ProductDescriptionText::plain('Opór pary wodnej < 15 m²Pa/W, AQL <= 0,65.'));
+    }
+
+    public function test_real_html_tags_and_comments_are_still_stripped(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            '<p>Rękawice nitrylowe <strong>do montażu</strong>.</p><!-- ukryte --><p>Odporność chemiczna: <span>&lt;10 min</span>.</p>'
+            .'<?xml version="1.0"?><br/>Koniec <b>opisu</b>.'
+        );
+
+        $this->assertSame("Rękawice nitrylowe do montażu.\nOdporność chemiczna: <10 min.\n\nKoniec opisu.", $plain);
+    }
+
+    /**
+     * Hipoteza H2 (CEDERROTH 26589): model złamał zdanie po nazwie z wymiarem — wiersz „nazwa + wymiar” z następną
+     * linią od małej litery to początek zdania, nie wiersz tabeli. Wycięcie zostawiało w opisie samo „o symbolu…”.
+     */
+    public function test_name_with_dimensions_followed_by_lowercase_continuation_is_kept(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Bandaż pasuje do stacji pierwszej pomocy Cederroth First Aid Station.\n"
+            ."Soft Foam Bandage Blue 6 cm x 200 cm\n"
+            .'o symbolu 51011011 ma wymiary 6 cm szerokości i 200 cm (2 m) długości.'
+        );
+
+        $this->assertStringContainsString("Soft Foam Bandage Blue 6 cm x 200 cm\no symbolu 51011011", $plain);
+    }
+
+    public function test_glued_spec_row_is_dropped_even_before_a_lowercase_line(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Taśma ochronna do zabezpieczania powierzchni.\nOverall Length (Metric)54.9 m\noraz klej kauczukowy."
+        );
+
+        $this->assertStringNotContainsString('Overall Length', $plain);
+        $this->assertStringNotContainsString('54.9 m', $plain);
+        $this->assertStringContainsString('oraz klej kauczukowy.', $plain);
+    }
+
+    public function test_spaced_spec_rows_before_an_uppercase_paragraph_are_still_dropped(): void
+    {
+        $plain = ProductDescriptionText::plain(
+            "Elongation at Break 4 %\nTensile Strength 22 N/cm\n\nTaśma do znakowania podłóg w halach."
+        );
+
+        $this->assertSame('Taśma do znakowania podłóg w halach.', $plain);
+    }
+
+    /** COBAtape TP010002 — opis z produkcji (08.10.2026) urwany na „<0,5%” zjedzonym przez strip_tags. */
+    public function test_unfinished_tail_after_colon_is_cut_to_last_sentence(): void
+    {
+        $text = 'COBAtape to samoprzylepna taśma podłogowa z PVC, przeznaczona do szybkiego i skutecznego oznaczania linii na '
+            .'podłogach. Numer części: TP010002. Rozmiar: 50 mm x 33 m. Kolor: czarny. Waga: 0,35 kg. Materiał: PVC z klejem '
+            .'na bazie gumy. Wytrzymałość na rozciąganie: 22 Ncm. Wydłużenie: 180%. Grubość powłoki: 15 µm. Pozostałości rozpuszczalnika:';
+
+        $result = ProductDescriptionText::withoutUnfinishedTail($text);
+
+        $this->assertSame('Pozostałości rozpuszczalnika:', $result['cut']);
+        $this->assertStringEndsWith('Grubość powłoki: 15 µm.', $result['text']);
+    }
+
+    /** Exonit 852 (MAPA 34852019) — opis z produkcji urwany w nawiasie. */
+    public function test_unfinished_tail_with_open_parenthesis_is_cut(): void
+    {
+        $text = 'Rękawice ochronne EXONIT 852 producenta MAPA (SKU 34852019) zostały zaprojektowane z myślą o ochronie przed '
+            .'uderzeniami w ciężkich warunkach pracy, gdzie dłonie są narażone na siły uderzeniowe i zgniatające. Kluczowym '
+            .'elementem konstrukcji jest jednoczęściowa wkładka z elastomeru termoplastycznego (TPR) naszyta na materiał '
+            .'tekstylny na grzbiecie dłoni i palcach. Ochraniacze te łagodzą uderzenia, rozpraszają energię (średnia siła uderzenia';
+
+        $result = ProductDescriptionText::withoutUnfinishedTail($text);
+
+        $this->assertSame('Ochraniacze te łagodzą uderzenia, rozpraszają energię (średnia siła uderzenia', $result['cut']);
+        $this->assertStringEndsWith('na grzbiecie dłoni i palcach.', $result['text']);
+    }
+
+    /**
+     * Coba PL010001: audyt z 08.10 zastał opis urwany na „…Ładowanie elektrostatyczne” (odtworzone na obecnym opisie
+     * z produkcji); obecny opis jest pełny i zostaje bez zmian.
+     */
+    public function test_unfinished_tail_ending_on_a_plain_word_is_cut_and_full_text_is_left_alone(): void
+    {
+        $full = 'Precision Loop to mata podłogowa klasy premium o gładkiej, welurowej powierzchni i precyzyjnym wykończeniu, '
+            .'przeznaczona do stref wejściowych o średnim i intensywnym natężeniu ruchu (wyłącznie do użytku wewnętrznego). '
+            .'Produkt charakteryzuje się niskimi kosztami instalacji, wysoką odpornością na promieniowanie UV oraz plamy.'
+            ."\n\nMata jest dostępna w wariantach kolorystycznych czarnym i antracytowym, w formacie rolki 2m x 23m lub na metry "
+            .'bieżące. Opcjonalnie dostępna jest fabrycznie montowana krawędź Needlepunch Edge (kod P249-C63-C09).';
+
+        $this->assertSame(['text' => $full, 'cut' => ''], ProductDescriptionText::withoutUnfinishedTail($full));
+
+        $truncated = $full.' Mata ogranicza ślizganie i zapobiega gromadzeniu ładunków. Ładowanie elektrostatyczne';
+        $result = ProductDescriptionText::withoutUnfinishedTail($truncated);
+
+        $this->assertSame('Ładowanie elektrostatyczne', $result['cut']);
+        $this->assertStringEndsWith('zapobiega gromadzeniu ładunków.', $result['text']);
+    }
+
+    public function test_full_content_without_final_period_is_not_cut(): void
+    {
+        foreach ([
+            'code' => "Rękawice z powłoką nitrylową do prac montażowych.\n\nSpełniają wymagania normy EN 388 4131X",
+            'acronym' => 'Półbuty ochronne do prac w magazynach. Zgodność z wymaganiami względem obuwia ESD',
+            'unit' => 'Mata przemysłowa z gumy. Dostępne warianty: 1,2 m x 10 m, czerwony, 9 kg/m',
+            'feature lines' => "Okulary ochronne z poliwęglanu.\n\nOchrona górna, dolna i boczna\nPowłoka odporna na zarysowania",
+            'inline list' => 'Rękawice do prac precyzyjnych. Właściwości: - dobry chwyt - wysoka elastyczność - bardzo dobra manualność',
+            'label value' => "Taśma do znakowania podłóg.\n\nKolor: czarny",
+            'short heading' => "Taśma do znakowania podłóg.\n\nMade in Poland",
+            'one sentence' => 'Samoprzylepna taśma podłogowa z PVC do oznaczania linii, stref i przejść w halach',
+        ] as $case => $text) {
+            $this->assertSame(['text' => $text, 'cut' => ''], ProductDescriptionText::withoutUnfinishedTail($text), $case);
+        }
+    }
+
+    public function test_abbreviation_is_not_a_sentence_end_for_the_cut(): void
+    {
+        $result = ProductDescriptionText::withoutUnfinishedTail(
+            'Rękawice do prac ogólnych. Dostępne rozmiary np. 8, 9 i 10 oraz wersja kat. II w opakowaniach po 12 par,'
+        );
+
+        $this->assertSame('Rękawice do prac ogólnych.', $result['text']);
+        $this->assertSame('Dostępne rozmiary np. 8, 9 i 10 oraz wersja kat. II w opakowaniach po 12 par,', $result['cut']);
+    }
+
+    /**
+     * Audyt 08.10.2026: „Taśma o szer. 75 mm i dł. 100 m, kolor biało-czerwony” — kropka po skrócie spoza listy
+     * („dł.”) brana była za koniec zdania i zostawało „…i dł.”. Koniec zdania wymaga za sobą wielkiej litery,
+     * cudzysłowu albo nawiasu otwierającego, nowego wiersza albo końca tekstu — także przy skrócie, którego nie ma na liście.
+     */
+    public function test_abbreviation_followed_by_number_or_lowercase_is_not_a_sentence_end(): void
+    {
+        $sentence = 'Taśma o szer. 75 mm i dł. 100 m, kolor biało-czerwony';
+        $this->assertSame(
+            ['text' => 'Taśma ostrzegawcza do oznaczania stref niebezpiecznych.', 'cut' => $sentence],
+            ProductDescriptionText::withoutUnfinishedTail('Taśma ostrzegawcza do oznaczania stref niebezpiecznych. '.$sentence)
+        );
+        // przed urwanym końcem nie ma pełnego zdania — tekst bez zmian
+        $this->assertSame(['text' => $sentence, 'cut' => ''], ProductDescriptionText::withoutUnfinishedTail($sentence));
+
+        // skrót spoza listy („zakr.”) przed liczbą i „np.” przed wielką literą też nie kończą zdania
+        $result = ProductDescriptionText::withoutUnfinishedTail(
+            'Lina asekuracyjna z hakiem. Lina o zakr. 5 m, zgodna np. EN 354 i dopuszczona do pracy przy'
+        );
+        $this->assertSame('Lina asekuracyjna z hakiem.', $result['text']);
+        $this->assertSame('Lina o zakr. 5 m, zgodna np. EN 354 i dopuszczona do pracy przy', $result['cut']);
+    }
+
+    /** „szt.”, „itp.” zwykle kończą zdanie — przed wielką literą kropka po nich to koniec zdania. */
+    public function test_sentence_final_abbreviation_before_uppercase_ends_the_sentence(): void
+    {
+        $result = ProductDescriptionText::withoutUnfinishedTail(
+            'Rękawice nitrylowe do prac w magazynie. Opakowanie: 12 szt. Rękawice chronią dłonie przed otarciami i'
+        );
+
+        $this->assertSame('Rękawice nitrylowe do prac w magazynie. Opakowanie: 12 szt.', $result['text']);
+        $this->assertSame('Rękawice chronią dłonie przed otarciami i', $result['cut']);
+
+        $result = ProductDescriptionText::withoutUnfinishedTail(
+            'Okulary do prac przy szlifowaniu, z kurzem, opiłkami itp. Soczewki z poliwęglanu chronią oczy przed'
+        );
+        $this->assertSame('Okulary do prac przy szlifowaniu, z kurzem, opiłkami itp.', $result['text']);
+        // „itp.” przed małą literą to środek zdania
+        $result = ProductDescriptionText::withoutUnfinishedTail(
+            'Okulary ochronne. Do prac z kurzem, opiłkami itp. oraz przy szlifowaniu i cięciu tarczą, soczewki chronią oczy przed'
+        );
+        $this->assertSame('Okulary ochronne.', $result['text']);
+    }
+
+    public function test_abbreviation_list_is_shared_and_matches_only_whole_abbreviations(): void
+    {
+        $this->assertTrue(ProductDescriptionText::endsWithAbbreviation('Taśma o szer'));
+        $this->assertTrue(ProductDescriptionText::endsWithAbbreviation('Taśma o szer. 75 mm i dł'));
+        $this->assertTrue(ProductDescriptionText::endsWithAbbreviation('(m.in'));
+        $this->assertTrue(ProductDescriptionText::endsWithAbbreviation('WERSJA KAT'));
+        $this->assertFalse(ProductDescriptionText::endsWithAbbreviation('Rękawice do prac ogólnych'));
+        $this->assertFalse(ProductDescriptionText::endsWithAbbreviation('powłoka numer'));
+        $this->assertFalse(ProductDescriptionText::endsWithAbbreviation('kompletnych'));
+        foreach (ProductDescriptionText::SENTENCE_FINAL_ABBREVIATIONS as $abbreviation) {
+            $this->assertContains($abbreviation, ProductDescriptionText::ABBREVIATIONS);
+        }
+    }
+
     public function test_keeps_product_name_whose_model_code_looks_like_a_unit(): void
     {
         $plain = ProductDescriptionText::plain(

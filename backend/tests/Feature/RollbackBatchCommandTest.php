@@ -295,6 +295,21 @@ final class RollbackBatchCommandTest extends TestCase
         }
     }
 
+    public function test_rollback_does_not_bring_back_description_withdrawn_from_the_card(): void
+    {
+        // etap 3: sklepowy opis marki „tylko producent” zdjęty z karty (withdrawCurrent), potem opis z partii —
+        // wycofanie partii nie kładzie z powrotem opisu ze sklepu; karta bez innego poprzedniego opisu jest pominięta
+        $card = $this->card('SBA01B', ['manufacturer' => 'AJ GROUP']);
+        $this->published($card, self::OLD, ProductDescriptionVersion::ORIGIN_ENRICHMENT, null, 'https://www.roboczystyl.pl/spodniobuty-sba01b');
+        $this->assertNotNull($this->store->withdrawCurrent($card->fresh(), 'brak strony producenta — opis ze sklepu'));
+        $this->published($card->fresh(), self::NEW, ProductDescriptionVersion::ORIGIN_ENRICHMENT, $this->batch->id, 'https://pros.pl/pl/141-spodniobuty-sba01');
+
+        $this->assertSame(0, Artisan::call('products:rollback-batch', ['batch' => $this->batch->id, '--apply' => true, '--log' => $this->tempPath()]));
+
+        $this->assertSame(self::NEW, $card->fresh()->description, 'opis z partii zostaje — nie ma do czego wracać');
+        $this->assertSame(0, ProductDescriptionVersion::query()->where('product_id', $card->id)->where('origin', ProductDescriptionVersion::ORIGIN_RESTORE)->count());
+    }
+
     public function test_unknown_batch_fails(): void
     {
         $this->artisan('products:rollback-batch', ['batch' => 999])->expectsOutputToContain('Nie ma partii #999')->assertFailed();

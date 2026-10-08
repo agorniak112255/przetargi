@@ -35,7 +35,9 @@ class Product extends Model
     /**
      * Powody przeglądu opisu (review_reason, 08.10.2026). identity_*: opis zapisany ze strony, która nie potwierdziła
      * kodu wyrobu (soft — tylko nazwa i producent, none — sama heurystyka); worse_version: nowy przebieg dał opis gorszy
-     * od obecnego i czeka jako propozycja; rejected_source: propozycja ze strony odrzuconej wcześniej w przeglądzie.
+     * od obecnego i czeka jako propozycja; rejected_source: propozycja ze strony odrzuconej wcześniej w przeglądzie;
+     * manufacturer_missing (etap 3): marka „tylko od producenta”, a strony producenta nie znaleziono — opisu ze sklepu
+     * nie ma (albo został cofnięty: DescriptionVersionStore::withdrawCurrent), handlowiec wskazuje adres albo opisuje ręcznie.
      */
     public const REVIEW_IDENTITY_SOFT = 'identity_soft';
 
@@ -45,11 +47,14 @@ class Product extends Model
 
     public const REVIEW_REJECTED_SOURCE = 'rejected_source';
 
+    public const REVIEW_MANUFACTURER_MISSING = 'manufacturer_missing';
+
     public const REVIEW_REASONS = [
         self::REVIEW_IDENTITY_SOFT,
         self::REVIEW_IDENTITY_NONE,
         self::REVIEW_WORSE_VERSION,
         self::REVIEW_REJECTED_SOURCE,
+        self::REVIEW_MANUFACTURER_MISSING,
     ];
 
     /** Ile wierszy parametrów wolno wpisać ręcznie na jednej karcie. */

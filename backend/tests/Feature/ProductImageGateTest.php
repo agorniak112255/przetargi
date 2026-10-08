@@ -197,6 +197,31 @@ final class ProductImageGateTest extends TestCase
         $this->assertNotContains(self::HEALTH, $fetched['pages'][0]['image_urls'] ?? []);
     }
 
+    public function test_known_placeholder_image_is_rejected_by_checksum(): void
+    {
+        // prawdziwy plik z produkcji (products/10806, źródło fachhandel.pl): „404 Not Found nginx” jako poprawny PNG
+        // 1280×1280 — przechodził bramkę typu i wymiarów; był na kartach HR Matting 10799, 10801, 10804–10806
+        Storage::fake('public');
+        $bytes = (string) file_get_contents(base_path('tests/Fixtures/images/nginx-404-fachhandel.png'));
+        $this->assertSame('c057d3c30474558a036ea52ac00cc1cb3814ec41dd40b40ed419f5403d5365b0', hash('sha256', $bytes));
+        $url = 'https://fachhandel.pl/img/imagecache/540001-541000/680x680/1/product-media/540001-541000/HR060004C_1.png';
+        Http::fake([$url => Http::response($bytes, 200, ['Content-Type' => 'image/png']), '*' => Http::response('', 404)]);
+        $downloader = new ProductImageDownloader;
+        $product = $this->product('Coba');
+
+        $this->assertSame([], $downloader->downloadMany($product, [$url], 1));
+        $this->assertStringContainsString('Znana zaślepka', $downloader->lastFailures()[$url] ?? '');
+        $this->assertSame([], $downloader->lastRetryLaterUrls(), 'zaślepka to trwałe odrzucenie, nie ponowienie');
+        // zapis gotowych bajtów (łączniki B2B) — też odrzucony
+        $this->assertNull($downloader->storeBytes($product, $bytes, 'image/png', 'https://b2b.example/media/HR060004C.png', 0));
+        $this->assertSame(0, ProductImage::query()->count());
+        $this->assertSame([], Storage::disk('public')->allFiles());
+
+        // bez wpisu na liście ten sam plik przechodzi bramkę — łapie go tylko suma kontrolna
+        config(['image_blocklist.checksums' => []]);
+        $this->assertCount(1, $downloader->downloadMany($product, [$url], 1));
+    }
+
     private function product(string $manufacturer): Product
     {
         return Product::query()->create([

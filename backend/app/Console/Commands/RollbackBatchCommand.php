@@ -85,7 +85,7 @@ final class RollbackBatchCommand extends Command
 
                 continue;
             }
-            $previous = $this->previousPublished($version);
+            $previous = $this->previousPublished($version, $versions);
             $plan[] = [
                 'product' => $product,
                 'version' => $version,
@@ -230,7 +230,7 @@ final class RollbackBatchCommand extends Command
      * Opis, który był na karcie przed wersją z partii: najnowsza superseded sprzed niej z tekstem opisu i inną treścią
      * (ta sama treść = nic do przywracania).
      */
-    private function previousPublished(ProductDescriptionVersion $version): ?ProductDescriptionVersion
+    private function previousPublished(ProductDescriptionVersion $version, DescriptionVersionStore $versions): ?ProductDescriptionVersion
     {
         $candidates = ProductDescriptionVersion::query()
             ->where('product_id', $version->product_id)
@@ -239,7 +239,9 @@ final class RollbackBatchCommand extends Command
             ->orderByDesc('id')
             ->get();
         foreach ($candidates as $candidate) {
+            // opis zdjęty z karty (etap 3: sklepowy opis marki „tylko producent”) nie wraca przy wycofaniu partii
             if ($candidate->description_sha1 !== $version->description_sha1
+                && ! $versions->isWithdrawn($candidate)
                 && Product::isDescriptionText((string) ($candidate->description ?? ''))) {
                 return $candidate;
             }

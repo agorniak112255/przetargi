@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductImage;
 use App\Models\ProductImageRejection;
+use App\Support\ImageUrlBlocklist;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -16,7 +17,8 @@ use Illuminate\Support\Str;
  * pod ścieżką nowej karty i wiersz z tą samą sumą kontrolną i adresem źródła — ta sama suma już na karcie docelowej
  * to istniejący wiersz (jak dedup w ProductImageDownloader::storeBytes / ProductDocumentDownloader). Plik, którego
  * nie ma na dysku (adres zdalny, usunięty), nie jest kopiowany. Zdjęcie świadomie usunięte z karty docelowej
- * (ProductImageRejection — adres albo suma) nie wraca.
+ * (ProductImageRejection — adres albo suma) nie wraca; znana zaślepka (suma z config/image_blocklist.php) i grafika
+ * witryny (ImageUrlBlocklist) też nie — kopia nie omija bramek pobierania.
  */
 final class ProductWebFileCopier
 {
@@ -38,6 +40,12 @@ final class ProductWebFileCopier
         $sourceUrl = mb_substr(trim((string) $img->source_url), 0, 2000);
         if (ProductImageRejection::blocksChecksum((int) $to->id, $checksum)
             || ($sourceUrl !== '' && ProductImageRejection::blocksUrl((int) $to->id, $sourceUrl))) {
+            return null;
+        }
+        // bramki zdjęć jak przy pobieraniu: znana zaślepka po sumie („404 nginx” na kartach HR Matting wracałaby kopią
+        // na kolejne karty modelu) i grafika witryny po adresie (ImageUrlBlocklist z regułami profilu marki karty)
+        if (ProductImageDownloader::knownPlaceholderReason($checksum) !== null
+            || ($sourceUrl !== '' && ImageUrlBlocklist::blocked($sourceUrl, app(ManufacturerProfiles::class)->for($to)) !== null)) {
             return null;
         }
         $existing = ProductImage::query()->where('product_id', $to->id)->where('checksum', $checksum)->first();

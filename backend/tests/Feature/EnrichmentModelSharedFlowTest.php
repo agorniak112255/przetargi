@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Exceptions\ManufacturerPageMissingException;
 use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\ApplyModelDescriptionJob;
 use App\Jobs\PrefetchProductSourcesJob;
@@ -21,6 +22,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\DescriptionVersionStore;
 use App\Services\Enrichment\HybridWebSearchService;
 use App\Services\Enrichment\ManufacturerDomainResolver;
+use App\Services\Enrichment\ModelImagePicker;
 use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductImageCandidateVerifier;
@@ -702,7 +704,9 @@ final class EnrichmentModelSharedFlowTest extends TestCase
             $service->enrichProduct($leader, false, (int) $batch->id);
             $this->fail('bez wyników wyszukiwania przebieg kończy się brakiem karty');
         } catch (ProductSourcesNotFoundException $e) {
-            $this->assertStringContainsString('Nie znaleziono', $e->getMessage());
+            // Coba „tylko od producenta” (decyzja właściciela 08.10.2026): brak źródeł = brak strony producenta
+            $this->assertInstanceOf(ManufacturerPageMissingException::class, $e);
+            $this->assertStringContainsString('Strony producenta nie znaleziono', $e->getMessage());
         }
 
         // sztafetę (nextLeader + prefetch) robi EnrichProductJob — tu tylko brak wersji
@@ -980,6 +984,316 @@ final class EnrichmentModelSharedFlowTest extends TestCase
                 return Http::response("Title: x\n\nMarkdown Content:\nundefined", 200, ['Content-Type' => 'text/plain']);
             }
             if (str_starts_with($url, self::PAGE)) {
+                return Http::response($html, 200, ['Content-Type' => 'text/html']);
+            }
+
+            return Http::response('', 404);
+        });
+
+        return new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+    }
+
+    /**
+     * Runda 2 etapu 3 (5), decyzja właściciela 08.10.2026 — Coba tylko od producenta: lider modelu HR Matting ze stroną
+     * tylko w sklepie fachhandel.pl (kod HR060003 na stronie, tekst wycieraczki) kończy się brakiem strony producenta;
+     * model nie pisze opisu, wersji lidera nie ma (sztafeta jak przy braku wersji), członkowie zostają bez opisu sklepu.
+     */
+    public function test_coba_leader_with_only_shop_page_gets_manufacturer_missing_and_members_no_shop_description(): void
+    {
+        $shop = 'https://www.fachhandel.pl/coba-hr-matting-hr060003';
+        $leader = $this->coba('HR060003', 'HR Matting Czarny 0.9m x 18.3m', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $member = $this->coba('HR060003C', 'HR Matting Czarny 0.9m x mb.', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $batch = $this->batch($leader, [$member], key: 'coba|HR|hr matting');
+        $html = '<html><head><title>Coba HR Matting HR060003 Wycieraczka</title></head><body><h1>Coba HR Matting HR060003</h1>'
+            .'<div class="product-description"><p>Coba HR Matting HR060003 — wycieraczka wejściowa z gumy do zatrzymywania brudu '
+            .'i wilgoci przy wejściu do budynku, z otworami drenażowymi, do stref wejściowych i korytarzy. Kod: HR060003. '
+            .str_repeat('Wycieraczka gumowa z otworami, łatwa do czyszczenia, do wejść i ciągów komunikacyjnych. ', 10).'</p></div></body></html>';
+        $service = $this->shopOnlyService($shop, $html);
+
+        try {
+            $service->enrichProduct($leader, false, (int) $batch->id);
+            $this->fail('lider Coby bez strony producenta nie dostaje opisu ze sklepu');
+        } catch (ManufacturerPageMissingException $e) {
+            $this->assertStringContainsString('coba.com', $e->getMessage());
+        }
+
+        $leader->refresh();
+        $this->assertNull($leader->description);
+        $this->assertSame(Product::REVIEW_MANUFACTURER_MISSING, $leader->review_reason);
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $leader->enrichment_status);
+        $this->assertNull($service->lastRunVersion(), 'bez wersji lidera — EnrichProductJob przekazuje model kolejnemu członkowi');
+        $this->assertNull($this->lastUserPrompt, 'model opisu nie jest wołany');
+        $member->refresh();
+        $this->assertNull($member->description);
+        $this->assertSame(Product::ENRICHMENT_QUEUED, $member->enrichment_status);
+        $this->assertSame(0, ProductDescriptionVersion::query()->count());
+    }
+
+    /**
+     * Runda 2 etapu 3 (6): nota modelu zakazuje w tekście opisu wartości jednego wariantu (audyt Coby 08.10.2026:
+     * COBAswitch 9,5 mm z parametrami 6 mm, Tough Lock pomarańczowy „w kolorze żółtym”, listwy GRP z wymiarem i wagą
+     * jednego wariantu) — wartości wariantów tylko w specs z kodem wariantu.
+     */
+    public function test_model_note_forbids_single_variant_values_in_description_text(): void
+    {
+        $leader = $this->coba('AF010001', 'Orthomat Standard Czarny 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $member = $this->coba('AF060003C', 'Orthomat Standard Szary 0.9m x mb. (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $batch = $this->batch($leader, [$member]);
+        $service = $this->service();
+
+        $service->enrichProduct($leader, false, (int) $batch->id);
+
+        $prompt = (string) $this->lastUserPrompt;
+        $this->assertStringContainsString('Opis wspólny dla 2 wariantów', $prompt);
+        $this->assertStringContainsString('nie podawaj wartości jednego wariantu', $prompt);
+        foreach (['wymiarów', 'grubości', 'koloru', 'wagi', 'napięcia', 'długości rolki', 'tylko cechy wspólne'] as $word) {
+            $this->assertStringContainsString($word, $prompt);
+        }
+        $this->assertStringContainsString('wyłącznie w specs, każdą z kodem wariantu', $prompt);
+    }
+
+    /**
+     * Runda 2 etapu 3 (7): zdjęcie wybrane przez picker lidera (w kolorze karty, bez weryfikatora) przechodzi przez W5 —
+     * plik „…-Green-20kv.jpg” przy karcie 30 kV odpada jak każda inna kandydatura.
+     */
+    public function test_leader_colour_pick_goes_through_foreign_image_gate(): void
+    {
+        $gray = 'https://www.coba.com/wp-content/uploads/Gray.jpg';
+        $green20kv = 'https://www.coba.com/wp-content/uploads/Orthomat-Standard-Green-20kv.jpg';
+        $leader = $this->coba('AF010001', 'Orthomat Standard Zielony 0.6m x 0.9m (9.5mm) 30 kV', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $member = $this->coba('AF060003C', 'Orthomat Standard Zielony 0.9m x mb. (9.5mm) 30 kV', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $batch = $this->batch($leader, [$member]);
+        $service = $this->service(gallery: [$gray, $green20kv]);
+
+        $service->enrichProduct($leader, false, (int) $batch->id);
+
+        $leader->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $leader->enrichment_status, (string) $leader->enrichment_error);
+        $this->assertNotContains($green20kv, $leader->images()->pluck('source_url')->all(), 'zdjęcie ze sprzeczną cechą nie wchodzi jako wybór pickera');
+        Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), 'Green-20kv.jpg'));
+        $steps = json_encode($leader->enrichment_trace, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $this->assertStringContainsString('sprzeczna cecha', (string) $steps);
+    }
+
+    /**
+     * Zamiennik z karty rodzeństwa (ModelImagePicker::pickFromModelSiblings, audyt Coby 08.10.2026): członek żółty,
+     * galeria lidera bez żółtego — zamiast braku zdjęcia kopia żółtego zdjęcia innej karty tego modelu w partii.
+     */
+    public function test_member_without_gallery_in_its_colour_copies_image_of_sibling_card_in_batch(): void
+    {
+        $leader = $this->coba('AF010001', 'Orthomat Standard Czarny 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $yellow = $this->coba('AF060003C', 'Orthomat Standard Żółty 0.9m x mb. (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $sibling = $this->coba('AF060004', 'Orthomat Standard Żółty 0.9m x 1.5m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_DONE]);
+        $siblingImage = $this->webImage($sibling, 'https://www.coba.com/wp-content/uploads/orthomat-standard-yellow-1.jpg');
+        $batch = $this->batch($leader, [$yellow, $sibling]);
+        $service = $this->service();
+        $service->enrichProduct($leader, false, (int) $batch->id);
+        $leaderVersion = $service->lastRunVersion();
+        $this->assertNotNull($leaderVersion);
+        $service->recordBatchProduct($batch, $yellow, ProductEnrichmentBatchItem::STATUS_RUNNING);
+
+        $this->assertSame(ApplyModelDescriptionJob::RESULT_PUBLISHED, $service->applyModelDescription($yellow->fresh(), $leaderVersion, (int) $batch->id));
+
+        $yellow->refresh();
+        $image = $yellow->images()->sole();
+        $this->assertSame($siblingImage->checksum, $image->checksum, 'kopia pliku karty-rodzeństwa');
+        $this->assertSame($siblingImage->source_url, $image->source_url);
+        $this->assertNull($yellow->enrichment_error);
+        $this->assertNotEmpty(array_filter(
+            array_column($yellow->enrichment_trace['steps'] ?? [], 'm'),
+            static fn (string $m): bool => str_starts_with($m, ModelImagePicker::REASON_SIBLING_COPY)
+        ));
+        $this->assertSame(1, $sibling->images()->count(), 'zdjęcie rodzeństwa zostaje u niego');
+    }
+
+    /** Adres z galerii nie pobrał się — zamiennik z karty rodzeństwa przed kopią zdjęcia lidera. */
+    public function test_member_gallery_failure_prefers_sibling_copy_over_leader_copy(): void
+    {
+        $missing = 'https://www.coba.com/wp-content/uploads/orthomat-standard-grey-missing.jpg';
+        $leader = $this->coba('AF010001', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)', ['description' => self::DESCRIPTION, 'enrichment_status' => Product::ENRICHMENT_DONE]);
+        $this->webImage($leader, 'https://www.coba.com/wp-content/uploads/orthomat-standard-1.jpg');
+        $version = app(DescriptionVersionStore::class)->record($leader, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => self::DESCRIPTION,
+            'primary_source_url' => self::PAGE,
+            'identity_verdict' => 'hard',
+            'enrichment_payload' => ['norms' => [], 'source_urls' => [self::PAGE], 'primary_source_url' => self::PAGE],
+            DescriptionVersionStore::META_KEY => ['page_image_urls' => [$missing]],
+        ]);
+        $member = $this->coba('AF060003C', 'Orthomat Standard Szary 0.9m x mb. (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $sibling = $this->coba('AF060004', 'Orthomat Standard Szary 0.9m x 1.5m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_DONE]);
+        $siblingImage = $this->webImage($sibling, 'https://www.coba.com/wp-content/uploads/AF060004_Orthomat_Grey.jpg');
+        $batch = $this->batch($leader, [$member, $sibling], [], ProductEnrichmentBatchItem::STATUS_DONE);
+        Http::fake(['*' => Http::response('', 404)]);
+        $service = app(ProductEnrichmentService::class);
+        $service->recordBatchProduct($batch, $member, ProductEnrichmentBatchItem::STATUS_RUNNING);
+
+        $this->assertSame(ApplyModelDescriptionJob::RESULT_PUBLISHED, $service->applyModelDescription($member->fresh(), $version, (int) $batch->id));
+
+        $member->refresh();
+        $this->assertSame($siblingImage->checksum, $member->images()->sole()->checksum, 'kopia pliku rodzeństwa w kolorze karty, nie lidera bez koloru');
+        $this->assertContains('adres z galerii nie pobrał się — '.ModelImagePicker::REASON_SIBLING_COPY, array_column($member->enrichment_trace['steps'] ?? [], 'm'));
+    }
+
+    /** Lider z galerią strony tylko w innym kolorze (Entra-Plush Szary 11162 ← 11163) — zamiennik z karty modelu w partii. */
+    public function test_leader_with_gallery_in_other_colour_copies_image_of_sibling_card(): void
+    {
+        $leader = $this->coba('AF010001', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $sibling = $this->coba('AF060003', 'Orthomat Standard Szary 0.9m x 18.3m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $siblingImage = $this->webImage($sibling, self::IMAGE_GREY);
+        $batch = $this->batch($leader, [$sibling]);
+        $service = $this->service(gallery: [self::IMAGE_BLACK]);
+
+        $service->enrichProduct($leader, false, (int) $batch->id);
+
+        $leader->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $leader->enrichment_status, (string) $leader->enrichment_error);
+        $this->assertNull($leader->enrichment_error);
+        $image = $leader->images()->sole();
+        $this->assertSame($siblingImage->checksum, $image->checksum);
+        $this->assertSame(self::IMAGE_GREY, $image->source_url);
+        Http::assertNotSent(static fn (Request $r): bool => $r->url() === self::IMAGE_BLACK);
+    }
+
+    /**
+     * Usuwanie zdjęć w złym kolorze: plik dwubarwny „BlackYellow” na karcie Żółtej to zdjęcie innego wariantu (inny zbiór
+     * kolorów), plik „Yellow” zostaje, plik bez koloru zostaje.
+     */
+    public function test_images_in_other_colour_include_two_colour_file_on_single_colour_card(): void
+    {
+        $card = $this->coba('AF060003C', 'Orthomat Standard Żółty 0.9m x mb. (9.5mm)');
+        $twoColour = $this->webImage($card, 'https://www.coba.com/wp-content/uploads/Orthomat-Standard-BlackYellow.jpg');
+        $yellow = $this->webImage($card, 'https://www.coba.com/wp-content/uploads/Orthomat-Standard-Yellow.jpg');
+        $plain = $this->webImage($card, 'https://www.coba.com/wp-content/uploads/Orthomat-Standard.jpg');
+        $service = $this->service();
+        $method = new ReflectionMethod(ProductEnrichmentService::class, 'imagesInOtherColour');
+
+        $out = $method->invoke($service, $card, ['yellow'], [(int) $twoColour->id, (int) $yellow->id, (int) $plain->id]);
+
+        $this->assertSame([(int) $twoColour->id], array_keys($out));
+    }
+
+    /**
+     * Runda 3: członek Coby (marka tylko od producenta) z opisem ze sklepu o werdykcie hard, opis lidera z coba.com daje
+     * mu werdykt soft — opis producenta jest publikowany (wersja sklepu do historii jako cofnięta), nie propozycja.
+     */
+    public function test_coba_member_with_shop_description_gets_leader_description_published(): void
+    {
+        $shop = 'https://www.fachhandel.pl/coba-orthomat-af060004';
+        $shopText = 'Mata Orthomat Standard AF060004 z opisem ze sklepu fachhandel.pl — opis bazowy z twardym werdyktem tożsamości ze sklepu.';
+        $leader = $this->coba('AF010001', 'Orthomat Standard Czarny 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        // bez kodu na stronie lidera, pełna nazwa w tekście — werdykt miękki
+        $member = $this->coba('AF060004', 'Orthomat Standard 0.9m x 1.5m (9.5mm)', [
+            'enrichment_status' => Product::ENRICHMENT_QUEUED,
+            'description' => $shopText,
+            'enrichment_payload' => ['primary_source_url' => $shop, 'primary_source_kind' => 'shop', 'source_urls' => [$shop]],
+        ]);
+        $shopVersion = app(DescriptionVersionStore::class)->record($member, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => $shopText,
+            'primary_source_url' => $shop,
+            'identity_verdict' => 'hard',
+            'evidence_count' => 1,
+        ]);
+        $batch = $this->batch($leader, [$member], [$member->id => Product::ENRICHMENT_DONE]);
+        $service = $this->service();
+        $service->enrichProduct($leader, false, (int) $batch->id);
+        $leaderVersion = $service->lastRunVersion();
+        $this->assertNotNull($leaderVersion);
+        $service->recordBatchProduct($batch, $member, ProductEnrichmentBatchItem::STATUS_RUNNING);
+
+        $this->assertSame(ApplyModelDescriptionJob::RESULT_PUBLISHED, $service->applyModelDescription($member->fresh(), $leaderVersion, (int) $batch->id));
+
+        $member->refresh();
+        $this->assertSame(self::DESCRIPTION, $member->description);
+        $this->assertSame('soft', $member->enrichment_payload['identity']['verdict'] ?? null);
+        $this->assertSame(Product::REVIEW_IDENTITY_SOFT, $member->review_reason);
+        $shopVersion->refresh();
+        $this->assertSame(ProductDescriptionVersion::STATUS_SUPERSEDED, $shopVersion->status);
+        $this->assertSame('opis ze sklepu zastąpiony stroną producenta', app(DescriptionVersionStore::class)->meta($shopVersion)['withdrawn_reason'] ?? null);
+        $this->assertSame(0, ProductDescriptionVersion::query()->where('product_id', $member->id)->where('status', ProductDescriptionVersion::STATUS_PROPOSED)->count());
+    }
+
+    /** Runda 3: zamiennik z karty rodzeństwa przechodzi przez W5 — plik „…-Yellow-20kv.jpg” przy karcie 30 kV nie jest kopiowany. */
+    public function test_sibling_copy_skips_image_with_conflicting_safety_feature(): void
+    {
+        $leader = $this->coba('AF010001', 'Orthomat Standard Czarny 0.6m x 0.9m (9.5mm) 30 kV', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $yellow = $this->coba('AF060003C', 'Orthomat Standard Żółty 0.9m x mb. (9.5mm) 30 kV', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $sibling = $this->coba('AF060004', 'Orthomat Standard Żółty 0.9m x 1.5m (9.5mm) 30 kV', ['enrichment_status' => Product::ENRICHMENT_DONE]);
+        $this->webImage($sibling, 'https://www.coba.com/wp-content/uploads/orthomat-standard-yellow-20kv.jpg');
+        $batch = $this->batch($leader, [$yellow, $sibling]);
+        $service = $this->service();
+        $service->enrichProduct($leader, false, (int) $batch->id);
+        $leaderVersion = $service->lastRunVersion();
+        $this->assertNotNull($leaderVersion);
+        $service->recordBatchProduct($batch, $yellow, ProductEnrichmentBatchItem::STATUS_RUNNING);
+
+        $this->assertSame(ApplyModelDescriptionJob::RESULT_PUBLISHED, $service->applyModelDescription($yellow->fresh(), $leaderVersion, (int) $batch->id));
+
+        $yellow->refresh();
+        $this->assertSame(0, $yellow->images()->count(), 'zdjęcie 20 kV z karty rodzeństwa nie trafia na kartę 30 kV');
+        $this->assertStringContainsString('sprzeczna cecha', (string) json_encode($yellow->enrichment_trace, JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Serwis jak service(), ale wyszukiwarka zwraca jedną stronę sklepu $url z treścią $html (reszta 404).
+     */
+    private function shopOnlyService(string $url, string $html): ProductEnrichmentService
+    {
+        $search = Mockery::mock(HybridWebSearchService::class);
+        $search->shouldReceive('searchBothPhases')->zeroOrMoreTimes()->andReturn([
+            'results' => [['url' => $url, 'title' => 'Coba HR Matting HR060003 Wycieraczka', 'snippet' => 'HR060003']],
+            'errors' => [],
+        ]);
+        $search->shouldReceive('dropListingResults')->zeroOrMoreTimes()->andReturnUsing(static fn (array $results): array => $results);
+        $search->shouldReceive('moreCatalogHits')->zeroOrMoreTimes()->andReturn([]);
+        $search->shouldReceive('searchMappedRetailers')->zeroOrMoreTimes()->andReturn([]);
+        $search->shouldReceive('searchWebWithoutLocalIndex')->zeroOrMoreTimes()->andReturn(['results' => [], 'images' => [], 'errors' => []]);
+        $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+        $search->shouldReceive('shopCardsForImage')->zeroOrMoreTimes()->andReturn([]);
+        $search->shouldReceive('catalogHitsOnHosts')->zeroOrMoreTimes()->andReturn([]);
+        $search->shouldReceive('searchOnHosts')->zeroOrMoreTimes()->andReturn([]);
+        $search->shouldReceive('lastHostSearchErrors')->zeroOrMoreTimes()->andReturn([]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $handler = function (array $messages): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            $user = (string) ($messages[1]['content'] ?? '');
+            if (str_contains($system, 'filtrem treści')) {
+                $out = [];
+                $at = strpos($user, "Strony:\n");
+                foreach ((array) (json_decode($at === false ? '' : substr($user, $at + 8), true) ?? []) as $page) {
+                    if (is_array($page)) {
+                        $out[] = ['url' => $page['url'] ?? '', 'text' => $page['text'] ?? ''];
+                    }
+                }
+
+                return ['pages' => $out];
+            }
+            $this->lastUserPrompt = $user;
+
+            return [
+                'description' => 'Wycieraczka wejściowa Coba HR Matting z gumy z otworami drenażowymi, zatrzymuje brud i wilgoć przy wejściu do budynku. Łatwa do czyszczenia.',
+                'features' => [], 'specs' => [], 'norms' => [], 'certificates' => [], 'materials' => ['guma'], 'use_cases' => [],
+                'image_urls' => [], 'source_urls' => [], 'confidence' => 0.9,
+            ];
+        };
+        $llm->shouldReceive('chatJsonEnrichment')->zeroOrMoreTimes()->andReturnUsing($handler);
+        $llm->shouldReceive('chatJson')->zeroOrMoreTimes()->andReturnUsing($handler);
+        $llm->shouldReceive('chatJsonWithImages')->zeroOrMoreTimes()->andReturn(['candidates' => []]);
+
+        Http::fake(static function (Request $request) use ($url, $html) {
+            if (str_starts_with($request->url(), $url)) {
                 return Http::response($html, 200, ['Content-Type' => 'text/html']);
             }
 

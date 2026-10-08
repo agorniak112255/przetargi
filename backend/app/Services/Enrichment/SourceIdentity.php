@@ -10,6 +10,7 @@ use App\Support\BlockedSourceHost;
 use App\Support\BrandKey;
 use App\Support\ProductCodeMatch;
 use App\Support\ProductIdentifierCode;
+use App\Support\SafetyFeatures;
 
 /**
  * Werdykt tożsamości źródła opisu (etap 1 opisów z cenników). Sygnał dla przeglądu, nie bramka — obecne bramki
@@ -26,6 +27,12 @@ use App\Support\ProductIdentifierCode;
  *   katalogu PDF marki (ManufacturerCatalogPdf wycina go po kodzie wyrobu);
  * - soft: klucza brak, ale strona ma markę oraz SKU albo nazwę (ProductSearchIdentity::pageHasSkuOrNameAndManufacturer);
  * - none: stronę przepuściła tylko heurystyka.
+ *
+ * Etap 3 (kolejność w judgePage): po naszym sklepie i ręcznym adresie strona ze sprzeczną cechą bezpieczeństwa (kV,
+ * klasa izolacji, P, FFP, gaz — SafetyFeatures) i strona innego wyrobu marki (CardCodeArbiter, profile z
+ * code.longest_code_wins) to none; na hoście producenta pole „{index_label}: SKU” w treści daje hard („field”); strona
+ * modelu w innym zapisie kodu (code.alt_forms, ManufacturerCodeForms) i strona modelu z polem „Indeks” innego rozmiaru
+ * (code.size_letters) — najwyżej soft.
  *
  * Niczego nie zapisuje.
  */
@@ -76,7 +83,81 @@ final class SourceIdentity
     public function __construct(
         private readonly ManufacturerProfiles $profiles,
         private readonly ProductSearchIdentity $identity,
+        private readonly CardCodeArbiter $arbiter,
+        private readonly ManufacturerCodeForms $codeForms,
     ) {}
+
+    /**
+     * Zapisy kodu karty dla CardCodeArbiter: SKU (z zapisami profilu), kod producenta i kod modelu ze źródeł cen marki
+     * karty, nazwa modelu przy model_alias_is_key — od 3 znaków z cyfrą, bez EAN; SKU bez cyfry od 5 znaków
+     * („FLASHV”) też. SKU sztuki z cennika z końcówką „_N” (CEDERROTH „3387_1” — serwetka, „901900_1” — jeden kompres)
+     * także bez niej: strona producenta podaje „REF 3387”, a karta „3387” (opakowanie 600 szt.) jest w katalogu marki,
+     * więc bez tego zapisu strona własnego wyrobu wychodziła jako cudza. Każdy kod raz (po ProductCodeMatch::key).
+     *
+     * @return list<string>
+     */
+    public function ownKeys(Product $p, ?ManufacturerProfile $prof): array
+    {
+        $out = [];
+        $seen = [];
+        foreach ($this->collectKeys($p, $prof, self::LABELLED_CODE_MIN_LENGTH) as $entry) {
+            $key = ProductCodeMatch::key($entry['value']);
+            if ($entry['type'] === 'ean' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = $entry['value'];
+        }
+        $sku = trim((string) preg_replace('/\s+/u', ' ', (string) $p->sku));
+        $internal = $sku !== '' && $this->identity->looksLikeInternalSku($p);
+        $key = ProductCodeMatch::key($sku);
+        if ($sku !== '' && ! isset($seen[$key]) && mb_strlen($key) >= 5 && preg_match('/\p{N}/u', $key) !== 1 && ! $internal) {
+            $seen[$key] = true;
+            $out[] = $sku;
+        }
+        if (! $internal && preg_match('/^(.*\S)_\d+$/u', $sku, $m) === 1) {
+            $unit = ProductCodeMatch::key($m[1]);
+            if (! isset($seen[$unit]) && mb_strlen($unit) >= self::LABELLED_CODE_MIN_LENGTH && preg_match('/\p{N}/u', $unit) === 1) {
+                $out[] = $m[1];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Strona należy do innej karty marki (foreign), do naszej (own) czy nie da się tego rozstrzygnąć (none) —
+     * CardCodeArbiter na ciągach strony. Profil bez code.longest_code_wins (Coba, MAPA, Ansell) albo bez profilu: none.
+     *
+     * @param  array<string, mixed>  $page
+     * @return array{verdict: 'own'|'foreign'|'none', code: ?string}
+     */
+    public function pageCodeRelation(Product $p, array $page, ?ManufacturerProfile $prof): array
+    {
+        if ($prof === null || ! $prof->longestCodeWins) {
+            return ['verdict' => CardCodeArbiter::NONE, 'code' => null];
+        }
+        /** @var array{verdict: 'own'|'foreign'|'none', code: ?string} $relation */
+        $relation = $this->arbiter->judge($p, $this->ownKeys($p, $prof), $this->arbiter->pageHays($page, $prof), $prof);
+
+        return $relation;
+    }
+
+    /**
+     * Jak pageCodeRelation dla zdjęcia albo pliku: „adres opis linku” (CardCodeArbiter::fileHays).
+     *
+     * @return array{verdict: 'own'|'foreign'|'none', code: ?string}
+     */
+    public function fileCodeRelation(Product $p, string $urlAndLabel, ?ManufacturerProfile $prof): array
+    {
+        if ($prof === null || ! $prof->longestCodeWins) {
+            return ['verdict' => CardCodeArbiter::NONE, 'code' => null];
+        }
+        /** @var array{verdict: 'own'|'foreign'|'none', code: ?string} $relation */
+        $relation = $this->arbiter->judge($p, $this->ownKeys($p, $prof), $this->arbiter->fileHays($urlAndLabel), $prof);
+
+        return $relation;
+    }
 
     /**
      * Klucze karty, każdy raz (po ProductCodeMatch::key). Kod krótszy niż min_length profilu albo bez cyfry nie jest
@@ -212,10 +293,27 @@ final class SourceIdentity
             }
         }
 
+        $addresses = array_values(array_unique(array_filter([$url, $final])));
+
+        // Sprzeczna cecha bezpieczeństwa (30 kV przy stronie 20 kV, E2 przy A2, P2 przy zdjęciu P1) — inny wyrób, nawet
+        // z kodem karty w treści (etap 3, SafetyFeatures). Tylko adres i tytuł strony.
+        $conflict = SafetyFeatures::conflict(
+            SafetyFeatures::ofCard($p),
+            SafetyFeatures::merge(SafetyFeatures::in($title), ...array_map(SafetyFeatures::inUrl(...), $addresses))
+        );
+        if ($conflict !== null) {
+            return $this->verdict(self::NONE, 'sprzeczna cecha bezpieczeństwa ('.$conflict.') — strona innego wyrobu', null, null, null);
+        }
+        // Strona innej karty marki: dłuższy kod innej karty albo jej kod bez naszego (CardCodeArbiter, etap 3).
+        $relation = $this->pageCodeRelation($p, $page, $prof);
+        if ($relation['verdict'] === CardCodeArbiter::FOREIGN) {
+            return $this->verdict(self::NONE, 'strona innego wyrobu marki (kod '.(string) $relation['code'].')', null, null, null);
+        }
+
         $identityIn = $prof->identityIn ?? (array) config('manufacturer_profiles.default.identity_in', ['url', 'title', 'markup']);
         $paths = [];
-        foreach (array_unique(array_filter([$url, $final])) as $address) {
-            $path = rawurldecode((string) (parse_url($address, PHP_URL_PATH) ?? ''));
+        foreach ($addresses as $candidate) {
+            $path = rawurldecode((string) (parse_url($candidate, PHP_URL_PATH) ?? ''));
             if ($path !== '') {
                 $paths[] = $path;
             }
@@ -226,6 +324,61 @@ final class SourceIdentity
         $markup = is_array($page['markup_codes'] ?? null) ? $page['markup_codes'] : [];
 
         $cardKeys = $this->cardKeys($p, $prof);
+        $hard = $this->codeVerdict($p, $cardKeys, $identityIn, $paths, $title, $text, $markup, $page, $address, $onManufacturerHost, $prof);
+        if ($hard !== null) {
+            return $hard;
+        }
+
+        // Strona modelu na wszystkie rozmiary z polem „Indeks” innego rozmiaru (securabc.com „20-41-secura-3000.html”:
+        // rozmiary S, M, L, „Indeks S56T0SM0” przy karcie S56T0SL0) — ten sam model, ale nasz kod nie stoi na stronie:
+        // soft, nie hard i nie „strona innego wyrobu” (code.size_letters, ManufacturerProfile::sizeSibling).
+        $sibling = $this->sizeSiblingVerdict($cardKeys, $text, $onManufacturerHost, $prof);
+        if ($sibling !== null) {
+            return $sibling;
+        }
+
+        // Kod rodziny z cennika (Coba „LM0102”) przy tabeli części karty producenta z samymi kodami rozmiarów
+        // („LM010201”, „LM010202”) — reguła bramki pobierania z jej trzema warunkami (domena producenta, każdy dłuższy
+        // kod dokleja tylko rozmiar, pierwsze słowo nazwy w adresie albo tytule). Tylko przy profilu z tekstem strony.
+        // Kody z mikrodanych dochodzą do tekstu: tabela części bywa w tekście strony ucięta (coba.com/product/deckstep
+        // — wiersze DS0112xx są tylko w data-part).
+        $markupText = implode(' ', array_map(
+            static fn (mixed $code): string => is_array($code) ? (string) ($code['value'] ?? '') : (is_string($code) ? $code : ''),
+            $markup
+        ));
+        if (in_array('text', $identityIn, true) && $onManufacturerHost
+            && $this->identity->officialFamilyPageListsSizeCodes($address, $title, trim($text.' '.$markupText), $p)) {
+            return $this->verdict(self::HARD, 'SKU '.trim((string) $p->sku).' jako kod rodziny w tabeli rozmiarów karty producenta', 'sku', trim((string) $p->sku), 'text');
+        }
+
+        // Strona modelu w innym zapisie kodu (code.alt_forms: „SBA01B” → strona „SBA01”) — tylko soft, i nie wtedy, gdy
+        // ten zapis to SKU innej karty marki (SB01-J → SB01: strona tamtej karty).
+        $alternative = $this->alternativeCodeVerdict($p, $identityIn, $paths, $title, $text, $markup, $page, $address, $onManufacturerHost, $prof);
+        if ($alternative !== null) {
+            return $alternative;
+        }
+
+        if ($this->identity->pageHasSkuOrNameAndManufacturer($address, $title, $text, $p)) {
+            return $this->verdict(self::SOFT, 'bez kodu karty na stronie — marka z SKU albo nazwą', null, null, null);
+        }
+
+        return $this->verdict(self::NONE, 'bez kodu karty i bez marki z nazwą — stronę przepuściła tylko heurystyka', null, null, null);
+    }
+
+    /**
+     * Twardy werdykt z kluczy karty (adres, tytuł, mikrodane, tekst producenta), z pola „{index_label}: X” w treści
+     * strony producenta (etap 3, securabc.com „Indeks: T5912200” — sam kod w mikrodanych to tam numer wpisu) i z krótkich
+     * kodów z etykietą (shortCodeVerdict). Null — klucza na stronie nie ma.
+     *
+     * @param  array{keys: list<array{type: string, value: string}>, short: list<array{type: string, value: string, key: string}>}  $cardKeys
+     * @param  list<string>  $identityIn
+     * @param  list<string>  $paths
+     * @param  list<mixed>  $markup
+     * @param  array<string, mixed>  $page
+     * @return array{verdict: 'hard'|'soft'|'none', reason: string, key_type: ?string, key: ?string, where: ?string}|null
+     */
+    private function codeVerdict(Product $p, array $cardKeys, array $identityIn, array $paths, string $title, string $text, array $markup, array $page, string $address, bool $onManufacturerHost, ?ManufacturerProfile $prof): ?array
+    {
         foreach ($cardKeys['keys'] as $entry) {
             $key = ProductCodeMatch::key($entry['value']);
             $shortNumber = self::isShortNumber($entry);
@@ -256,30 +409,95 @@ final class SourceIdentity
             }
         }
 
-        $short = $this->shortCodeVerdict($p, $cardKeys['short'], $identityIn, $paths, $title, $markup, $address, $onManufacturerHost, $prof);
-        if ($short !== null) {
-            return $short;
+        if ($onManufacturerHost && $prof !== null && $prof->indexLabel !== null) {
+            $field = CardCodeArbiter::indexField($text, $prof->indexLabel);
+            if ($field !== null) {
+                $fieldKeys = array_unique([ProductCodeMatch::key($field), ProductCodeMatch::key($prof->withoutCombinationSuffix($field))]);
+                foreach ([...$cardKeys['keys'], ...$cardKeys['short']] as $entry) {
+                    if ($entry['type'] !== 'ean' && in_array(ProductCodeMatch::key($entry['value']), $fieldKeys, true)) {
+                        $label = self::KEY_LABELS[$entry['type']] ?? $entry['type'];
+
+                        return $this->verdict(self::HARD, $label.' '.$entry['value'].' w polu „'.$prof->indexLabel.'” strony producenta', $entry['type'], $entry['value'], 'field');
+                    }
+                }
+            }
         }
 
-        // Kod rodziny z cennika (Coba „LM0102”) przy tabeli części karty producenta z samymi kodami rozmiarów
-        // („LM010201”, „LM010202”) — reguła bramki pobierania z jej trzema warunkami (domena producenta, każdy dłuższy
-        // kod dokleja tylko rozmiar, pierwsze słowo nazwy w adresie albo tytule). Tylko przy profilu z tekstem strony.
-        // Kody z mikrodanych dochodzą do tekstu: tabela części bywa w tekście strony ucięta (coba.com/product/deckstep
-        // — wiersze DS0112xx są tylko w data-part).
-        $markupText = implode(' ', array_map(
-            static fn (mixed $code): string => is_array($code) ? (string) ($code['value'] ?? '') : (is_string($code) ? $code : ''),
-            $markup
-        ));
-        if (in_array('text', $identityIn, true) && $onManufacturerHost
-            && $this->identity->officialFamilyPageListsSizeCodes($address, $title, trim($text.' '.$markupText), $p)) {
-            return $this->verdict(self::HARD, 'SKU '.trim((string) $p->sku).' jako kod rodziny w tabeli rozmiarów karty producenta', 'sku', trim((string) $p->sku), 'text');
+        return $this->shortCodeVerdict($p, $cardKeys['short'], $identityIn, $paths, $title, $markup, $address, $onManufacturerHost, $prof);
+    }
+
+    /**
+     * Soft dla strony producenta, której pole „{index_label}: X” różni się od kodu karty tylko oznaczeniem rozmiaru
+     * (code.size_letters). Null — brak pola, profil bez rozmiarów albo inny kod.
+     *
+     * @param  array{keys: list<array{type: string, value: string}>, short: list<array{type: string, value: string, key: string}>}  $cardKeys
+     * @return array{verdict: 'hard'|'soft'|'none', reason: string, key_type: ?string, key: ?string, where: ?string}|null
+     */
+    private function sizeSiblingVerdict(array $cardKeys, string $text, bool $onManufacturerHost, ?ManufacturerProfile $prof): ?array
+    {
+        if (! $onManufacturerHost || $prof === null || $prof->sizeLetters === [] || $prof->indexLabel === null) {
+            return null;
+        }
+        $field = CardCodeArbiter::indexField($text, $prof->indexLabel);
+        if ($field === null) {
+            return null;
+        }
+        foreach ([...$cardKeys['keys'], ...$cardKeys['short']] as $entry) {
+            if ($entry['type'] !== 'ean' && $prof->sizeSibling($entry['value'], $field)) {
+                $label = self::KEY_LABELS[$entry['type']] ?? $entry['type'];
+
+                return $this->verdict(
+                    self::SOFT,
+                    'strona modelu w innym rozmiarze („'.$prof->indexLabel.' '.$field.'”, '.$label.' '.$entry['value'].')',
+                    $entry['type'],
+                    $entry['value'],
+                    'field'
+                );
+            }
         }
 
-        if ($this->identity->pageHasSkuOrNameAndManufacturer($address, $title, $text, $p)) {
-            return $this->verdict(self::SOFT, 'bez kodu karty na stronie — marka z SKU albo nazwą', null, null, null);
+        return null;
+    }
+
+    /**
+     * Soft dla strony, na której twardy byłby inny zapis kodu karty (ManufacturerCodeForms, code.alt_forms profilu).
+     * Zapis równy SKU innej karty marki pomijamy — to strona tamtej karty.
+     *
+     * @param  list<string>  $identityIn
+     * @param  list<string>  $paths
+     * @param  list<mixed>  $markup
+     * @param  array<string, mixed>  $page
+     * @return array{verdict: 'hard'|'soft'|'none', reason: string, key_type: ?string, key: ?string, where: ?string}|null
+     */
+    private function alternativeCodeVerdict(Product $p, array $identityIn, array $paths, string $title, string $text, array $markup, array $page, string $address, bool $onManufacturerHost, ?ManufacturerProfile $prof): ?array
+    {
+        if ($prof === null || $prof->altForms === []) {
+            return null;
+        }
+        $alternatives = $this->codeForms->alternatives($p, $prof);
+        if ($alternatives === []) {
+            return null;
+        }
+        $brandCodes = array_flip($this->arbiter->brandCodeKeys($prof));
+        foreach ($alternatives as $alternative) {
+            if (isset($brandCodes[ProductCodeMatch::key($alternative['code'])])) {
+                continue;
+            }
+            // kopia karty z samym innym zapisem — bez identyfikatorów z bazy (karta niezapisana)
+            $clone = new Product(['sku' => $alternative['code'], 'name' => $p->name, 'manufacturer' => $p->manufacturer]);
+            $hit = $this->codeVerdict($clone, $this->cardKeys($clone, $prof), $identityIn, $paths, $title, $text, $markup, $page, $address, $onManufacturerHost, $prof);
+            if ($hit !== null && $hit['verdict'] === self::HARD) {
+                return $this->verdict(
+                    self::SOFT,
+                    'strona modelu '.$alternative['code'].' (kod karty w innym zapisie: '.$alternative['rule'].')',
+                    $hit['key_type'],
+                    $hit['key'],
+                    $hit['where']
+                );
+            }
         }
 
-        return $this->verdict(self::NONE, 'bez kodu karty i bez marki z nazwą — stronę przepuściła tylko heurystyka', null, null, null);
+        return null;
     }
 
     /**

@@ -85,7 +85,8 @@ class ApplyModelDescriptionJob implements ShouldQueue
             return;
         }
         $members = $this->members($planner);
-        if ($members === []) {
+        // bez czekających członków zadanie ma sens tylko dla upadłych liderów sztafety (cały model poza nimi już opisany)
+        if ($members === [] && $planner->relayedLeaders($this->batchId, $this->leaderId) === []) {
             return;
         }
         if ($batch->isCancelled()) {
@@ -166,6 +167,68 @@ class ApplyModelDescriptionJob implements ShouldQueue
             $this->refreshBatchProgress($batch);
         }
         $this->failOwnRunning($enrichment, $batch);
+        if ($noBasis === null && $leaderVersion !== null) {
+            $this->describeRelayedLeaders($enrichment, $planner, $batch, $leaderVersion);
+        }
+    }
+
+    /**
+     * Upadli liderzy sztafety (karta „ręcznie”/„błąd” bez opisu, pozycja przeszła pod tego lidera — nextLeader) dostają
+     * opis modelu jak członkowie. Ich pozycja jest już policzona w partii, więc liczniki zostają; zmienia się tylko stan
+     * pozycji i karty. Błąd albo przerwanie partii zostawia kartę tak, jak była — bez nowego błędu w liczniku.
+     */
+    private function describeRelayedLeaders(ProductEnrichmentService $enrichment, ModelGroupPlanner $planner, ProductEnrichmentBatch $batch, ProductDescriptionVersion $leaderVersion): void
+    {
+        foreach ($planner->relayedLeaders($this->batchId, $this->leaderId) as $productId) {
+            $batch->refresh();
+            if ($batch->isCancelled()) {
+                return;
+            }
+            $card = Product::query()->find($productId);
+            if ($card === null) {
+                continue;
+            }
+            $before = ['enrichment_status' => $card->enrichment_status, 'enrichment_error' => $card->enrichment_error];
+            try {
+                $result = $this->applyToMember($enrichment, $card, $leaderVersion);
+            } catch (Throwable $e) {
+                Log::warning('Model description apply failed for relayed leader', [
+                    'batch_id' => $this->batchId,
+                    'leader_id' => $this->leaderId,
+                    'product_id' => $card->id,
+                    'error' => $e->getMessage(),
+                ]);
+                $fresh = $card->fresh();
+                if ($fresh !== null && $fresh->enrichment_status === Product::ENRICHMENT_RUNNING) {
+                    $fresh->update($before);
+                }
+
+                continue;
+            }
+            if ($result === self::RESULT_SKIPPED) {
+                continue;
+            }
+            // przejście pozycji ze stanu końcowego na „gotowe” warunkowo (druga instancja zadania nie liczy drugi raz);
+            // pozycja „błąd” była policzona w failed — przechodzi do done, „ręcznie” już była w done
+            $item = ProductEnrichmentBatchItem::query()->where('batch_id', $this->batchId)->where('product_id', $card->id)->first();
+            if ($item === null) {
+                continue;
+            }
+            $wasFailed = $item->status === ProductEnrichmentBatchItem::STATUS_FAILED;
+            $moved = ProductEnrichmentBatchItem::query()
+                ->whereKey($item->id)
+                ->where('status', $item->status)
+                ->update([
+                    'status' => ProductEnrichmentBatchItem::STATUS_DONE,
+                    'message' => mb_substr(trim('Opis wspólny modelu (po sztafecie liderów). '.(string) $enrichment->lastProposalNote()), 0, 500),
+                    'updated_at' => now(),
+                ]);
+            if ($moved === 1 && $wasFailed && $batch->failed > 0) {
+                $batch->decrement('failed');
+                $batch->increment('done');
+                $this->refreshBatchProgress($batch);
+            }
+        }
     }
 
     /** Wersja odrzucona w przeglądzie (status „rejected” albo decyzja „rejected” przy propozycji) — nie jest podstawą opisu. */

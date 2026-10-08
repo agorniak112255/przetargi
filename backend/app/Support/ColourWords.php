@@ -24,12 +24,33 @@ final class ColourWords
         'red' => 'red', 'yellow' => 'yellow', 'orange' => 'orange', 'navy' => 'navy', 'brown' => 'brown',
         'beige' => 'beige', 'pink' => 'pink', 'silver' => 'silver', 'gold' => 'gold', 'purple' => 'purple',
         'violet' => 'purple', 'clear' => 'clear', 'transparent' => 'clear', 'anthracite' => 'anthracite',
-        'charcoal' => 'charcoal', 'graphite' => 'graphite', 'khaki' => 'khaki', 'olive' => 'olive', 'lime' => 'lime',
+        // „charcoal” to angielska nazwa polskiego „antracyt” (Coba: karta „Toughrib Antracyt” ↔ plik
+        // „TR010004_Toughrib_08x12_Charcoal.jpg”, „Needlepunch Antracyt” ↔ „…-matting-charcoal-3.jpg”; ponowny audyt
+        // 08.10.2026). Grafit zostaje osobnym kolorem: Demar, Fagum-Stomil, Łukpol i MASCOT mają w katalogu karty
+        // „grafit” i „antracyt” jako dwa różne warianty tego samego wyrobu.
+        'charcoal' => 'anthracite', 'graphite' => 'graphite', 'khaki' => 'khaki', 'olive' => 'olive', 'lime' => 'lime',
         'turquoise' => 'turquoise', 'burgundy' => 'burgundy', 'cream' => 'cream',
         // rzeczowniki po polsku (bez odmiany przymiotnikowej); angielskiego „steel” tu nie ma — w nazwach plików
         // zdjęć to podnosek („steel-toe”), nie kolor
         'antracyt' => 'anthracite', 'grafit' => 'graphite', 'bordo' => 'burgundy',
     ];
+
+    /**
+     * Skróty kolorów spotykane tylko w nazwach plików zdjęć: Coba „…_Blk_Coner.jpg”, „…_Yel_Bk-…”, „…_BlkYel_06x09.jpg”,
+     * Safety Jogger „…-GRY-CTLG.JPG”, 3M „…-blu-…”, JHK „…-bk-l_01.jpg”, Honeywell „…-BRN-…”. W nazwach kart się nie
+     * liczą (canonical() ich nie zna) — tam „gry”, „org” czy „bk” to zwykłe słowa albo kody. W nazwie pliku liczą się
+     * tylko jako osobne słowo z samych liter („Yel_Bk”, „blk-1”), nie przyklejone do cyfr („BK1234” to kod).
+     */
+    private const FILE_ABBREVIATIONS = [
+        'blk' => 'black', 'bk' => 'black', 'yel' => 'yellow', 'ylw' => 'yellow', 'gry' => 'grey', 'wht' => 'white',
+        'blu' => 'blue', 'grn' => 'green', 'org' => 'orange', 'brn' => 'brown', 'anth' => 'anthracite',
+    ];
+
+    /** Najkrótszy człon sklejki kolorów w nazwie pliku („blkyel” = „blk” + „yel”); dwuliterowe „bk” tylko osobno. */
+    private const FILE_COMPOUND_MIN_PIECE = 3;
+
+    /** Dłuższe słowo nie jest sklejką kolorów (najdłuższa sensowna to kilka słów: „blackyellowgrey”) — bez rozkładu. */
+    private const FILE_COMPOUND_MAX_LENGTH = 32;
 
     /**
      * Początek polskiego przymiotnika => kolor; reszta słowa to końcówka odmiany (-y, -a, -e, -o, -i, -ego, -ej, -ych,
@@ -132,6 +153,12 @@ final class ColourWords
      * Wszystkie kolory z nazwy pliku w adresie zdjęcia („…/matting-black-yellow-1.jpg” → ['black', 'yellow']);
      * tylko nazwa pliku, bez katalogów i zapytania. [] = nazwa pliku nie mówi o kolorze.
      *
+     * Słowo z samych liter (między znakami spoza liter i cyfr) przechodzi przez inFileToken() — pełne słowo koloru, skrót
+     * („Blk”, „Yel”, „Bk”) albo sklejka („BlkYel”, „BlackYellow”, „Blkyel” → czarny i żółty; ponowny audyt Coby
+     * 08.10.2026: „DAF010701_Orthomat_Diamond_BlkYel_06x09.jpg” nie mówił o kolorze, „…-BlackYellow_isolated.jpg”
+     * o żadnym). Słowo z literami i cyframi („black1”, „09xLinear”) dzielone jest na ciągi liter i liczą się w nim tylko
+     * pełne słowa koloru (canonical) — skrót przy cyfrach to zwykle kod („BK1234”).
+     *
      * @return list<string>
      */
     public static function allInUrl(string $url): array
@@ -139,17 +166,92 @@ final class ColourWords
         $path = (string) (parse_url(trim($url), PHP_URL_PATH) ?? '');
         $file = rawurldecode(basename($path));
         $out = [];
-        foreach (preg_split('/[^a-z]+/', self::fold($file)) ?: [] as $token) {
-            if ($token === '') {
-                continue;
+        foreach (preg_split('/[^a-z0-9]+/', self::fold($file), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $token) {
+            if (ctype_alpha($token)) {
+                $colours = self::inFileToken($token);
+            } else {
+                $colours = [];
+                foreach (preg_split('/[^a-z]+/', $token, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $letters) {
+                    $colour = self::canonical($letters);
+                    if ($colour !== null) {
+                        $colours[] = $colour;
+                    }
+                }
             }
-            $colour = self::canonical($token);
-            if ($colour !== null && ! in_array($colour, $out, true)) {
-                $out[] = $colour;
+            foreach ($colours as $colour) {
+                if (! in_array($colour, $out, true)) {
+                    $out[] = $colour;
+                }
             }
         }
 
         return $out;
+    }
+
+    /**
+     * Kolory jednego słowa nazwy pliku zdjęcia (same litery, np. słowo z ModelImagePicker::fileName): pełne słowo koloru
+     * (canonical: „Gray” → ['grey'], „żółty” → ['yellow']), skrót z FILE_ABBREVIATIONS („Yel” → ['yellow']) albo sklejka
+     * w całości złożona ze słów koloru ze słownika (WORDS) i skrótów co najmniej FILE_COMPOUND_MIN_PIECE-literowych
+     * („BlkYel”, „blackyellow” → ['black', 'yellow']). Sklejka musi rozłożyć się bez reszty — „greenline”, „redwood”
+     * to nie kolory. [] = słowo nie mówi o kolorze.
+     *
+     * @return list<string>
+     */
+    public static function inFileToken(string $token): array
+    {
+        $w = self::fold($token);
+        if ($w === '' || ! ctype_alpha($w)) {
+            return [];
+        }
+        $colour = self::canonical($w) ?? (self::FILE_ABBREVIATIONS[$w] ?? null);
+        if ($colour !== null) {
+            return [$colour];
+        }
+
+        return self::compound($w);
+    }
+
+    /**
+     * Rozkład sklejki na człony koloru (co najmniej dwa) bez reszty; pierwszy rozkład od najdłuższego członu.
+     *
+     * @return list<string> kolory kanoniczne bez powtórzeń; [] = to nie sklejka kolorów
+     */
+    private static function compound(string $w): array
+    {
+        if (strlen($w) > self::FILE_COMPOUND_MAX_LENGTH) {
+            return [];
+        }
+        static $pieces = null;
+        if ($pieces === null) {
+            $pieces = [];
+            foreach ([...self::WORDS, ...self::FILE_ABBREVIATIONS] as $piece => $colour) {
+                if (strlen($piece) >= self::FILE_COMPOUND_MIN_PIECE && ctype_alpha($piece)) {
+                    $pieces[$piece] = $colour;
+                }
+            }
+            uksort($pieces, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
+        }
+        $split = static function (string $rest) use (&$split, $pieces): ?array {
+            if ($rest === '') {
+                return [];
+            }
+            foreach ($pieces as $piece => $colour) {
+                if (str_starts_with($rest, $piece)) {
+                    $tail = $split(substr($rest, strlen($piece)));
+                    if ($tail !== null) {
+                        return [$colour, ...$tail];
+                    }
+                }
+            }
+
+            return null;
+        };
+        $parts = $split($w);
+        if ($parts === null || count($parts) < 2) {
+            return [];
+        }
+
+        return array_values(array_unique($parts));
     }
 
     /**

@@ -7,8 +7,10 @@ namespace App\Services\Enrichment;
 use App\Models\Product;
 use App\Models\ProductDescriptionVersion;
 use App\Models\ProductDocument;
+use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Models\User;
+use App\Services\B2b\B2bDescriptionSource;
 use App\Support\CertificateLabels;
 use App\Support\ProductNormsColumn;
 use Illuminate\Support\Facades\DB;
@@ -34,7 +36,10 @@ use RuntimeException;
  *   url_blocked — odrzucona wersja blokuje swój adres źródła (tylko odrzucony opis z karty, nie propozycja);
  *   url_unblocked_at / url_unblocked_by — blokadę zdjęło zatwierdzenie wersji z tego adresu;
  *   page_image_urls — adresy zdjęć stron opisu przebiegu lidera modelu (etap 2, ≤ PAGE_IMAGE_URLS_MAX): członkowie
- *     modelu dostają z nich zdjęcie w kolorze swojej karty bez ponownego pobierania stron.
+ *     modelu dostają z nich zdjęcie w kolorze swojej karty bez ponownego pobierania stron;
+ *   human_choice — kopia z „Przywróć wersję” (publish z $humanChoice): opis wybrany przez człowieka, withdrawCurrent
+ *     go nie cofa;
+ *   withdrawn_at / withdrawn_reason — wersja zdjęta z karty przez withdrawCurrent.
  */
 final class DescriptionVersionStore
 {
@@ -52,6 +57,37 @@ final class DescriptionVersionStore
 
     /** Ile adresów zdjęć stron opisu (page_image_urls, etap 2) zostaje w danych technicznych wersji. */
     public const PAGE_IMAGE_URLS_MAX = 40;
+
+    /** Powód zapisu wersji z adresu strony podanego przez człowieka (decide reguła 1) — taki opis nie jest cofany. */
+    public const MANUAL_URL_REASON = 'adres strony podany ręcznie';
+
+    /**
+     * Klucze enrichment_payload karty, które nie należą do opisu, tylko do stanu karty: ślady łączenia i rozłączania
+     * kart — rozmiary (merged_size_skus czyta ProductSizeMergeService przy łączeniu rozmiarów; bez niej kolejny import
+     * zrobiłby duplikaty) i duplikaty z „Połącz zaznaczone” (merged_duplicate_skus — CardRedirectsBackfillCommand).
+     * withdrawCurrent zostawia je na karcie, publish i zapis opisu z przebiegu biorą je z karty, nie z kopii wersji.
+     *
+     * Ślady pochodzenia opisu z B2B (b2b_sources, b2b_supplement, b2b_sources_rejected, b2b_supplement_undone,
+     * replaced_description*) celowo nie: opisują opis, który był na karcie — przy nowym opisie z internetu znikają
+     * razem z nim (inaczej AuditSourceIdentityCommand uznałby kartę za „opis z PDF B2B” i schował jej znaleziska).
+     * To inna lista niż B2bClearFileLegacyCommand::KEEP_PAYLOAD_KEYS (tam opis zostaje z B2B, więc jego ślady też).
+     * Reszta payloadu (listy, normy, źródła, identity, evidence, price_list_sources, model_group, attributes,
+     * description_version_id) należy do opisu.
+     */
+    public const CARD_STATE_PAYLOAD_KEYS = [
+        'merged_size_skus',
+        'merged_duplicate_skus',
+        'merged_size_variants',
+        'size_merge',
+        'unmerged_size_skus',
+        'unmerged_at',
+    ];
+
+    /** Decyzje człowieka o samej wersji — opis zatwierdzony albo wybrany do przywrócenia. */
+    private const HUMAN_DECISIONS = [
+        ProductDescriptionVersion::DECISION_APPROVED,
+        ProductDescriptionVersion::DECISION_RESTORED,
+    ];
 
     /** Ranga werdyktu tożsamości strony źródła (SourceIdentity); brak werdyktu = ranga nieznana. */
     private const RANK = [
@@ -165,7 +201,7 @@ final class DescriptionVersionStore
         ];
 
         if (($candidate['manual_url'] ?? false) === true) {
-            return $publish('adres strony podany ręcznie');
+            return $publish(self::MANUAL_URL_REASON);
         }
         if ($url !== '' && $this->isRejectedUrl($p, $url)) {
             return $propose(Product::REVIEW_REJECTED_SOURCE, 'strona źródła odrzucona wcześniej w przeglądzie');
@@ -319,15 +355,23 @@ final class DescriptionVersionStore
      * kolejnych przebiegach) — dlatego certificates i document_urls w payloadzie liczone są od nowa z dokumentów
      * z internetu obecnych na karcie (jak po pobraniu plików w przebiegu: CertificateLabels::relabel), a nie
      * przepisywane z wersji, w której mogą wskazywać pliki, których już nie ma.
+     *
+     * Payload karty = payload wersji bez kluczy stanu karty (CARD_STATE_PAYLOAD_KEYS) + te klucze z obecnej karty
+     * (scalone rozmiary i duplikaty powstałe po wersji albo rozłączone od niej — prawdę o nich zna karta); kopia nowej
+     * wersji niesie payload wersji źródłowej bez zmian.
+     *
+     * $humanChoice: człowiek sam wybrał ten opis („Przywróć wersję” w przeglądzie) — nowa wersja niesie to w danych
+     * technicznych (human_choice) i withdrawCurrent jej nie cofa, niezależnie od wcześniejszej decyzji przy wersji
+     * źródłowej (np. url_given, której przywrócenie nie nadpisuje).
      */
-    public function publish(ProductDescriptionVersion $v, ?User $by, string $origin): Product
+    public function publish(ProductDescriptionVersion $v, ?User $by, string $origin, bool $humanChoice = false): Product
     {
         $description = (string) ($v->description ?? '');
         if (! Product::isDescriptionText($description)) {
             throw new RuntimeException('Ta wersja nie ma tekstu opisu.');
         }
 
-        return DB::transaction(function () use ($v, $by, $origin, $description): Product {
+        return DB::transaction(function () use ($v, $by, $origin, $description, $humanChoice): Product {
             /** @var Product $product */
             $product = Product::query()->lockForUpdate()->findOrFail($v->product_id);
             $payload = is_array($v->enrichment_payload) ? $v->enrichment_payload : [];
@@ -344,9 +388,11 @@ final class DescriptionVersionStore
                 'evidence_count' => $v->evidence_count,
                 'completeness' => $v->completeness,
                 'reason' => 'z wersji #'.$v->id,
+                self::META_KEY => $humanChoice ? ['human_choice' => true] : [],
             ], $by);
             app(SourceDocumentStore::class)->repointVersion($product, (int) $v->id, (int) $new->id);
 
+            $payload = array_diff_key($payload, array_flip(self::CARD_STATE_PAYLOAD_KEYS)) + $this->cardState($product);
             $payload['description_version_id'] = (int) $new->id;
             $updates = [
                 'description' => $description,
@@ -393,6 +439,206 @@ final class DescriptionVersionStore
     public function hasProtectedPublished(Product $p): bool
     {
         return $p->hasDescriptionText() && $this->current($p) !== null;
+    }
+
+    /**
+     * Cofnięcie opisu z karty (etap 3, W4 — decyzja właściciela 08.10.2026 §9.1): marka „tylko od producenta”, a opis
+     * na karcie pochodzi spoza stron producenta. Bieżąca wersja (current()) → superseded z powodem cofnięcia (kolumna
+     * reason + dane techniczne withdrawn_at/withdrawn_reason); tekst zostaje w historii i wraca przez „Przywróć wersję”
+     * (publish() z wersji superseded). Na karcie: bez opisu i bez kolumny norm (należą do cofniętego tekstu), bez
+     * danych opisu w enrichment_payload (cechy, materiały, normy, atrybuty i źródła z tej samej strony czyta dopasowanie
+     * przetargów i wektor — wersja ma ich kopię, przywrócenie je odtwarza); zostają tylko klucze stanu karty
+     * (CARD_STATE_PAYLOAD_KEYS: scalone rozmiary i duplikaty), a gdy ich nie ma — payload null; status „manual”
+     * (karta bez opisu nie może zostać „done”:
+     * hasUsableDescription), powód przeglądu manufacturer_missing od teraz. Wpis pamięci SKU z tym samym tekstem albo
+     * z tej samej strony znika — inaczej przebieg bez force położyłby cofnięty opis z powrotem. Zdjęć, plików, norm
+     * producenta (manufacturer_norms) i opakowania nie rusza.
+     *
+     * Null i bez żadnej zmiany, gdy:
+     *   - karta nie ma bieżącej wersji (opis bez wersji zapisał inny tor — nie ma gdzie zachować tekstu);
+     *   - opis położył człowiek: wersja z zatwierdzenia w przeglądzie (origin review_approve), z decyzją approved albo
+     *     restored, kopia „Przywróć wersję” (human_choice w danych technicznych albo origin restore z wersji, którą
+     *     człowiek wybrał), albo wersja z adresu
+     *     podanego ręcznie (MANUAL_URL_REASON albo adres źródła = zaufany adres karty, Product::trustedShopUrl);
+     *   - opis karty jest z cennika B2B (B2bDescriptionSource).
+     * Status karty nie chroni opisu: przebieg ustawia „manual” przy braku strony producenta (W4), a ręcznie wpisany
+     * opis nie ma wersji (pierwszy warunek). Wołający dostaje kartę zsynchronizowaną z zapisem (bez starego opisu
+     * w pamięci — późniejszy zapis tej instancji nie przeliczy indeksu ze starego tekstu).
+     */
+    public function withdrawCurrent(Product $p, string $reason): ?ProductDescriptionVersion
+    {
+        if ($p->id === null) {
+            return null;
+        }
+        $reason = trim($reason) !== '' ? trim($reason) : 'opis spoza strony producenta';
+
+        $result = DB::transaction(function () use ($p, $reason): ?array {
+            /** @var Product|null $product */
+            $product = Product::query()->lockForUpdate()->find($p->id);
+            $current = $product !== null ? $this->current($product) : null;
+            if ($product === null || $current === null || $this->isHumanChoice($product, $current)
+                || app(B2bDescriptionSource::class)->has($product)) {
+                return null;
+            }
+
+            $payload = is_array($current->enrichment_payload) ? $current->enrichment_payload : [];
+            $payload[self::META_KEY] = array_merge($this->meta($current), [
+                'withdrawn_at' => now()->toJSON(),
+                'withdrawn_reason' => mb_substr($reason, 0, 255),
+            ]);
+            $current->forceFill([
+                'status' => ProductDescriptionVersion::STATUS_SUPERSEDED,
+                'reason' => mb_substr(trim((string) $current->reason) !== '' ? trim((string) $current->reason).' | cofnięty: '.$reason : 'cofnięty: '.$reason, 0, 255),
+                'enrichment_payload' => $payload,
+            ])->save();
+            $this->forgetSkuCacheOf($product, $current);
+
+            // hak Product::saving przelicza indeks tekstowy, Product::updated zleca reindeks wektora
+            $cardState = $this->cardState($product);
+            $product->update([
+                'description' => null,
+                'norms' => null,
+                'enrichment_payload' => $cardState === [] ? null : $cardState,
+                'enrichment_status' => Product::ENRICHMENT_MANUAL,
+                'review_reason' => Product::REVIEW_MANUFACTURER_MISSING,
+                'review_since' => now(),
+            ]);
+
+            return [$product, $current];
+        });
+        if ($result === null) {
+            return null;
+        }
+        [$product, $withdrawn] = $result;
+        $p->setRawAttributes($product->getAttributes(), true);
+
+        return $withdrawn->fresh();
+    }
+
+    /**
+     * Bieżąca wersja karty (current()) → superseded jako cofnięta (reason „… | cofnięty: …” i withdrawn_at /
+     * withdrawn_reason w danych technicznych, jak withdrawCurrent) BEZ zmiany karty: opis, normy, status i powód
+     * przeglądu zostają. Dla przebiegu, który w tej samej transakcji zaraz zapisze nowy opis (ProductEnrichmentService::
+     * publishDescription — marka „tylko od producenta”: opis ze sklepu nie jest bazą dla opisu ze strony producenta);
+     * decide() widzi wtedy kartę bez wersji bazowej. Wołający trzyma blokadę wiersza karty i transakcję — rollback cofa
+     * też to. Wpis pamięci SKU tego opisu znika (jak w withdrawCurrent). Null i bez zmian: bez bieżącej wersji, wersja
+     * wybrana przez człowieka albo z adresu podanego ręcznie (isHumanChoice), opis z cennika B2B.
+     */
+    public function supersedeAsWithdrawn(Product $p, string $reason): ?ProductDescriptionVersion
+    {
+        if ($p->id === null) {
+            return null;
+        }
+        $reason = trim($reason) !== '' ? trim($reason) : 'opis spoza strony producenta';
+
+        return DB::transaction(function () use ($p, $reason): ?ProductDescriptionVersion {
+            $current = $this->current($p);
+            if ($current === null || $this->isHumanChoice($p, $current) || app(B2bDescriptionSource::class)->has($p)) {
+                return null;
+            }
+            $payload = is_array($current->enrichment_payload) ? $current->enrichment_payload : [];
+            $payload[self::META_KEY] = array_merge($this->meta($current), [
+                'withdrawn_at' => now()->toJSON(),
+                'withdrawn_reason' => mb_substr($reason, 0, 255),
+            ]);
+            $current->forceFill([
+                'status' => ProductDescriptionVersion::STATUS_SUPERSEDED,
+                'reason' => mb_substr(trim((string) $current->reason) !== '' ? trim((string) $current->reason).' | cofnięty: '.$reason : 'cofnięty: '.$reason, 0, 255),
+                'enrichment_payload' => $payload,
+            ])->save();
+            $this->forgetSkuCacheOf($p, $current);
+
+            return $current->fresh();
+        });
+    }
+
+    /**
+     * Klucze stanu karty z jej obecnego enrichment_payload (CARD_STATE_PAYLOAD_KEYS) — nie należą do opisu.
+     *
+     * @return array<string, mixed>
+     */
+    private function cardState(Product $product): array
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+
+        return array_intersect_key($payload, array_flip(self::CARD_STATE_PAYLOAD_KEYS));
+    }
+
+    /**
+     * Opis położony na kartę decyzją człowieka (withdrawCurrent go nie cofa): zatwierdzony w przeglądzie, przywrócony
+     * przez „Przywróć wersję” albo pobrany z adresu podanego ręcznie. Kopię z „Przywróć wersję” znaczy human_choice
+     * w danych technicznych (publish z $humanChoice, ProductReviewService::restore) — także gdy wersja źródłowa miała już
+     * inną decyzję (url_given), której przywrócenie nie nadpisuje. Kopie sprzed tego znacznika: decyzję niesie wersja
+     * źródłowa („z wersji #N”); restore z odrzucenia albo wycofania partii (bez decyzji przy źródle) nie jest wyborem
+     * tego tekstu przez człowieka.
+     */
+    private function isHumanChoice(Product $product, ProductDescriptionVersion $v): bool
+    {
+        if ($v->origin === ProductDescriptionVersion::ORIGIN_REVIEW_APPROVE
+            || in_array($v->decision, self::HUMAN_DECISIONS, true)
+            || $this->isTrue($this->meta($v)['human_choice'] ?? null)
+            || str_starts_with((string) $v->reason, self::MANUAL_URL_REASON)) {
+            return true;
+        }
+        $url = trim((string) ($v->primary_source_url ?? ''));
+        $trusted = $product->trustedShopUrl();
+        if ($url !== '' && $trusted !== null && self::sourceUrlKey($url) === self::sourceUrlKey($trusted)) {
+            return true;
+        }
+        if ($v->origin === ProductDescriptionVersion::ORIGIN_RESTORE
+            && preg_match('/^z wersji #(\d+)/', (string) $v->reason, $m) === 1) {
+            $source = ProductDescriptionVersion::query()
+                ->where('product_id', $product->id)
+                ->whereKey((int) $m[1])
+                ->first(['id', 'status', 'origin', 'decision', 'reason', 'primary_source_url']);
+
+            // wersję odrzuconą na kartę wraca tylko „Przywróć wersję” (odrzucenie i wycofanie partii biorą superseded)
+            return $source !== null && $source->origin !== ProductDescriptionVersion::ORIGIN_RESTORE
+                && ($source->status === ProductDescriptionVersion::STATUS_REJECTED || $this->isHumanChoice($product, $source));
+        }
+
+        return false;
+    }
+
+    /**
+     * Wersja zdjęta z karty przez withdrawCurrent — automat (powrót poprzedniego opisu po odrzuceniu) nie kładzie jej
+     * z powrotem; wraca tylko przez „Przywróć wersję”.
+     */
+    public function isWithdrawn(ProductDescriptionVersion $v): bool
+    {
+        $at = $this->meta($v)['withdrawn_at'] ?? null;
+
+        return is_string($at) && $at !== '';
+    }
+
+    /**
+     * Wpis pamięci SKU karty, który niesie cofnięty opis (ten sam tekst) albo pochodzi z tej samej strony źródła.
+     * Wpis z innej strony zostaje.
+     */
+    private function forgetSkuCacheOf(Product $product, ProductDescriptionVersion $v): void
+    {
+        $key = ProductEnrichmentCache::normalizeKey((string) $product->manufacturer, (string) $product->sku);
+        $cache = ProductEnrichmentCache::query()->where('manufacturer', $key['manufacturer'])->where('sku', $key['sku'])->first();
+        if ($cache === null) {
+            return;
+        }
+        $cachePayload = is_array($cache->enrichment_payload) ? $cache->enrichment_payload : [];
+        $cacheUrls = array_filter([
+            $cachePayload['primary_source_url'] ?? null,
+            ...(is_array($cache->source_urls) ? $cache->source_urls : []),
+        ], static fn (mixed $url): bool => is_string($url) && trim($url) !== '');
+        $versionUrl = trim((string) ($v->primary_source_url ?? ''));
+        $sameUrl = $versionUrl !== '' && in_array(
+            self::sourceUrlKey($versionUrl),
+            array_map(static fn (string $url): string => self::sourceUrlKey($url), $cacheUrls),
+            true,
+        );
+        // wpis trzyma najwyżej 10 000 znaków opisu (ProductEnrichmentService::storeSkuCache)
+        $sameText = $v->description !== null
+            && trim((string) $cache->description) === trim(mb_substr((string) $v->description, 0, 10000));
+        if ($sameUrl || $sameText) {
+            $cache->delete();
+        }
     }
 
     /**
@@ -631,6 +877,10 @@ final class DescriptionVersionStore
             if ($urls !== []) {
                 $out['page_image_urls'] = $urls;
             }
+        }
+        // opis wybrany przez człowieka („Przywróć wersję”, publish z $humanChoice) — withdrawCurrent go nie cofa
+        if (($meta['human_choice'] ?? null) === true) {
+            $out['human_choice'] = true;
         }
 
         return $out;

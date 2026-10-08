@@ -65,6 +65,10 @@ final class ManufacturerProfiles
             modelGroup: is_string($modelGroup) && $modelGroup !== '' ? $modelGroup : null,
             modelMinMembers: max(1, (int) ($model['min_members'] ?? 2)),
             imageUrlBlocklist: array_values(array_filter((array) ($entry['image_url_blocklist'] ?? []), static fn (mixed $s): bool => is_string($s) && $s !== '')),
+            altForms: array_values(array_filter((array) ($code['alt_forms'] ?? []), static fn (mixed $s): bool => is_string($s) && in_array($s, ManufacturerCodeForms::RULES, true))),
+            longestCodeWins: (bool) ($code['longest_code_wins'] ?? false),
+            indexLabel: is_string($code['index_label'] ?? null) && trim($code['index_label']) !== '' ? trim($code['index_label']) : null,
+            sizeLetters: array_values(array_filter((array) ($code['size_letters'] ?? []), static fn (mixed $s): bool => is_string($s) && trim($s) !== '')),
         );
     }
 }

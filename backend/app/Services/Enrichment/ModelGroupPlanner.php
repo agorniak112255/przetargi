@@ -195,6 +195,11 @@ final class ModelGroupPlanner
     /**
      * Sztafeta: lider bez wersji (brak źródeł, wyjątek, failed()) oddaje model kolejnemu członkowi — wybranemu tą samą
      * regułą co lider — i pozostali czekający członkowie dostają jego id w model_leader_id. null = nikt już nie czeka.
+     *
+     * Pozycja upadłego lidera (i wcześniejszych upadłych liderów tej sztafety) też przechodzi pod nowego lidera — mają
+     * stan końcowy, więc nie są „czekającymi członkami”, ale gdy nowy lider da wersję, ApplyModelDescriptionJob opisze
+     * także je (relayedLeaders). Pełne pobranie Coby #501 (08.10.2026): DP0106 i dwa pasy GRP zostały „ręcznie”, choć
+     * ich model dostał opis od kolejnego lidera.
      */
     public function nextLeader(int $batchId, int $failedLeaderId): ?int
     {
@@ -207,9 +212,36 @@ final class ModelGroupPlanner
             return null;
         }
         $leaderId = (int) $this->chooseLeader($products)->id;
-        $this->queuedMembers($batchId, $failedLeaderId)->update(['model_leader_id' => $leaderId]);
+        // czekający członkowie i upadli liderzy tej sztafety (ręcznie / błąd); pozycje zakończone opisem zostają
+        ProductEnrichmentBatchItem::query()
+            ->where('batch_id', $batchId)
+            ->where('model_leader_id', $failedLeaderId)
+            ->whereIn('status', [ProductEnrichmentBatchItem::STATUS_QUEUED, ProductEnrichmentBatchItem::STATUS_MANUAL, ProductEnrichmentBatchItem::STATUS_FAILED])
+            ->update(['model_leader_id' => $leaderId]);
 
         return $leaderId;
+    }
+
+    /**
+     * Upadli liderzy sztafety, którzy przeszli pod tego lidera: pozycja w stanie końcowym bez opisu (ręcznie / błąd),
+     * karta wciąż bez wyniku przebiegu — dostają opis modelu jak członkowie, gdy ten lider da wersję.
+     *
+     * @return list<int>
+     */
+    public function relayedLeaders(int $batchId, int $leaderId): array
+    {
+        return ProductEnrichmentBatchItem::query()
+            ->where('batch_id', $batchId)
+            ->where('model_leader_id', $leaderId)
+            ->where('product_id', '!=', $leaderId)
+            ->whereIn('status', [ProductEnrichmentBatchItem::STATUS_MANUAL, ProductEnrichmentBatchItem::STATUS_FAILED])
+            // członek, który padł w zadaniu opisu członków, ma numer wersji lidera (handOverModel) — to nie upadły lider
+            ->whereNull('model_leader_version_id')
+            ->whereHas('product', static fn ($q) => $q->whereIn('enrichment_status', [Product::ENRICHMENT_MANUAL, Product::ENRICHMENT_FAILED]))
+            ->orderBy('product_id')
+            ->pluck('product_id')
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
     }
 
     /**

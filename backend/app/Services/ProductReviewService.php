@@ -205,6 +205,7 @@ final class ProductReviewService
                 'enrichment_payload->source_urls as payload_source_urls',
                 'enrichment_payload->evidence as payload_evidence',
                 "enrichment_payload->{$meta}->url_blocked as payload_url_blocked",
+                "enrichment_payload->{$meta}->withdrawn_at as payload_withdrawn_at",
             ])
             ->with('decider:id,name')
             ->orderByDesc('id')
@@ -237,6 +238,10 @@ final class ProductReviewService
                     // odrzucony opis z karty blokuje swój adres dla automatu (do zdjęcia zatwierdzeniem wersji z niego)
                     'url_blocked' => $v->status === ProductDescriptionVersion::STATUS_REJECTED
                         && ($blocked === true || $blocked === 1 || $blocked === '1' || $blocked === 'true'),
+                    // opis cofnięty z karty bez nowego opisu (DescriptionVersionStore::withdrawCurrent — marka tylko od
+                    // producenta, opis spoza jego stron); wraca przez „Przywróć”
+                    'withdrawn' => $v->status === ProductDescriptionVersion::STATUS_SUPERSEDED
+                        && $this->jsonString($v->getAttribute('payload_withdrawn_at')) !== null,
                 ];
             })->all(),
             'current_version_id' => $this->versions->current($p)?->id,
@@ -247,7 +252,9 @@ final class ProductReviewService
      * Zatwierdzenie: czekająca propozycja trafia na kartę (nowa wersja published, origin review_approve — ze zdjęciami
      * i plikami poprzedniego opisu, files_from_previous); opis już na karcie (powód identity_*) zostaje, powód
      * przeglądu znika, a decyzja zapisuje się przy wersji. Zatwierdzenie wersji z adresu X zdejmuje blokadę X.
-     * Karta bez bieżącej wersji i bez propozycji (opis zmieniony innym torem, powód został) — sam powód znika.
+     * Karta bez bieżącej wersji i bez propozycji (opis zmieniony innym torem, powód został) — sam powód znika; tak samo
+     * manufacturer_missing na karcie bez opisu (brak strony producenta, opis ze sklepu cofnięty): handlowiec godzi się,
+     * że karta zostaje bez opisu — status „manual” zostaje, cofnięty tekst dalej jest w historii.
      * Bez version_id przy czekającej propozycji — 409: handlowiec zatwierdzał to, co widział (opis na karcie), a od
      * wczytania listy doszła propozycja, której nie widział; zatwierdzenie nie może jej opublikować.
      *
@@ -463,7 +470,8 @@ final class ProductReviewService
             }
             // handlowiec sam wybrał opis z tego adresu — adres przestaje być zablokowany
             $this->versions->unblockSourceUrl($product, $v->primary_source_url, $u);
-            $product = $this->versions->publish($v, $u, ProductDescriptionVersion::ORIGIN_RESTORE);
+            // wybór człowieka także wtedy, gdy wersja miała już inną decyzję (url_given) — withdrawCurrent go nie cofa
+            $product = $this->versions->publish($v, $u, ProductDescriptionVersion::ORIGIN_RESTORE, humanChoice: true);
 
             return [
                 'current_version_id' => $this->versions->current($product)?->id,
@@ -619,8 +627,9 @@ final class ProductReviewService
     }
 
     /**
-     * Opis, który był na karcie przed odrzuconym: najnowsza superseded sprzed niego z tekstem opisu, inna treścią
-     * i spoza zablokowanych adresów (rejectedUrls — tylko odrzucone opisy z karty, nie odrzucone propozycje).
+     * Opis, który był na karcie przed odrzuconym: najnowsza superseded sprzed niego z tekstem opisu, inna treścią,
+     * spoza zablokowanych adresów (rejectedUrls — tylko odrzucone opisy z karty, nie odrzucone propozycje) i nie
+     * zdjęta z karty przez withdrawCurrent (opis ze sklepu marki „tylko od producenta” wraca tylko przez „Przywróć”).
      */
     private function previousPublished(Product $product, ProductDescriptionVersion $rejected): ?ProductDescriptionVersion
     {
@@ -633,7 +642,8 @@ final class ProductReviewService
             ->get();
         foreach ($candidates as $candidate) {
             if ($candidate->description_sha1 === $rejected->description_sha1
-                || ! Product::isDescriptionText((string) ($candidate->description ?? ''))) {
+                || ! Product::isDescriptionText((string) ($candidate->description ?? ''))
+                || $this->versions->isWithdrawn($candidate)) {
                 continue;
             }
             $url = trim((string) ($candidate->primary_source_url ?? ''));

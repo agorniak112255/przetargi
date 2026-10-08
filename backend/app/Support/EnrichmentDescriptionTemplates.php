@@ -227,6 +227,7 @@ attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [
 Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
 confidence = pewność 0–1, że źródła opisują TEN produkt; przy niepustym description podaj wartość większą od 0 (opis z confidence 0 jest odrzucany).
 Nie przepisuj nazwy z cennika jako dowodu — opisuj wyłącznie podane strony.
+Nie pisz w tekście, czy źródło pasuje do produktu ani jak sprawdzałeś warunki — ani w description, ani w listach i polu norms.
 Pomiń reklamy, nieruchomości, leasing, biura, inwestycje i inny tekst niezwiązany z tym produktem BHP.
 Jeśli źródła opisują substancję chemiczną / CAS, a nazwa produktu to PPE (obuwie, rękawice, odzież…) — description="" i confidence=0.
 SYS;

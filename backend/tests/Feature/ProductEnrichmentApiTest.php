@@ -5036,7 +5036,9 @@ final class ProductEnrichmentApiTest extends TestCase
             app(ProductEnrichmentService::class)->enrichProduct($product, false);
             $this->fail('Oczekiwano ProductSourcesNotFoundException.');
         } catch (ProductSourcesNotFoundException $e) {
-            $this->assertStringStartsWith('Nie znaleziono karty', $e->getMessage());
+            // Coba „tylko od producenta” (decyzja właściciela 08.10.2026): brak karty przy żywej wyszukiwarce to brak
+            // strony producenta — dalej „wpisz ręcznie”, nie „do ponowienia”
+            $this->assertStringStartsWith('Strony producenta nie znaleziono', $e->getMessage());
         }
 
         $product->refresh();

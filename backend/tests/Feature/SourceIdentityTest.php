@@ -473,6 +473,103 @@ final class SourceIdentityTest extends TestCase
             "Automat na plastry Salvequick\nWkłady: Plaster plastikowy REF: 6036")['verdict']);
     }
 
+    public function test_aj_group_page_of_longer_variant_code_is_none(): void
+    {
+        // etap 3: karta 229 (1011) opisana ze strony 1011 R — kod innej karty marki wydłuża nasz
+        Product::query()->create(['sku' => '1011', 'name' => 'Spodnie ogrodniczki wodoochronne ostrzegawcze standard', 'manufacturer' => 'AJ GROUP']);
+        Product::query()->create(['sku' => '1011 R', 'name' => 'Spodnie ogrodniczki wodoochronne ostrzegawcze', 'manufacturer' => 'AJ GROUP']);
+        $product = $this->ajGroup('1011', 'Spodnie ogrodniczki wodoochronne ostrzegawcze standard');
+
+        $variant = $this->judge($product, 'https://pros.pl/pl/odziez-ostrzegawcza/105-spodnie-ogrodniczki-model-1011-r.html', 'Spodnie ogrodniczki model 1011 R', '');
+        $this->assertSame('none', $variant['verdict']);
+        $this->assertStringContainsString('1011 R', $variant['reason']);
+        $this->assertSame('hard', $this->judge($product, 'https://pros.pl/pl/odziez-ostrzegawcza/104-spodnie-ogrodniczki-model-1011.html', 'Spodnie ogrodniczki model 1011', '')['verdict']);
+    }
+
+    public function test_secura_index_field_on_manufacturer_page_is_hard_and_conflicting_voltage_is_none(): void
+    {
+        // etap 3: securabc.com podaje kod tylko w polu „Indeks” (w mikrodanych sku to numer wpisu)
+        $product = new Product(['sku' => 'T5912200', 'name' => 'Półbuty elektroizolacyjne 30 kV - ANTYAMPER', 'manufacturer' => 'SECURA']);
+
+        $own = $this->judge($product, 'https://www.securabc.com/pl/obuwie-elektroizolacyjne/31-polbuty-elektroizolacyjne-30-kv.html',
+            'Półbuty elektroizolacyjne 30 kV', "Półbuty elektroizolacyjne\nIndeks: T5912200\nKlasa 3", [['type' => 'sku', 'value' => '31']]);
+        $this->assertSame(['hard', 'sku', 'T5912200', 'field'], [$own['verdict'], $own['key_type'], $own['key'], $own['where']]);
+        // to samo pole na stronie sklepu nie liczy się
+        $this->assertNotSame('hard', $this->judge($product, 'https://sklep.example/polbuty-elektroizolacyjne.html', 'Półbuty elektroizolacyjne', 'Indeks: T5912200')['verdict']);
+        // strona półbutów 20 kV (mistralbhp, T5912100) — sprzeczne napięcie
+        $foreign = $this->judge($product, 'https://mistralbhp.pl/Polbuty-elektroizolacyjne-20-KV-ANTYAMPER-T5912100/472', 'Półbuty elektroizolacyjne 20 kV', '');
+        $this->assertSame('none', $foreign['verdict']);
+        $this->assertStringContainsString('30 kV ≠ 20 kV', $foreign['reason']);
+    }
+
+    public function test_secura_half_mask_page_with_index_of_other_size_is_soft(): void
+    {
+        // audyt SECURA 08.10.2026: securabc.com ma jedną stronę półmaski SECURA 3000 (rozmiary S, M, L, „Indeks
+        // S56T0SM0”); dziś karta S56T0SL0 dostawała „strona innego wyrobu marki (kod S56T0SM0)” → manufacturer_missing
+        foreach (['S56T0SS0', 'S56T0SM0', 'S56T0SL0', 'S56T1SM0'] as $sku) {
+            Product::query()->create(['sku' => $sku, 'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', 'manufacturer' => 'SECURA']);
+        }
+        $url = 'https://www.securabc.com/pl/polmaska-wielokrotnego-uzytku-secura/20-41-secura-3000.html';
+        $text = "Półmaska wielokrotnego użytku SECURA 3000\nRozmiar S M L\nIndeks S56T0SM0\nPN-EN 140";
+        $large = new Product(['sku' => 'S56T0SL0', 'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', 'manufacturer' => 'SECURA']);
+
+        $verdict = $this->judge($large, $url, 'SECURA 3000', $text, [['type' => 'sku', 'value' => '20']]);
+        $this->assertSame(['soft', 'sku', 'S56T0SL0', 'field'], [$verdict['verdict'], $verdict['key_type'], $verdict['key'], $verdict['where']]);
+        $this->assertStringContainsString('innym rozmiarze', $verdict['reason']);
+        $this->assertStringContainsString('S56T0SM0', $verdict['reason']);
+        // karta rozmiaru M — hard z pola jak dotąd; SECURA 3100 (inna cyfra) — strona innego wyrobu
+        $medium = new Product(['sku' => 'S56T0SM0', 'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', 'manufacturer' => 'SECURA']);
+        $this->assertSame('hard', $this->judge($medium, $url, 'SECURA 3000', $text)['verdict']);
+        $other = $this->judge(new Product(['sku' => 'S56T1SM0', 'name' => 'Półmaska SECURA 3100 (nagłowie trzyczęściowe)', 'manufacturer' => 'SECURA']), $url, 'SECURA 3000', $text);
+        $this->assertSame('none', $other['verdict']);
+        // to samo pole na stronie sklepu — bez reguły rozmiaru
+        $this->assertNotSame('field', $this->judge($large, 'https://sklep.example/polmaska-secura-3000.html', 'Półmaska SECURA 3000', $text)['where']);
+    }
+
+    public function test_secura_elsec_glove_page_is_not_foreign_nor_conflicting_for_the_set(): void
+    {
+        // securabc.com „25-elsec-25-kv.html” = ELSEC 2,5 kV (przecinek zgubiony w adresie), „Indeks S5911000” to
+        // rękawice spoza cennika; karta S5921000 to zestaw z tymi rękawicami. Dziś: 2,5 kV ≠ 25 kV i foreign S5911000.
+        foreach (['S5921000' => 'Zestaw ELSEC 2,5 kV', 'S5922000' => 'Zestaw ELSEC 5 kV', 'S5923000' => 'Zestaw ELSEC 10 kV'] as $sku => $name) {
+            Product::query()->create(['sku' => $sku, 'name' => $name, 'manufacturer' => 'SECURA']);
+        }
+        $set = new Product(['sku' => 'S5921000', 'name' => 'Zestaw ELSEC 2,5 kV', 'manufacturer' => 'SECURA']);
+
+        $verdict = $this->judge($set, 'https://www.securabc.com/pl/rekawice-elektroizolacyjneelsec/25-elsec-25-kv.html', 'ELSEC 2,5 kV',
+            "Rękawice elektroizolacyjne ELSEC 2,5 kV\nIndeks S5911000\nKlasa 00", [['type' => 'sku', 'value' => '25']]);
+        $this->assertStringNotContainsString('sprzeczna cecha', $verdict['reason']);
+        $this->assertStringNotContainsString('innego wyrobu', $verdict['reason']);
+        $this->assertNotSame('hard', $verdict['verdict'], 'kodu zestawu na stronie rękawic nie ma');
+        // zestaw 5 kV na tej stronie — klasa 0 ≠ klasa 00
+        $five = $this->judge(new Product(['sku' => 'S5922000', 'name' => 'Zestaw ELSEC 5 kV', 'manufacturer' => 'SECURA']),
+            'https://www.securabc.com/pl/rekawice-elektroizolacyjneelsec/25-elsec-25-kv.html', 'ELSEC 2,5 kV', 'Indeks S5911000');
+        $this->assertSame('none', $five['verdict']);
+        $this->assertStringContainsString('sprzeczna cecha', $five['reason']);
+    }
+
+    public function test_aj_group_page_found_by_other_code_form_is_soft(): void
+    {
+        // etap 3: cennik „SBA01B”, pros.pl ma stronę modelu „SBA01” (141-spodniobuty-antystatyczne-sba01)
+        $verdict = $this->judge($this->ajGroup('SBA01B', 'Spodniobuty antyelektrostatyczne'),
+            'https://pros.pl/pl/spodniobuty-i-wodery/141-spodniobuty-antystatyczne-sba01.html', 'Spodniobuty antystatyczne SBA01', '');
+
+        $this->assertSame('soft', $verdict['verdict']);
+        $this->assertStringContainsString('SBA01', $verdict['reason']);
+        $this->assertStringContainsString('letter_suffix', $verdict['reason']);
+    }
+
+    public function test_other_code_form_that_is_sku_of_another_card_is_none(): void
+    {
+        // SB01-J (Junior) → „SB01” to karta Spodniobutów Standard — strona tamtej karty
+        Product::query()->create(['sku' => 'SB01', 'name' => 'Spodniobuty Standard', 'manufacturer' => 'AJ GROUP']);
+        Product::query()->create(['sku' => 'SB01-J', 'name' => 'Spodniobuty Junior', 'manufacturer' => 'AJ GROUP']);
+
+        $verdict = $this->judge($this->ajGroup('SB01-J', 'Spodniobuty Junior'),
+            'https://pros.pl/pl/spodniobuty-i-wodery/136-spodniobuty-sb01.html', 'Spodniobuty SB01 STANDARD', '');
+
+        $this->assertSame('none', $verdict['verdict']);
+    }
+
     /**
      * @param  list<array{type: string, value: string}>  $markup
      * @return array<string, mixed>

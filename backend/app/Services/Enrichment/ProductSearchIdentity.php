@@ -7,6 +7,7 @@ namespace App\Services\Enrichment;
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductSizeVariant;
+use App\Support\ShopEntryId;
 use App\Support\Utf8Trim;
 use Illuminate\Support\Str;
 
@@ -274,7 +275,8 @@ final class ProductSearchIdentity
      */
     public function imageUrlMentionsProduct(string $url, Product $product): bool
     {
-        $hay = mb_strtolower(urldecode($url));
+        // „…/3879-thickbox_default/…” to numer wpisu sklepu, nie kod wyrobu (etap 3, §1.3)
+        $hay = mb_strtolower(urldecode(ShopEntryId::strip($url)));
         $hay .= ' '.$this->decodeEmbeddedUrls($hay);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
@@ -2083,7 +2085,7 @@ final class ProductSearchIdentity
     /** 471 w slugu sklepu (boe-471) to nasz CovaSpec 471, nie cudzy kod. */
     public function urlOrTitleCarriesShopModelNumber(string $url, string $title, Product $product): bool
     {
-        $hay = mb_strtolower($url.' '.$title);
+        $hay = mb_strtolower(ShopEntryId::strip($url).' '.$title);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
         foreach ($this->specificModelNumbers($product) as $number) {
             if ($this->numericTokenAsProductCode($hay, (string) $number)
@@ -2438,11 +2440,11 @@ final class ProductSearchIdentity
      */
     public function hayMentionsProduct(string $hay, Product $product, bool $typeCheckedOnPage = false): bool
     {
-        $hay = mb_strtolower($hay);
+        $hay = mb_strtolower($this->withoutShopEntryIds($hay));
         if ($this->looksLikeChemicalCatalogHit($hay)) {
             return false;
         }
-        if ($this->looksLikeUnrelatedSignage($hay, $product) && ! $this->hayHasProductCode($hay, $product)) {
+        if ($this->looksLikeUnrelatedSignage($hay, $product) && ! $this->hayCarriesProductCode($hay, $product)) {
             return false;
         }
         if ($this->looksLikeUnrelatedApparel($hay, $product)) {
@@ -2637,6 +2639,9 @@ final class ProductSearchIdentity
             return false;
         }
         $hay = $url.' '.$title.' '.$text;
+        // Zbitka do bezpośredniego dopasowania kodu — adres bez numeru wpisu sklepu („/102-plaszcz-model-1102.html”
+        // to nie karta 102). hayMentionsProduct i hayHasProductCode zdejmują go same, dlatego dostają $hay.
+        $codeHay = ShopEntryId::strip($url).' '.$title.' '.$text;
         if ($this->officialFamilyPageListsSizeCodes($url, $title, $text, $product)
             && ! $this->pageClaimsAnotherCode($url, $title, $product)) {
             return true;
@@ -2650,7 +2655,7 @@ final class ProductSearchIdentity
         // Rękawica Ansell ma numer modelu na każdej karcie — sama linia („AlphaTec”, „HyFlex”)
         // i marka wpuszczały AlphaTec 58-270 jako nasze 38003PP.
         $gloveModel = $this->ansellGloveModel($product);
-        if ($gloveModel !== null && ! $this->hayHasAnsellGloveModel($hay, $gloveModel)) {
+        if ($gloveModel !== null && ! $this->hayHasAnsellGloveModel($codeHay, $gloveModel)) {
             return false;
         }
         // Ansell zmienia nazwy linii, numer modelu zostaje: „HYNIT 32-105” z marką Ansell w sklepie to nasze
@@ -2668,13 +2673,13 @@ final class ProductSearchIdentity
             && ! $this->hayHasDistinctiveNamePhrase($hay, $product)) {
             return false;
         }
-        if ($this->gluedNumericModelConfirmsCard($hay, $product)
+        if ($this->gluedNumericModelConfirmsCard($codeHay, $product)
             && $this->hayHasRequiredTypeFromName($hay, $product)) {
             return true;
         }
-        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($hay)) ?? '';
+        $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($codeHay)) ?? '';
         if ($this->urlOrTitleHasNamedShopIdentity($url, $title, $product)
-            || $this->hayHasShopIdentity(mb_strtolower($hay), $hayCompact, $product)) {
+            || $this->hayHasShopIdentity(mb_strtolower($codeHay), $hayCompact, $product)) {
             return $this->hayHasRequiredTypeFromName($hay, $product);
         }
 
@@ -3281,7 +3286,7 @@ final class ProductSearchIdentity
 
     public function urlOrTitleHasShopIdentity(string $url, string $title, Product $product): bool
     {
-        $hay = mb_strtolower($url.' '.$title);
+        $hay = mb_strtolower(ShopEntryId::strip($url).' '.$title);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
 
         return $this->hayHasShopIdentity($hay, $hayCompact, $product);
@@ -3647,7 +3652,7 @@ final class ProductSearchIdentity
      */
     public function urlOrTitleHasNamedShopIdentity(string $url, string $title, Product $product): bool
     {
-        $hay = mb_strtolower($url.' '.$title);
+        $hay = mb_strtolower(ShopEntryId::strip($url).' '.$title);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
         $specific = $this->specificModelNumbers($product);
         foreach ($this->shopIdentityPhrases($product) as $phrase) {
@@ -3792,6 +3797,8 @@ final class ProductSearchIdentity
      */
     public function urlOrTitleCarriesCodeFamily(string $url, string $title, Product $product): bool
     {
+        // numer wpisu sklepu („/102-płaszcz-model-1102”) to nie oznaczenie z rodziny naszego kodu
+        $url = ShopEntryId::strip($url);
         $codes = $this->compactProductCodes($product);
         foreach ($this->shopIdentityPhrases($product) as $trade) {
             $compact = $this->compactCode($trade);
@@ -4036,7 +4043,8 @@ final class ProductSearchIdentity
         string $text,
         Product $product,
     ): bool {
-        $hay = mb_strtolower($url.' '.$title.' '.$text);
+        // Adres bez numeru wpisu sklepu: „/102-plaszcz-model-1102.html” nie jest kartą 102 (etap 3, §1.3).
+        $hay = mb_strtolower(ShopEntryId::strip($url).' '.$title.' '.$text);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
         if (! $this->hayHasBrand($hay, $product) && ! $this->hayHasOfficialHost($hay, $url, $product)) {
             return false;
@@ -5237,7 +5245,34 @@ final class ProductSearchIdentity
         return false;
     }
 
+    /**
+     * Kod wyrobu w zbitce (adres + tytuł + treść). Adresy w zbitce bez numerów wpisów sklepu (ShopEntryId) —
+     * „/102-plaszcz-model-1102.html” i „…-p-1893.html” nie niosą kodu 102 ani 1893.
+     */
     public function hayHasProductCode(string $hay, Product $product): bool
+    {
+        return $this->hayCarriesProductCode($this->withoutShopEntryIds($hay), $product);
+    }
+
+    /**
+     * Każdy adres http(s) w zbitce przez ShopEntryId::strip — zbitki składają też wywołujący spoza tej klasy
+     * (wyniki wyszukiwarki, karty w puli, pliki), a numer wpisu sklepu nie może za nich potwierdzić kodu.
+     */
+    private function withoutShopEntryIds(string $hay): string
+    {
+        if (stripos($hay, 'http') === false) {
+            return $hay;
+        }
+
+        return preg_replace_callback(
+            '#https?://[^\s"\'<>]+#iu',
+            static fn (array $m): string => ShopEntryId::strip($m[0]),
+            $hay
+        ) ?? $hay;
+    }
+
+    /** Jak hayHasProductCode, dla zbitki, w której adresy są już bez numerów wpisów sklepu. */
+    private function hayCarriesProductCode(string $hay, Product $product): bool
     {
         foreach ($this->productCodes($product) as $code) {
             if ($this->codeInText($hay, $code)) {

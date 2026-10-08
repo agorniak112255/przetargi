@@ -96,7 +96,7 @@ final class ProductReviewApiTest extends TestCase
 
         $response->assertJsonPath('meta', ['total' => 2, 'page' => 1, 'per_page' => 50]);
         $this->assertSame([
-            'identity_soft' => 1, 'identity_none' => 0, 'worse_version' => 1, 'rejected_source' => 0,
+            'identity_soft' => 1, 'identity_none' => 0, 'worse_version' => 1, 'rejected_source' => 0, 'manufacturer_missing' => 0,
         ], $response->json('counts.by_reason'));
         $this->assertSame([
             ['id' => $coba->id, 'manufacturer' => 'Coba', 'count' => 2],
@@ -793,6 +793,138 @@ final class ProductReviewApiTest extends TestCase
         $this->get("/api/products/{$other->id}/source-documents/{$document->id}/text")->assertNotFound();
         Storage::disk('sources')->delete($document->sha256.'.txt.gz');
         $this->get("/api/products/{$card->id}/source-documents/{$document->id}/text")->assertNotFound();
+    }
+
+    /**
+     * Etap 3: karta marki „tylko od producenta” z opisem ze sklepu cofniętym (withdrawCurrent) — na liście z powodem
+     * manufacturer_missing i licznikiem, bez wersji opublikowanej; historia pokazuje wersję zdjętą z karty.
+     */
+    public function test_manufacturer_missing_card_is_listed_and_counted_and_history_marks_withdrawn_version(): void
+    {
+        $secura = $this->list('SECURA');
+        $card = $this->card($secura, 'T5912200', ['enrichment_payload' => ['primary_source_url' => 'https://mistralbhp.pl/t5912100', 'features' => ['20 kV']]]);
+        $version = $this->published($card, 'soft', 2);
+        $other = $this->card($secura, 'T5161000', ['review_reason' => Product::REVIEW_IDENTITY_NONE, 'review_since' => now()->subDay()]);
+        $this->assertNotNull($this->store->withdrawCurrent($card, 'strona spoza securabc.com'));
+
+        $response = $this->getJson('/api/product-reviews?price_list_id='.$secura->id)->assertOk();
+        $this->assertSame(1, $response->json('counts.by_reason.manufacturer_missing'));
+        $this->assertSame(1, $response->json('counts.by_reason.identity_none'));
+        $this->assertSame([$card->id, $other->id], array_column($response->json('data'), 'product_id'));
+        $row = $response->json('data.0');
+        $this->assertSame(Product::REVIEW_MANUFACTURER_MISSING, $row['review_reason']);
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $row['enrichment_status']);
+        $this->assertNull($row['published']);
+        $this->assertNull($row['proposal']);
+        $this->assertNull($row['primary_source_url']);
+
+        $filtered = $this->getJson('/api/product-reviews?reason=manufacturer_missing')->assertOk();
+        $filtered->assertJsonPath('meta.total', 1);
+        $this->assertSame([['id' => $secura->id, 'manufacturer' => 'SECURA', 'count' => 1]], $filtered->json('counts.by_price_list'));
+
+        $history = $this->getJson("/api/products/{$card->id}/description-versions")->assertOk();
+        $history->assertJsonPath('current_version_id', null);
+        $entry = collect($history->json('data'))->firstWhere('id', $version->id);
+        $this->assertSame('superseded', $entry['status']);
+        $this->assertTrue($entry['withdrawn']);
+        $this->assertSame(self::DESCRIPTION, $entry['description']);
+        $this->assertFalse(collect($this->getJson("/api/products/{$other->id}/description-versions")->json('data'))->contains('withdrawn', true));
+    }
+
+    public function test_approve_manufacturer_missing_without_version_clears_reason_and_keeps_card_without_description(): void
+    {
+        $card = $this->card($this->list('SECURA'), 'S53211');
+        $version = $this->published($card, 'none', 0);
+        $this->store->withdrawCurrent($card, 'sklep');
+
+        $this->postJson("/api/products/{$card->id}/review", ['action' => 'approve'])
+            ->assertOk()
+            ->assertJsonPath('review_reason', null)
+            ->assertJsonPath('current_version_id', null);
+
+        $fresh = $card->fresh();
+        $this->assertNull($fresh->review_reason);
+        $this->assertNull($fresh->review_since);
+        $this->assertNull($fresh->description);
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $fresh->enrichment_status);
+        // cofnięty tekst dalej w historii, bez decyzji
+        $this->assertSame(ProductDescriptionVersion::STATUS_SUPERSEDED, $version->fresh()->status);
+        $this->assertNull($version->fresh()->decision);
+        $this->assertSame(0, ProductEnrichmentBatch::query()->count());
+
+        // lista wczytana przed cofnięciem wysyła dawną wersję opublikowaną — też tylko zdejmuje powód
+        $stale = $this->card($this->list('SECURA'), 'S53212');
+        $staleVersion = $this->published($stale, 'none', 0);
+        $this->store->withdrawCurrent($stale, 'sklep');
+        $this->postJson("/api/products/{$stale->id}/review", ['action' => 'approve', 'version_id' => $staleVersion->id])
+            ->assertOk()
+            ->assertJsonPath('review_reason', null);
+        $this->assertNull($stale->fresh()->description);
+    }
+
+    public function test_url_on_manufacturer_missing_card_saves_address_and_queues_forced_enrichment(): void
+    {
+        $card = $this->card($this->list('SECURA'), 'T5912200');
+        $version = $this->published($card, 'soft', 2);
+        $this->store->withdrawCurrent($card, 'sklep');
+
+        $response = $this->postJson("/api/products/{$card->id}/review", ['action' => 'url', 'url' => 'https://securabc.com/pl/obuwie/20-polbuty-30-kv.html'])
+            ->assertOk()
+            ->assertJsonPath('review_reason', null)
+            ->assertJsonPath('shop_source_url', 'https://securabc.com/pl/obuwie/20-polbuty-30-kv.html');
+
+        $batch = ProductEnrichmentBatch::query()->findOrFail($response->json('batch_id'));
+        $this->assertTrue((bool) $batch->force);
+        $this->assertSame(Product::ENRICHMENT_QUEUED, $card->fresh()->enrichment_status);
+        // cofnięta wersja nie dostaje decyzji „adres podany” — nie jest już opisem karty
+        $this->assertNull($version->fresh()->decision);
+        Queue::assertPushed(PrefetchProductSourcesJob::class, 1);
+    }
+
+    public function test_restore_brings_back_withdrawn_description(): void
+    {
+        $card = $this->card($this->list('MAPA'), '987', ['norms' => 'EN 388', 'enrichment_payload' => ['norms' => ['EN 388'], 'features' => ['nitryl']]]);
+        $version = $this->published($card, 'hard', 4);
+        $image = ProductImage::query()->create(['product_id' => $card->id, 'path' => 'products/987.jpg', 'source_url' => 'https://bpbhp.pl/987.jpg', 'checksum' => '987', 'sort_order' => 0]);
+        $this->store->withdrawCurrent($card, 'sklep');
+        $this->assertNull($card->fresh()->description);
+
+        $this->postJson("/api/products/{$card->id}/description-versions/{$version->id}/restore")
+            ->assertOk()
+            ->assertJsonPath('description', self::DESCRIPTION)
+            ->assertJsonPath('files_from_previous', true);
+
+        $fresh = $card->fresh();
+        $this->assertSame(self::DESCRIPTION, $fresh->description);
+        $this->assertSame('EN 388', $fresh->norms);
+        $this->assertSame(['nitryl'], $fresh->enrichment_payload['features']);
+        $this->assertSame(Product::ENRICHMENT_DONE, $fresh->enrichment_status);
+        $this->assertNull($fresh->review_reason);
+        $this->assertNotNull($image->fresh());
+        $this->assertSame(ProductDescriptionVersion::DECISION_RESTORED, $version->fresh()->decision);
+        // przywrócony przez człowieka — kolejne cofnięcie go nie zdejmie
+        $this->assertNull($this->store->withdrawCurrent($fresh, 'sklep'));
+        $this->assertSame(self::DESCRIPTION, $card->fresh()->description);
+    }
+
+    public function test_reject_after_withdrawal_does_not_put_withdrawn_shop_description_back(): void
+    {
+        $card = $this->card($this->list('SECURA'), 'T5912200');
+        $shop = $this->published($card, 'soft', 2);
+        $this->store->withdrawCurrent($card, 'sklep');
+        // potem opis z adresu od handlowca, który okazał się cudzą stroną
+        $newText = 'Półbuty elektroizolacyjne z innej strony, klasa 0, do 1 kV.';
+        $card->update(['description' => $newText, 'enrichment_status' => Product::ENRICHMENT_DONE, 'review_reason' => null]);
+        $later = $this->store->record($card, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => $newText, 'primary_source_url' => 'https://obcy.pl/polbuty', 'identity_verdict' => 'none',
+        ]);
+
+        $this->postJson("/api/products/{$card->id}/review", ['action' => 'reject', 'version_id' => $later->id])->assertOk();
+
+        // cofnięty opis ze sklepu nie wraca sam — karta wyzerowana, tekst dalej w historii do „Przywróć”
+        $this->assertNull($card->fresh()->description);
+        $this->assertSame(ProductDescriptionVersion::STATUS_SUPERSEDED, $shop->fresh()->status);
+        $this->assertSame(0, ProductDescriptionVersion::query()->where('product_id', $card->id)->where('origin', ProductDescriptionVersion::ORIGIN_RESTORE)->count());
     }
 
     private function list(string $manufacturer): PriceList

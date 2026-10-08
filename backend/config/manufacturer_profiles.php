@@ -26,13 +26,26 @@ declare(strict_types=1);
 | - image_url_blocklist: wyrażenia regularne (cały adres) grafik witryny producenta, które nie są zdjęciem wyrobu —
 |   obok wzorców ogólnych App\Support\ImageUrlBlocklist (logo, banner, placeholder…); adres odpada z listy zdjęć strony
 |   i z pobierania;
+| - code.alt_forms: inne zapisy kodu karty do drugiej próby na hostach producenta marki „tylko producent”
+|   (App\Services\Enrichment\ManufacturerCodeForms: letter_suffix „SBA01B” → „SBA01”, dash_suffix „SB01-J” → „SB01”,
+|   trailing_words „071 STRAŻ” → „071”, leading_zeros „0071” → „71”); strona znaleziona innym zapisem jest najwyżej
+|   „soft” (etap 3 opisów z cenników);
+| - code.longest_code_wins: najdłuższy kod z katalogu marki decyduje (App\Services\Enrichment\CardCodeArbiter) —
+|   strona, zdjęcie albo plik z kodem innej karty marki, który wydłuża nasz („1011” → „1011 R”), albo bez naszego kodu
+|   przy kodzie innej karty („102” przy „1102”) nie jest źródłem karty; na hoście producenta także etykietowany kod
+|   („REF 6943” przy 310366, „Indeks: S565A202” przy S565E202);
+| - code.index_label: etykieta pola kodu w treści strony producenta („Indeks: T5912200” na securabc.com) — pierwsze
+|   takie pole równe kodowi karty daje twardy werdykt (SourceIdentity::judgePage, „field”);
+| - code.size_letters: oznaczenia rozmiaru w kodzie wyrobu (ManufacturerProfile::sizeSibling) — kod innej karty albo
+|   pole „Indeks” różniące się od naszego tylko rozmiarem w tym samym miejscu (S56T0SL0 ↔ S56T0SM0) to ten sam model:
+|   nie „strona innego wyrobu”, tylko „soft” (strona modelu w innym rozmiarze);
 | - resolver: klasa PHP dla reguł, których nie da się opisać danymi (na razie żadna).
 | brand_keys — klucze marki jak w manufacturer_domains (małe litery, myślniki).
 */
 return [
     'default' => [
         'identity_in' => ['url', 'title', 'markup'],
-        'code' => ['normalize' => 'upper_alnum', 'min_length' => 4],
+        'code' => ['normalize' => 'upper_alnum', 'min_length' => 4, 'alt_forms' => [], 'longest_code_wins' => false, 'index_label' => null],
         'model_alias_is_key' => false,
         'model' => ['group' => null, 'min_members' => 2],
         'resolver' => null,
@@ -54,6 +67,8 @@ return [
             'identity_in' => ['url', 'title', 'markup', 'text'],
             // numery REF 4-cyfrowe („REF: 1882”) — z etykietą tylko w adresie i tytule (SourceIdentity::shortCodeVerdict)
             'labelled_short_codes' => true,
+            // audyt 08.10.2026: strona REF 6943 przy 310366, PDF 51011003 przy 51011013, zdjęcie 7200 przy 510110414
+            'code' => ['longest_code_wins' => true],
         ],
         'mapa' => [
             'brand_keys' => ['mapa'],
@@ -68,7 +83,26 @@ return [
             'labelled_short_codes' => true,
             // kod kombinacji PrestaShop w mikrodanych: model, numer koloru i rozmiar („SB01 STRONG-00113-39”,
             // „741-00005”) — bez końcówki to kod modelu
-            'code' => ['combination_suffix' => '/-\d{5}(?:-[^-]*)?$/'],
+            'code' => [
+                'combination_suffix' => '/-\d{5}(?:-[^-]*)?$/',
+                // audyt 08.10.2026: SBA01B, WRA02B, SB01-J, 071 STRAŻ — pros.pl ma stronę modelu w innym zapisie kodu
+                'alt_forms' => ['letter_suffix', 'dash_suffix', 'trailing_words'],
+                // 1011 ↔ 1011 R, 104/1 ↔ 104/1 OC, SB04 AIR ↔ SB04 AIR CARP, 102 ↔ 1102 (audyt 08.10.2026)
+                'longest_code_wins' => true,
+            ],
+        ],
+        // securabc.com: kod wyrobu tylko w polu „Indeks: T5912200” treści strony (w mikrodanych „sku” to numer wpisu)
+        'secura' => [
+            'brand_keys' => ['secura'],
+            'identity_in' => ['url', 'title', 'markup'],
+            // półmaska SECURA 3000 S/M/L = S56T0SS0/SM0/SL0, a strona securabc.com jedna („20-41-secura-3000.html”,
+            // rozmiary S, M, L, „Indeks S56T0SM0”) — audyt SECURA 08.10.2026
+            'code' => ['longest_code_wins' => true, 'index_label' => 'Indeks', 'size_letters' => ['XS', 'S', 'M', 'L', 'XL']],
+        ],
+        // specshop/bolle-safety: filtr B9V opisany ze strony przyłbicy FLASHV (audyt Bolle 08.10.2026)
+        'bolle' => [
+            'brand_keys' => ['bolle', 'bolle-safety'],
+            'code' => ['longest_code_wins' => true],
         ],
     ],
 ];

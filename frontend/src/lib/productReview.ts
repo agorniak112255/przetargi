@@ -6,9 +6,20 @@
 import { api, apiBlob } from './api'
 
 /** Powód, dla którego opis czeka na przegląd (Product::REVIEW_*). */
-export type ReviewReason = 'identity_soft' | 'identity_none' | 'worse_version' | 'rejected_source'
+export type ReviewReason =
+  | 'identity_soft'
+  | 'identity_none'
+  | 'worse_version'
+  | 'rejected_source'
+  | 'manufacturer_missing'
 
-export const REVIEW_REASONS: ReviewReason[] = ['identity_soft', 'identity_none', 'worse_version', 'rejected_source']
+export const REVIEW_REASONS: ReviewReason[] = [
+  'identity_soft',
+  'identity_none',
+  'worse_version',
+  'rejected_source',
+  'manufacturer_missing',
+]
 
 /** Krótka nazwa powodu (filtr, wiersz listy). */
 export const REVIEW_REASON_LABEL: Record<ReviewReason, string> = {
@@ -16,6 +27,7 @@ export const REVIEW_REASON_LABEL: Record<ReviewReason, string> = {
   identity_none: 'strona niepotwierdzona',
   worse_version: 'nowy opis gorszy od obecnego',
   rejected_source: 'odrzucona strona',
+  manufacturer_missing: 'brak strony producenta',
 }
 
 /** Wyjaśnienie powodu prostym językiem — co handlowiec ma sprawdzić. */
@@ -28,6 +40,8 @@ export const REVIEW_REASON_HINT: Record<ReviewReason, string> = {
     'Nowe pobranie dało opis słabiej potwierdzony niż obecny. Obecny opis zostaje na karcie, nowy czeka jako propozycja.',
   rejected_source:
     'Nowy opis pochodzi ze strony, którą ktoś wcześniej odrzucił. Obecny opis zostaje na karcie, nowy czeka jako propozycja.',
+  manufacturer_missing:
+    'Opis tego producenta bierzemy tylko z jego własnej strony, a program jej nie znalazł. Opisu ze sklepu program nie zapisuje — jeśli karta miała taki opis, został zdjęty z karty i jest w historii wersji („Przywróć”); zdjęcia i pliki zostały. Wskaż adres strony producenta albo opisz ręcznie.',
 }
 
 export function reviewReasonLabel(reason: string | null | undefined): string {
@@ -140,6 +154,8 @@ export type DescriptionVersion = {
   evidence: EvidenceEntry[]
   /** Odrzucony opis z karty blokuje swój adres dla automatu (zdejmuje to zatwierdzenie wersji z tego adresu). */
   url_blocked: boolean
+  /** Opis zdjęty z karty bez nowego (brak strony producenta, opis był ze sklepu) — wraca przez „Przywróć”. */
+  withdrawn: boolean
 }
 
 export type DescriptionVersionsResponse = {
