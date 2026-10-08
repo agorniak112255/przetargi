@@ -1727,13 +1727,46 @@ final class ProductPageFetcher
 
         $text = trim(implode("\n\n", array_filter($chunks)));
         $text = $this->cleanFetchedPageText($text, $skuNorm, $seoContext);
-        $norms = $this->extractNormBlocks($html);
-        if ($text === '' || $norms === '' || str_contains($text, $norms)) {
+        if ($text === '') {
             return $text;
         }
+        // Po czyszczeniu: krótki wiersz („Normy: EN 343”, „Indeks S56T0SM0”) nie przeszedłby progu długości akapitu.
+        foreach ([$this->extractNormBlocks($html), $this->extractReferenceField($html)] as $line) {
+            if ($line !== '' && ! str_contains($text, $line)) {
+                $text .= "\n\n".$line;
+            }
+        }
 
-        // Po czyszczeniu: krótki wiersz („Normy: EN 343”) nie przeszedłby progu długości akapitu.
-        return $text."\n\n".$norms;
+        return $text;
+    }
+
+    /**
+     * Pole kodu wyrobu z zakładki szczegółów PrestaShop (<div class="product-reference"><label>Indeks</label>
+     * <span>S56T0SM0</span></div>, securabc.com) jako wiersz „Indeks S56T0SM0”. Blok ma kilkanaście znaków, więc odpadał
+     * na progu długości bloku i akapitu — a pole „{index_label}: X” z treści strony producenta to kod, po którym
+     * SourceIdentity i CardCodeArbiter rozpoznają wyrób strony (inny rozmiar, inny wyrób, zestaw). Pierwszy niepusty
+     * blok (szablon securabc.com ma nad nim pusty blok o tej klasie) i tylko w postaci „etykieta + jeden kod z cyfrą”,
+     * dosłownie.
+     */
+    private function extractReferenceField(string $html): string
+    {
+        if (preg_match_all('#<(div|p|span)\b[^>]*\bclass=["\'][^"\']*\bproduct-reference\b[^"\']*["\'][^>]*>(.*?)</\1>#is', $html, $blocks, PREG_SET_ORDER) < 1) {
+            return '';
+        }
+        foreach ($blocks as $m) {
+            $line = trim((string) preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags(str_replace('<', ' <', (string) $m[2])), ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+            if ($line === '') {
+                continue;
+            }
+            if (preg_match('/^(\p{L}[\p{L}. ]{1,29}?)\s*:?\s+([A-Za-z0-9][A-Za-z0-9._\/-]{2,40})$/u', $line, $field) !== 1
+                || preg_match('/\d/', $field[2]) !== 1) {
+                return '';
+            }
+
+            return trim($field[1]).' '.$field[2];
+        }
+
+        return '';
     }
 
     /**

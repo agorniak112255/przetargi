@@ -72,6 +72,12 @@ final class ProductSearchIdentity
     ];
 
     /**
+     * Pierwsze słowo nazwy (po normalizeTypeText) z rodzajem spoza TYPE_STEMS — requiredTypeStems nie sięga wtedy po
+     * rodzaj z kategorii karty. „Filtr” tylko jako całe słowo w odmianie (nie „filtrujące”).
+     */
+    private const NAME_KIND_OUTSIDE_TYPES = '/^\s*(?:pochlaniacz|filtropochlaniacz|filtr(?:y|a|u|ow|em)?\b|filter\b|platek|platki|naglowi|zawor|pokryw|pierscien|uszczelk|wklad|adapter|torb|cartridge\b|valve\b)/u';
+
+    /**
      * „Chin strap Peltor GH4” to pasek podbródkowy do hełmu. Stem „chin strap” w kombinezonie zostaje
      * dla „4000-GR C/W HOOD, CHIN STRAP” (Ansell); ten rodzaj działa tylko, gdy nazwa od niego się zaczyna.
      *
@@ -5968,7 +5974,10 @@ final class ProductSearchIdentity
         }
         // Drzewo sklepu („RĘKAWICE…”) nie nadpisuje nazwy wyrobu
         // („Płatek zaworu wydechowego”) — inaczej indeks ma kartę, a potwierdzenie ją zjada.
-        if ($includeCategory && count($this->nameWords($product)) < 2) {
+        // Nazwa z własnym rodzajem spoza TYPE_STEMS też nie bierze rodzaju z kategorii: „Pochłaniacz 3021 A1”
+        // w kategorii pliku „…/Półmaski filtrujące FFP1” wymagał słowa „maska” i odrzucał opis pochłaniacza ze
+        // strony producenta (przegląd SECURA 08.10.2026).
+        if ($includeCategory && count($this->nameWords($product)) < 2 && ! $this->nameHasKindOutsideTypes($product)) {
             $fromCategory = $this->typeStemsInText((string) ($product->category ?? ''));
             if ($fromCategory !== []) {
                 return $fromCategory;
@@ -5979,6 +5988,15 @@ final class ProductSearchIdentity
         }
 
         return [];
+    }
+
+    /**
+     * Nazwa karty zaczyna się od słowa rodzaju wyrobu, którego nie ma w TYPE_STEMS (części i elementy oczyszczające:
+     * pochłaniacz, filtr, płatek, nagłowie, zawór, pokrywa, pierścień, uszczelka, wkład, adapter, torba).
+     */
+    private function nameHasKindOutsideTypes(Product $product): bool
+    {
+        return preg_match(self::NAME_KIND_OUTSIDE_TYPES, $this->normalizeTypeText((string) $product->name)) === 1;
     }
 
     /**

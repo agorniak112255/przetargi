@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Exceptions\EnrichmentCancelledException;
 use App\Exceptions\ManufacturerPageMissingException;
+use App\Models\CatalogPage;
 use App\Models\Product;
 use App\Models\ProductDescriptionVersion;
 use App\Models\ProductDocument;
@@ -16,8 +17,10 @@ use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Enrichment\CatalogSitemapIndexer;
 use App\Services\Enrichment\DescriptionVersionStore;
 use App\Services\Enrichment\HybridWebSearchService;
+use App\Services\Enrichment\ManufacturerCatalogPdf;
 use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductEnrichmentService;
@@ -29,6 +32,7 @@ use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -72,6 +76,14 @@ final class EnrichmentStageThreeFlowTest extends TestCase
     private const PDF_104 = 'https://pros.pl/modules/x13producttopdf/pdf.php?id_product=104';
 
     private const PDF_105 = 'https://pros.pl/modules/x13producttopdf/pdf.php?id_product=105';
+
+    private const SECURA_3000 = 'https://www.securabc.com/pl/polmaska-wielokrotnego-uzytku-secura/20-secura-3000.html';
+
+    private const SECURA_3000_LAK = 'https://www.securabc.com/pl/produkty/67-zestaw-secura-3000-lak-blister.html';
+
+    private const SECURA_SHOP = 'https://centrumelektronarzedzi.pl/pl/p/Polmaska-SECURA-3000-silikonowa-naglowie-jednoczesciowe-S56T0SM0/48399';
+
+    private const SECURA_SHOP_HIT = ['url' => self::SECURA_SHOP, 'title' => 'Półmaska SECURA 3000 S56T0SM0', 'snippet' => 'S56T0SM0'];
 
     /** @var list<string> */
     private array $prompts = [];
@@ -729,6 +741,165 @@ final class EnrichmentStageThreeFlowTest extends TestCase
     }
 
     // ── pomocnicze ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Przegląd SECURA 08.10.2026 (partia #502): w wynikach tylko sklep, strona półmaski securabc.com nie ma kodu w adresie
+     * („20-secura-3000.html”), a indeks dla „SECURA 3000” podawał zestawy. Druga próba bierze strony producenta z indeksu
+     * po słowach nazwy; pole „Indeks S56T0SM0” potwierdza wyrób (hard), strona zestawu z innym indeksem odpada.
+     */
+    public function test_strict_brand_takes_manufacturer_page_without_code_in_url_from_index(): void
+    {
+        $product = $this->card('S56T0SM0', 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', 'SECURA');
+        $this->indexSecuraPages();
+
+        $error = $this->runEnrichment($product, [self::SECURA_SHOP_HIT], $this->securaPages());
+
+        $this->assertNull($error, (string) $error?->getMessage());
+        $extraction = $this->extractionPrompt();
+        $this->assertStringContainsString(self::SECURA_3000, $extraction);
+        $this->assertStringNotContainsString('centrumelektronarzedzi', $extraction, 'sklep nie idzie do modelu');
+        $this->assertStringNotContainsString('67-zestaw', $extraction, 'strona zestawu nie idzie do modelu');
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status, (string) $product->enrichment_error);
+        $this->assertSame(self::SECURA_3000, $product->enrichment_payload['primary_source_url'] ?? null);
+        $this->assertSame('hard', $product->enrichment_payload['identity']['verdict'] ?? null);
+        $this->assertNull($product->review_reason);
+        $this->assertStringContainsString('strony producenta z indeksu', $this->trace($product));
+    }
+
+    /**
+     * Partia #502, S56T0SM0: wyszukiwarka dała stronę zestawu na securabc.com — liczyła się jako karta producenta w puli,
+     * więc druga próba nie ruszała. Pole „Indeks” zestawu (kod spoza katalogu marki) odsiewa ją teraz jako stronę innego
+     * wyrobu, a druga próba bierze stronę półmaski z indeksu.
+     */
+    public function test_manufacturer_kit_page_from_search_does_not_block_index_page(): void
+    {
+        $product = $this->card('S56T0SM0', 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', 'SECURA');
+        $this->indexSecuraPages();
+
+        $error = $this->runEnrichment(
+            $product,
+            [['url' => self::SECURA_3000_LAK, 'title' => 'Zestaw SECURA 3000 LAK blister', 'snippet' => 'SECURA 3000']],
+            $this->securaPages()
+        );
+
+        $this->assertNull($error, (string) $error?->getMessage());
+        $extraction = $this->extractionPrompt();
+        $this->assertStringContainsString(self::SECURA_3000, $extraction);
+        $this->assertStringNotContainsString('67-zestaw', $extraction, 'strona zestawu nie idzie do modelu');
+        $this->assertSame(self::SECURA_3000, $product->enrichment_payload['primary_source_url'] ?? null);
+        $this->assertSame('hard', $product->enrichment_payload['identity']['verdict'] ?? null);
+    }
+
+    /** Ten sam model w innym rozmiarze (S56T0SS0 przy „Indeks S56T0SM0”): strona wchodzi jako soft, karta do przeglądu. */
+    public function test_index_page_of_other_size_enters_as_soft(): void
+    {
+        $product = $this->card('S56T0SS0', 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', 'SECURA');
+        $this->indexSecuraPages();
+
+        $error = $this->runEnrichment($product, [self::SECURA_SHOP_HIT], $this->securaPages());
+
+        $this->assertNull($error, (string) $error?->getMessage());
+        $this->assertSame(self::SECURA_3000, $product->enrichment_payload['primary_source_url'] ?? null);
+        $this->assertSame('soft', $product->enrichment_payload['identity']['verdict'] ?? null);
+        $this->assertSame(Product::REVIEW_IDENTITY_SOFT, $product->review_reason);
+    }
+
+    /** W indeksie tylko strona zestawu (inny „Indeks”) — nie wchodzi, przebieg kończy się brakiem strony producenta. */
+    public function test_index_page_of_another_product_is_not_taken(): void
+    {
+        $product = $this->card('S56T0SM0', 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', 'SECURA');
+        $this->indexPages([self::SECURA_3000_LAK => 'Zestaw SECURA 3000 LAK blister']);
+
+        $error = $this->runEnrichment($product, [], $this->securaPages());
+
+        $this->assertInstanceOf(ManufacturerPageMissingException::class, $error);
+        $this->assertSame(Product::REVIEW_MANUFACTURER_MISSING, $product->review_reason);
+        $trace = $this->trace($product);
+        $this->assertStringContainsString('strony bez potwierdzenia wyrobu', $trace);
+        $this->assertStringContainsString('67-zestaw-secura-3000-lak-blister', $trace);
+    }
+
+    /**
+     * Bez wyników wyszukiwarki, z blokiem katalogu PDF producenta (kilka wierszy pozycji katalogu): druga próba bierze stronę
+     * producenta z indeksu i idzie ona do modelu obok bloku — półmaski SECURA dostawały same 120 znaków z katalogu
+     * i odpadały jako „za krótki opis”.
+     */
+    public function test_catalog_block_does_not_stop_second_try_on_manufacturer_hosts(): void
+    {
+        Storage::fake('local');
+        $catalog = 'https://www.securabc.com/img/cms/Katalog%202026%20PL_web.pdf';
+        // blok pozycji z opisem ponad 400 znaków — dawniej liczył się jak karta producenta (officialCardInPool)
+        Storage::disk('local')->put(
+            ManufacturerCatalogPdf::CACHE_DIR.'/'.sha1(mb_strtolower($catalog)).'.txt',
+            'PÓŁMASKI
+
+S56T0SM0 Półmaska SECURA 3000 z silikonową częścią twarzową i jednoczęściowym nagłowiem, rozmiar M Szt
+'
+                .str_repeat('Półmaska wielokrotnego użytku chroni układ oddechowy przed aerozolami, parami i gazami po skompletowaniu z elementami oczyszczającymi. ', 4)
+                .'
+
+S56T0SL0 Półmaska SECURA 3000 rozmiar L Szt
+'
+        );
+        $product = $this->card('S56T0SM0', 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)', 'SECURA');
+        $this->indexSecuraPages();
+
+        $error = $this->runEnrichment($product, [], $this->securaPages());
+
+        $this->assertNull($error, (string) $error?->getMessage());
+        $extraction = $this->extractionPrompt();
+        $this->assertStringContainsString(self::SECURA_3000, $extraction, 'strona producenta z drugiej próby');
+        $this->assertStringContainsString('strony producenta z indeksu', $this->trace($product));
+        $this->assertSame('hard', $product->enrichment_payload['identity']['verdict'] ?? null);
+    }
+
+    private function indexSecuraPages(): void
+    {
+        $this->indexPages([
+            self::SECURA_3000_LAK => 'Zestaw SECURA 3000 LAK blister',
+            self::SECURA_3000 => 'SECURA 3000',
+        ]);
+    }
+
+    /** @param  array<string, string>  $pages  adres => tytuł */
+    private function indexPages(array $pages): void
+    {
+        $now = now();
+        $rows = [];
+        foreach ($pages as $url => $title) {
+            $rows[] = [
+                'host' => 'securabc.com', 'manufacturer' => null, 'url_hash' => CatalogPage::hashFor($url),
+                'url' => $url, 'title' => $title, 'haystack' => mb_strtolower($url.' '.$title), 'last_seen_at' => $now,
+                'created_at' => $now, 'updated_at' => $now,
+            ];
+        }
+        DB::table('catalog_pages')->insert($rows);
+        app(CatalogSitemapIndexer::class)->storeTokens(array_column($rows, 'url_hash'));
+    }
+
+    /** @return array<string, string> */
+    private function securaPages(): array
+    {
+        $mask = 'Półmaska SECURA 3000 po skompletowaniu z odpowiednimi elementami oczyszczającymi stanowi sprzęt ochronny układu '
+            .'oddechowego. '.str_repeat('Półmaska z silikonową częścią twarzową, dwoma zaworami wdechowymi ze złączami bagnetowymi, zaworem wydechowym i nagłowiem tekstylnym. ', 5);
+
+        return [
+            self::SECURA_SHOP => $this->html('Półmaska SECURA 3000 S56T0SM0', 'Półmaska SECURA 3000 S56T0SM0 w sklepie. '.str_repeat('Półmaska wielokrotnego użytku z silikonu, rozmiar M. ', 8)),
+            self::SECURA_3000 => $this->securaPage('SECURA 3000', 'S56T0SM0', $mask),
+            self::SECURA_3000_LAK => $this->securaPage('Zestaw SECURA 3000 LAK blister', 'S5703LAK0', 'Zestaw lakierniczy SECURA 3000 LAK w blistrze: półmaska, pochłaniacze i filtry. '.str_repeat('Zestaw do prac lakierniczych z półmaską i elementami oczyszczającymi. ', 6)),
+        ];
+    }
+
+    /** Strona securabc.com (PrestaShop): kod wyrobu tylko w zakładce szczegółów „Indeks”. */
+    private function securaPage(string $title, string $index, string $text): string
+    {
+        return str_replace(
+            '</body>',
+            '<div class="tab-pane" id="product-details" role="tabpanel"><div class="product-reference">'
+                .'<label class="label">Indeks </label><span>'.$index.'</span></div></div></body>',
+            $this->html($title, $text)
+        );
+    }
 
     /** @param  array<string, mixed>  $attributes */
     private function card(string $sku, string $name, string $manufacturer, array $attributes = []): Product

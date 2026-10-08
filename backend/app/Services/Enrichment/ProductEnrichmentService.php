@@ -77,6 +77,12 @@ final class ProductEnrichmentService
     private const MFR_CARD_MIN_CHARS = 400;
 
     /**
+     * Ile stron hostów producenta z indeksu pobiera druga próba (manufacturerIndexPages) — strona wyrobu bywa za kopią
+     * w drugim języku i stronami zestawów tego modelu.
+     */
+    private const MANUFACTURER_INDEX_FETCH = 6;
+
+    /**
      * Ile plików PDF zostaje przy karcie. Przetarg pyta o kartę produktu, deklarację zgodności,
      * instrukcję, kartę gwarancyjną i tabelę rozmiarów — przy trzech część z nich nie mieściła się
      * w limicie. Limit steruje też budżetem czytania PDF-ów, więc nie podnosimy go wyżej.
@@ -1235,10 +1241,20 @@ final class ProductEnrichmentService
             $pageSnippets = $this->withCatalogPages($pageSnippets, $catalogPages, $product, $mfrDomains);
             // Etap 3 (W3): marka „tylko od producenta” bez jego karty w puli — druga próba na hostach producenta z innymi
             // zapisami kodu; znaleziona strona idzie przed sklepy, a manufacturerOnlyPages zostawia wtedy tylko ją.
-            if ($this->identity->usesManufacturerSourcesOnly($product) && ! $this->manufacturerCardInPool($product, $pageSnippets)) {
+            // Karta producenta w puli musi potwierdzać ten wyrób (przegląd SECURA 08.10.2026, partia #502): strona zestawu
+            // „Zestaw SECURA 3000 E” z securabc.com liczyła się jako karta i druga próba nie ruszała, a blok katalogu PDF
+            // to kilka wierszy pozycji, nie karta. Strony producenta znalezione drugą próbą wypierają z puli jego strony
+            // bez takiego potwierdzenia.
+            if ($this->identity->usesManufacturerSourcesOnly($product) && ! $this->confirmedManufacturerCardInPool($product, $pageSnippets)) {
                 $manufacturerRetry ??= $this->retryManufacturerHosts($product);
                 if ($manufacturerRetry !== []) {
-                    $pageSnippets = $this->mergePageSnippets($manufacturerRetry, $pageSnippets);
+                    $pageSnippets = $this->mergePageSnippets(
+                        $manufacturerRetry,
+                        array_values(array_filter(
+                            $pageSnippets,
+                            fn (array $page): bool => ! $this->unconfirmedManufacturerCard($product, $page)
+                        ))
+                    );
                     if ($mfrDomains === []) {
                         $mfrDomains = $this->manufacturers->domainsFor($product);
                     }
@@ -5790,6 +5806,10 @@ final class ProductEnrichmentService
         if ($profile === null || $profile->hosts === []) {
             return [];
         }
+        $indexed = $this->manufacturerIndexPages($product, $profile);
+        if ($indexed !== []) {
+            return $indexed;
+        }
         $forms = app(ManufacturerCodeForms::class)->alternatives($product, $profile);
         if ($forms === []) {
             $this->attemptLog()->add('search', 'druga próba na stronach producenta — brak innych zapisów kodu '.$product->sku);
@@ -5856,6 +5876,64 @@ final class ProductEnrichmentService
         }
 
         return [];
+    }
+
+    /**
+     * Druga próba, krok pierwszy (przegląd SECURA 08.10.2026): strony hostów producenta z indeksu wybrane po słowach
+     * nazwy karty, także bez kodu w adresie (CatalogIndexSearch::onManufacturerHosts: securabc.com „20-secura-3000.html”
+     * dla S56T0SM0, „36-pochlaniacz-a1-….html” dla S565A102). Pobrane strony muszą potwierdzić wyrób treścią na prawdziwej
+     * karcie: hard (kod w polu „Indeks”, w mikrodanych) albo soft z kluczem karty (ten model w innym rozmiarze — pole
+     * „Indeks S56T0SM0” przy S56T0SS0); soft bez klucza (sama marka z nazwą) nie wystarcza. Strona innej karty marki albo
+     * ze sprzeczną cechą bezpieczeństwa odpada (withoutForeignOrConflictingPages). Najpierw strony hard, bez nich soft.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function manufacturerIndexPages(Product $product, ManufacturerProfile $profile): array
+    {
+        $label = 'druga próba: strony producenta z indeksu (także bez kodu w adresie)';
+        $hits = array_values(array_filter(
+            $this->withoutRejectedSources(app(CatalogIndexSearch::class)->onManufacturerHosts($product, $profile->hosts), $product),
+            static fn (mixed $row): bool => is_array($row) && $profile->ownsUrl((string) ($row['url'] ?? ''))
+        ));
+        if ($hits === []) {
+            $this->attemptLog()->add('search', $label.' — brak stron w indeksie');
+
+            return [];
+        }
+        $fetched = $this->pages->fetch($hits, (string) $product->sku, self::MANUFACTURER_INDEX_FETCH, $profile->hosts, $product);
+        $hard = [];
+        $soft = [];
+        $skipped = [];
+        $why = [];
+        foreach ($fetched['pages'] as $page) {
+            $url = is_array($page) ? (string) ($page['url'] ?? '') : '';
+            if ($url === '' || ! $profile->ownsUrl($url)) {
+                continue;
+            }
+            $verdict = $this->sourceIdentity()->judgePage($product, $page, $profile);
+            $level = $verdict['verdict'] ?? null;
+            if ($level !== SourceIdentity::HARD && ($level !== SourceIdentity::SOFT || ($verdict['key_type'] ?? null) === null)) {
+                $skipped[] = $url;
+                $why[] = (string) ($verdict['reason'] ?? '');
+
+                continue;
+            }
+            if ($this->withoutForeignOrConflictingPages($product, [$page]) === []) {
+                continue;
+            }
+            if ($level === SourceIdentity::HARD) {
+                $hard[] = $page;
+            } else {
+                $soft[] = $page;
+            }
+        }
+        if ($skipped !== []) {
+            $this->attemptLog()->add('page', $label.' — strony bez potwierdzenia wyrobu', urls: $skipped, why: $why);
+        }
+        $found = $hard !== [] ? $hard : $soft;
+        $this->attemptLog()->add('search', $label.' — stron producenta: '.count($found), urls: array_column($found, 'url'));
+
+        return $found;
     }
 
     /**
@@ -6604,6 +6682,76 @@ final class ProductEnrichmentService
         }
 
         return false;
+    }
+
+    /**
+     * Druga próba marki „tylko od producenta” nie jest potrzebna: w puli jest adres wskazany przez człowieka albo strona
+     * hostów producenta z treścią (jak officialCardInPool), która potwierdza ten wyrób — SourceIdentity: hard albo soft
+     * z kluczem karty (ten model w innym rozmiarze, inny zapis kodu). Blok katalogu PDF się nie liczy. Marka bez profilu
+     * (bez hostów do drugiej próby) — jak dotąd, każda strona producenta z treścią.
+     *
+     * @param  list<array<string, mixed>>  $pages
+     */
+    private function confirmedManufacturerCardInPool(Product $product, array $pages): bool
+    {
+        if ($this->trustedManufacturerCardInPool($product, $pages)) {
+            return true;
+        }
+        $profile = $this->profiles()->for($product);
+        if ($profile === null || $profile->hosts === []) {
+            return $this->manufacturerCardInPool($product, $pages);
+        }
+        foreach ($pages as $page) {
+            if ($this->isManufacturerHtmlCard($product, $page) && $this->confirmsCard($product, $page, $profile)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Strona hostów producenta z treścią, która nie potwierdza wyrobu (confirmedManufacturerCardInPool) — przy stronach
+     * z drugiej próby wypada z puli. Adres wskazany przez człowieka, blok katalogu PDF i sklepy zostają.
+     *
+     * @param  array<string, mixed>  $page
+     */
+    private function unconfirmedManufacturerCard(Product $product, array $page): bool
+    {
+        $profile = $this->profiles()->for($product);
+        $url = (string) ($page['url'] ?? '');
+
+        return $profile !== null && $profile->hosts !== [] && ! $product->isTrustedShopUrl($url)
+            && $this->isManufacturerHtmlCard($product, $page) && ! $this->confirmsCard($product, $page, $profile);
+    }
+
+    /** @param  array<string, mixed>  $page */
+    private function isManufacturerHtmlCard(Product $product, array $page): bool
+    {
+        $url = (string) ($page['url'] ?? '');
+
+        return $url !== '' && ! $this->catalogPdf()->isConfiguredCatalogUrl($url) && $this->officialCardInPool($product, [$page]);
+    }
+
+    /**
+     * Werdykt hard albo soft z kluczem karty. Tytuł, mikrodane i surowy tekst strony z dziennika przebiegu — pula po
+     * scaleniu (mergePageSnippets) ich nie niesie, a kod bywa tylko w tytule (pros.pl), jak w withoutForeignOrConflictingPages.
+     *
+     * @param  array<string, mixed>  $page
+     */
+    private function confirmsCard(Product $product, array $page, ManufacturerProfile $profile): bool
+    {
+        $key = Product::normalizeShopUrl((string) ($page['url'] ?? ''));
+        foreach ($this->pages->runLog() as $logged) {
+            if (is_array($logged) && Product::normalizeShopUrl((string) ($logged['url'] ?? '')) === $key) {
+                $page = [...$page, ...$logged];
+                break;
+            }
+        }
+        $verdict = $this->sourceIdentity()->judgePage($product, $page, $profile);
+
+        return ($verdict['verdict'] ?? null) === SourceIdentity::HARD
+            || (($verdict['verdict'] ?? null) === SourceIdentity::SOFT && ($verdict['key_type'] ?? null) !== null);
     }
 
     /**

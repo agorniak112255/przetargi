@@ -442,6 +442,30 @@ final class ProductSearchIdentityTest extends TestCase
         ));
     }
 
+    /**
+     * Przegląd SECURA 08.10.2026: „Pochłaniacz 3021 A1” w kategorii pliku „…/Półmaski filtrujące FFP1” wymagał słowa
+     * „maska” — opis pochłaniacza ze strony producenta odpadał. Rodzaj z nazwy spoza TYPE_STEMS zamyka drogę do kategorii;
+     * nazwa bez rodzaju (sam model, sam numer) dalej bierze rodzaj z kategorii.
+     */
+    public function test_name_with_own_kind_does_not_take_type_from_file_category(): void
+    {
+        $id = new ProductSearchIdentity;
+        $category = 'Sklep - kategorie / Ochrona dróg oddechowych / Półmaski przeciwpyłowe i przeciwwirusowe / Półmaski filtrujące FFP1';
+        $text = 'pochłaniacz 3021 a1 to filtr przeznaczony do ochrony układu oddechowego przed parami i gazami organicznymi';
+        foreach (['Pochłaniacz 3021 A1', 'Filtr 3000.02 P2', 'Nagłowie S5621200', 'Płatki 3000', 'Torba T596T'] as $name) {
+            $product = new Product(['sku' => 'X1', 'name' => $name, 'manufacturer' => 'SECURA', 'category' => $category]);
+            $this->assertTrue($id->hayHasRequiredTypeFromName($text, $product), $name);
+        }
+
+        // bez rodzaju w nazwie kategoria nadal wymaga maski
+        $model = new Product(['sku' => 'X2', 'name' => 'NEOSEC 3000', 'manufacturer' => 'SECURA', 'category' => $category]);
+        $this->assertFalse($id->hayHasRequiredTypeFromName($text, $model));
+        $this->assertTrue($id->hayHasRequiredTypeFromName('neosec 3000 maska filtrująca', $model));
+        // „filtrujące” to nie rodzaj „filtr” — półmaska z nazwy wymaga dalej maski
+        $mask = new Product(['sku' => 'X3', 'name' => 'Półmaska filtrująca FFP2', 'manufacturer' => 'SECURA', 'category' => $category]);
+        $this->assertFalse($id->hayHasRequiredTypeFromName($text, $mask));
+    }
+
     public function test_distinctive_name_confirms_cape_without_sku_in_url(): void
     {
         $id = new ProductSearchIdentity;

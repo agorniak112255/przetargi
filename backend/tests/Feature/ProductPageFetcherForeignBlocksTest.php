@@ -295,6 +295,39 @@ final class ProductPageFetcherForeignBlocksTest extends TestCase
     }
 
     /**
+     * securabc.com (przegląd SECURA 08.10.2026): kod wyrobu stoi tylko w zakładce szczegółów PrestaShop
+     * („<div class="product-reference"><label>Indeks </label><span>S56T0SM0</span>”), a nad nią szablon ma pusty blok tej
+     * klasy. Kilkanaście znaków odpadało na progach długości, więc pole „Indeks” nie docierało do SourceIdentity.
+     */
+    public function test_prestashop_reference_field_reaches_page_text(): void
+    {
+        $url = 'https://www.securabc.com/pl/polmaska-wielokrotnego-uzytku-secura/20-secura-3000.html';
+        $html = '<!doctype html><html><head><meta charset="utf-8"><title>SECURA 3000</title></head><body>'
+            .'<div class="p-reference"><div class="product-reference">  </div></div>'
+            .'<h1>SECURA 3000</h1>'
+            .'<div class="product-description"><p>Półmaska SECURA 3000 po skompletowaniu z odpowiednimi elementami oczyszczającymi '
+            .'stanowi sprzęt ochronny układu oddechowego chroniący przed aerozolami, parami i gazami.</p>'
+            .'<p>Półmaska SECURA 3000 składa się z korpusu, dwóch zaworów wdechowych ze złączami bagnetowymi, zaworu wydechowego oraz nagłowia.</p>'
+            .'<p>Półmaska SECURA 3000 wykonana jest z najwyższej jakości materiałów z silikonową częścią twarzową. Nowoczesny kształt '
+            .'i niewielka liczba elementów zapewnia łatwe użytkowanie i czyszczenie półmaski. Nagłowie tekstylne jednoczęściowe łatwe '
+            .'do zakładania i regulacji zapewnia maksymalny komfort pracy w najtrudniejszych warunkach. Złącza bagnetowe umożliwiają '
+            .'szybkie i pewne mocowanie filtrów, pochłaniaczy i filtropochłaniaczy.</p></div>'
+            .'<div class="tab-pane fade" id="product-details" role="tabpanel">'
+            .'<div class="product-reference"><label class="label">Indeks </label><span>S56T0SM0</span></div></div>'
+            .'</body></html>';
+
+        $page = $this->fetchOneHtml($url, $html, new Product([
+            'sku' => 'S56T0SM0',
+            'name' => 'Półmaska SECURA 3000 (nagłowie jednoczęściowe)',
+            'manufacturer' => 'SECURA',
+        ]));
+
+        $this->assertStringContainsString('Indeks S56T0SM0', $page['text']);
+        $this->assertStringContainsString('Półmaska SECURA 3000 składa się z korpusu', $page['text']);
+        $this->assertSame(1, substr_count($page['text'], 'S56T0SM0'), 'pole raz, bez powtórzeń');
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function fetchOne(string $url, string $fixture, Product $product): array

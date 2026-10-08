@@ -7,6 +7,7 @@ namespace App\Services\Enrichment;
 use App\Models\CatalogPage;
 use App\Models\ManufacturerSite;
 use App\Models\Product;
+use App\Support\ShopEntryId;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -105,6 +106,155 @@ final class CatalogIndexSearch
             // filtr hostów dotyczy tylko tego wywołania — usługa jest współdzielona z tym samym przebiegiem
             $this->onlyHosts = null;
         }
+    }
+
+    /**
+     * Strony producenta z indeksu dla karty, także bez kodu w adresie (druga próba marki „tylko od producenta”, przegląd
+     * SECURA 08.10.2026): securabc.com ma „/pl/polmaska-wielokrotnego-uzytku-secura/20-secura-3000.html” dla
+     * S56T0SM0 i „/pl/produkty/76-torba-do-rekawic.html” dla T596T — findFor szuka kodu albo marki w adresie, więc
+     * podawał zestawy „secura-3000-lak” albo nic. Tu host jest marką: kandydatem jest każda strona tych hostów ze słowem
+     * z nazwy karty, kodem albo EAN, wynik to suma wag rzadkości trafionych słów, a przy remisie wygrywa adres z mniejszą
+     * liczbą słów spoza nazwy karty („20-secura-3000” przed „67-zestaw-secura-3000-lak-blister”). Bez bramek tożsamości:
+     * wyrób strony rozstrzyga potem jej treść (SourceIdentity: pole „Indeks”, mikrodane).
+     *
+     * @param  list<string>  $hosts
+     * @param  list<string>  $exceptUrls
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function onManufacturerHosts(Product $product, array $hosts, array $exceptUrls = []): array
+    {
+        $this->rejections = [];
+        $this->except = [];
+        foreach ($exceptUrls as $url) {
+            $key = mb_strtolower(trim((string) $url));
+            if ($key !== '') {
+                $this->except[$key] = true;
+                $this->except[$this->identity->localeInsensitivePageKey($key)] = true;
+            }
+        }
+        $bare = [];
+        foreach ($hosts as $host) {
+            $normalized = ManufacturerSite::normalizeHost((string) $host);
+            if ($normalized !== '') {
+                $bare[$normalized] = true;
+            }
+        }
+        $tokens = $this->manufacturerHostTokens($product);
+        if ($bare === [] || $tokens === []) {
+            return [];
+        }
+        $this->onlyHosts = array_keys($bare);
+        try {
+            $weights = $this->tokenWeights($tokens);
+            $scores = $this->scoredPageIds(DB::table('catalog_page_tokens as t')->whereIn('t.token', array_map('strval', array_keys($weights))), $weights);
+            if ($scores === []) {
+                return [];
+            }
+            // słowa marki też są „swoje” — „secura” w adresie strony półmaski to nie dopisek
+            $own = array_fill_keys(array_merge($tokens, $this->brandWords($product)), true);
+            $ranked = [];
+            foreach (array_chunk(array_keys($scores), self::SQL_LIMIT) as $chunk) {
+                foreach (CatalogPage::query()->whereIn('id', $chunk)->get(['id', 'url', 'title', 'haystack']) as $page) {
+                    $url = (string) $page->url;
+                    if ($url === '' || $this->isExcluded($url, $product) || ! $this->urlOnAllowedHost($url)
+                        || $this->isCatalogNoiseUrl($url) || $this->identity->looksLikeNonProductCardUrl($url)) {
+                        continue;
+                    }
+                    $ranked[] = [
+                        'id' => (int) $page->id,
+                        'score' => $scores[(int) $page->id] ?? 0,
+                        'extra' => $this->slugWordsOutside($url, $own),
+                        'row' => ['url' => $url, 'title' => (string) ($page->title ?? ''), 'snippet' => (string) ($page->haystack ?? '')],
+                    ];
+                }
+            }
+            usort($ranked, static fn (array $a, array $b): int => [$b['score'], $a['extra'], $a['id']] <=> [$a['score'], $b['extra'], $b['id']]);
+            $out = [];
+            $seenPages = [];
+            foreach ($ranked as $candidate) {
+                $url = $candidate['row']['url'];
+                $pageKey = $this->identity->localeInsensitivePageKey($url);
+                if (isset($seenPages[$pageKey])) {
+                    // kopia w innym języku: zostaje adres w lepszym języku, miejsce w kolejności bez zmian
+                    if ($this->localeRank($url) < $this->localeRank($out[$seenPages[$pageKey]]['url'])) {
+                        $out[$seenPages[$pageKey]] = $candidate['row'];
+                    }
+
+                    continue;
+                }
+                $seenPages[$pageKey] = count($out);
+                $out[] = $candidate['row'];
+                if (count($out) >= self::MAX_HITS) {
+                    break;
+                }
+            }
+
+            return $out;
+        } finally {
+            $this->onlyHosts = null;
+        }
+    }
+
+    /**
+     * Słowa nazwy karty tak, jak tnie je indeks (CatalogSitemapIndexer::tokensFor: „a1”, „3021”, „secura3000”),
+     * kody karty i EAN — bez słów marki i łączników („do”, „z”, „dla”). Marka nic nie mówi na jej własnym hoście.
+     *
+     * @return list<string>
+     */
+    private function manufacturerHostTokens(Product $product): array
+    {
+        $skip = array_fill_keys(['do', 'z', 'ze', 'na', 'dla', 'i', 'w', 'we', 'od', 'po', 'of', 'for', 'and', 'the', 'with', 'pl', 'en', 'html', 'www'], true);
+        foreach ($this->brandWords($product) as $word) {
+            $skip[$word] = true;
+        }
+        $raw = $this->indexer->tokensFor('', (string) $product->name);
+        foreach ($this->codes($product) as $code) {
+            $raw[] = $code;
+        }
+        $ean = preg_replace('/\D+/', '', (string) ($product->ean ?? '')) ?? '';
+        if (in_array(strlen($ean), [8, 12, 13, 14], true)) {
+            $raw[] = $ean;
+        }
+        $out = [];
+        foreach ($raw as $token) {
+            $token = mb_strtolower(trim((string) $token));
+            if (mb_strlen($token) < 2 || isset($skip[$token]) || mb_strlen($token) > 64) {
+                continue;
+            }
+            $out[$token] = true;
+        }
+
+        // „3000”, „5907553323974” jako klucze tablicy PHP zamienia na int — w IN na MariaDB liczba przy VARCHAR wyłącza indeks
+        return array_map('strval', array_keys($out));
+    }
+
+    /** @return list<string> słowa krótkiej nazwy marki karty, małymi literami bez polskich znaków */
+    private function brandWords(Product $product): array
+    {
+        $words = preg_split('/[^a-z0-9]+/u', mb_strtolower(Str::ascii($this->identity->shortBrand((string) $product->manufacturer)))) ?: [];
+
+        return array_values(array_filter($words, static fn (string $w): bool => $w !== ''));
+    }
+
+    /**
+     * Ile słów nazwy strony (ostatni człon adresu bez numeru wpisu sklepu i rozszerzenia) nie należy do słów karty —
+     * rozstrzyga remis wyniku na korzyść strony samego wyrobu przed stroną zestawu albo wariantu z dopiskami.
+     *
+     * @param  array<string, true>  $own
+     */
+    private function slugWordsOutside(string $url, array $own): int
+    {
+        $path = (string) (parse_url(ShopEntryId::strip($url), PHP_URL_PATH) ?? '');
+        $segments = array_values(array_filter(explode('/', $path), static fn (string $s): bool => trim($s) !== ''));
+        $slug = (string) preg_replace('/\.[a-z0-9]{2,5}$/i', '', (string) end($segments));
+        $extra = 0;
+        foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower(Str::ascii(urldecode($slug)))) ?: [] as $word) {
+            if ($word !== '' && ! isset($own[$word])) {
+                $extra++;
+            }
+        }
+
+        return $extra;
     }
 
     /**
