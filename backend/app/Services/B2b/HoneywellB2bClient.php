@@ -586,7 +586,7 @@ final class HoneywellB2bClient
         }
         $tooLarge = static function (int $bytes) use ($url): void {
             if ($bytes > self::FILE_MAX_BYTES) {
-                throw new RuntimeException(self::TOO_LARGE.(int) (self::FILE_MAX_BYTES / 1_000_000).' MB pominięty: '.$url);
+                throw new B2bFileTooLargeException(self::TOO_LARGE.(int) (self::FILE_MAX_BYTES / 1_000_000).' MB pominięty: '.$url);
             }
         };
         $response = $this->send(fn (PendingRequest $http): Response => $this->browser($http)->withOptions([
@@ -1083,11 +1083,13 @@ final class HoneywellB2bClient
                     ],
                 ]));
             } catch (ConnectionException $e) {
-                // przerwane pobranie za dużego pliku (Laravel opakowuje wyjątek z on_headers/progress) — bez ponawiania
-                if (str_contains($e->getMessage(), self::TOO_LARGE)) {
+                // przerwane pobranie za dużego pliku — komunikat jest ogólny („…during the on_headers event”), nasz
+                // wyjątek leży głębiej w łańcuchu; bez ponawiania i bez liczenia do serii błędów
+                $tooLarge = B2bFileTooLargeException::in($e);
+                if ($tooLarge !== null) {
                     $this->consecutiveFailures = 0;
 
-                    throw new RuntimeException(self::TOO_LARGE.(int) (self::FILE_MAX_BYTES / 1_000_000).' MB pominięty', 0, $e);
+                    throw new RuntimeException($tooLarge->getMessage(), 0, $e);
                 }
                 // przekierowanie poza hosty Honeywell (on_redirect) — bez ponawiania
                 if (preg_match('/'.preg_quote(self::FOREIGN_REDIRECT, '/').': \S+/u', $e->getMessage(), $m) === 1) {

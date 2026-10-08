@@ -403,7 +403,7 @@ final class MmmB2bClient
         // 22.09.2026). Nagłówek Content-Length albo bajty w trakcie pobierania ponad limit = przerwane pobranie.
         $tooLarge = static function (int $bytes) use ($url): void {
             if ($bytes > self::FILE_MAX_BYTES) {
-                throw new RuntimeException('plik ponad '.(int) (self::FILE_MAX_BYTES / 1_000_000).' MB pominięty: '.$url);
+                throw new B2bFileTooLargeException('plik ponad '.(int) (self::FILE_MAX_BYTES / 1_000_000).' MB pominięty: '.$url);
             }
         };
         $response = $this->send(fn (PendingRequest $http): Response => $this->browser($http)->withOptions([
@@ -918,6 +918,14 @@ final class MmmB2bClient
                     'allow_redirects' => ['max' => 10],
                 ]));
             } catch (ConnectionException $e) {
+                // przerwane pobranie za dużego pliku (nagłówek Content-Length) to nie brak połączenia — nie liczy się
+                // do serii błędów; komunikat Guzzle jest ogólny, nasz wyjątek leży głębiej w łańcuchu
+                $tooLarge = B2bFileTooLargeException::in($e);
+                if ($tooLarge !== null) {
+                    $this->consecutiveFailures = 0;
+
+                    throw new RuntimeException($tooLarge->getMessage(), 0, $e);
+                }
                 $error = 'brak połączenia ('.$e->getMessage().')';
             }
 

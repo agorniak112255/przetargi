@@ -35,7 +35,9 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
+use Tests\Support\OversizedFileDownload;
 use Tests\TestCase;
+use Throwable;
 
 /**
  * Łącznik order.3m.com na atrapie sklepu i B2C (Http::fake). Układ odpowiedzi odwzorowuje witrynę z 22.09.2026:
@@ -609,6 +611,40 @@ final class MmmConnectorTest extends TestCase
         // łączy tylko kolory — rozmiary 3M (6200 S/M/L) zostają osobnymi kartami, więc „Łączenie kart” musi móc je
         // zaproponować jako rozmiary (CardMatchFinder, warunek 3 sygnału)
         $this->assertNotInstanceOf(B2bGroupsSizes::class, $connector);
+    }
+
+    public function test_file_over_the_limit_is_skipped_and_never_counts_as_a_connection_error(): void
+    {
+        // ten sam błąd co u Honeywella 08.10.2026: wyjątek limitu z on_headers dochodził jako „brak połączenia
+        // (An error was encountered during the on_headers event)” i liczył się do serii, po której przebieg staje
+        $withLength = self::MEDIA.'9000001O/synth-user-instruction.pdf';
+        $withoutLength = self::MEDIA.'9000002O/synth-user-instruction-chunked.pdf';
+        $requests = 0;
+        Http::fake(static function (Request $request, array $options) use ($withLength, $withoutLength, &$requests) {
+            $requests++;
+            if (in_array($request->url(), [$withLength, $withoutLength], true)) {
+                return OversizedFileDownload::abortLikeCurl($request, $options, $request->url() === $withLength);
+            }
+
+            return Http::response('%PDF-1.4 synth', 200, ['Content-Type' => 'application/pdf']);
+        });
+        $client = $this->client();
+
+        // więcej niż próg serii błędów (20)
+        foreach (array_merge(array_fill(0, 22, $withLength), [$withoutLength]) as $url) {
+            $thrown = null;
+            try {
+                $client->fileBytes($url);
+            } catch (Throwable $e) {
+                $thrown = $e;
+            }
+            $this->assertNotNull($thrown, $url);
+            $this->assertNotInstanceOf(B2bFatalException::class, $thrown, $thrown->getMessage());
+            $this->assertSame('plik ponad 15 MB pominięty: '.$url, $thrown->getMessage());
+        }
+
+        $this->assertSame(23, $requests);
+        $this->assertSame('application/pdf', $client->fileBytes(self::MEDIA.'9000003O/synth-datasheet.pdf')['mime']);
     }
 
     public function test_colour_variant_key_reads_the_colour_and_the_code_suffix_from_the_list_name(): void

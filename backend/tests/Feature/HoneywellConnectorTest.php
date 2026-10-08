@@ -36,7 +36,9 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
+use Tests\Support\OversizedFileDownload;
 use Tests\TestCase;
+use Throwable;
 
 /**
  * Łącznik automation.honeywell.com na atrapie sklepu (Http::fake). Kształt odpowiedzi odwzorowuje sklep z 30.09.2026:
@@ -784,6 +786,44 @@ final class HoneywellConnectorTest extends TestCase
         } catch (RuntimeException $e) {
             $this->assertStringNotContainsString('tajne-haslo-123', $e->getMessage());
         }
+    }
+
+    public function test_file_over_the_limit_is_skipped_at_once_and_never_counts_as_a_connection_error(): void
+    {
+        // przebieg 08.10.2026: instrukcja kasków NSB ponad 15 MB przy 10 kartach × (karta techniczna + zapis pliku)
+        // = 20 „brak połączenia (…on_headers event)”, każdy po 3 ponowieniach (72 s), i przerwany przebieg
+        $withLength = self::EDAM.'synth-user-instruction-eu.pdf';
+        $withoutLength = self::EDAM.'synth-user-instruction-chunked.pdf';
+        $requests = 0;
+        Http::fake(static function (Request $request, array $options) use ($withLength, $withoutLength, &$requests) {
+            $requests++;
+            if (in_array($request->url(), [$withLength, $withoutLength], true)) {
+                return OversizedFileDownload::abortLikeCurl($request, $options, $request->url() === $withLength);
+            }
+
+            return Http::response('%PDF-1.4 synth', 200, ['Content-Type' => 'application/pdf']);
+        });
+        $pauses = [];
+        $client = new HoneywellB2bClient(self::EMAIL, self::PASSWORD, 0, static function (int $ms) use (&$pauses): void {
+            $pauses[] = $ms;
+        });
+
+        // więcej niż próg serii błędów (20)
+        foreach (array_merge(array_fill(0, 22, $withLength), [$withoutLength]) as $url) {
+            $thrown = null;
+            try {
+                $client->fileBytes($url);
+            } catch (Throwable $e) {
+                $thrown = $e;
+            }
+            $this->assertNotNull($thrown, $url);
+            $this->assertNotInstanceOf(B2bFatalException::class, $thrown, $thrown->getMessage());
+            $this->assertSame('plik ponad 15 MB pominięty: '.$url, $thrown->getMessage());
+        }
+
+        $this->assertSame([], $pauses, 'za duży plik nie jest ponawiany');
+        $this->assertSame(23, $requests);
+        $this->assertSame('application/pdf', $client->fileBytes(self::EDAM.'synth-datasheet.pdf')['mime']);
     }
 
     public function test_registry_detects_honeywell_by_host_as_the_manufacturer_site(): void
