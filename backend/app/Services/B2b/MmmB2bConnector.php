@@ -29,10 +29,15 @@ use Throwable;
  * Opis, parametry, zdjęcia i dokumenty z karty wyrobu wyszukiwarki (pdp) — pobieranej raz na produkt. Opis dosłownie
  * (krótki opis, długi opis, zalety); parametry i numery handlowe do tabelki sklepu.
  *
+ * Teksty 3M są po polsku, ale części kart zostały po angielsku (audyt 08.10.2026: punkty opisu kabli FLX2, XPV, TR-653;
+ * nazwy części Scott, Cabloc, Lad-Saf: „3M™ Scott™ Spring 1028418”). Takie karty oznaczamy jako obcojęzyczne
+ * (B2bForeignTextCards — synchronizacja zleca tłumaczenie), a nazwę istniejącej karty tłumaczymy, dopóki jest nazwą
+ * ze źródła (B2bKeepsExistingNames — nazwy poprawionej ręcznie job nie rusza).
+ *
  * Logowanie kodem z e-maila (B2bCodeLoginSite): przebieg korzysta z sesji zapisanej na koncie, a po udanym login()
  * i na końcu przebiegu zapisuje odnowione ciasteczka z powrotem na koncie.
  */
-final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
+final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bKeepsExistingNames, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
 {
     public const BRAND = '3M';
 
@@ -70,6 +75,13 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
      * — spod zwykłych adresów zdjęć (2593907Z „…6059-abek1.jpg”), za każdym razem z innymi bajtami, zawsze 240×175.
      */
     private const FILE_ICON_SIZE = [240, 175];
+
+    /** Angielskie słowa funkcyjne, których nie ma w polszczyźnie (isEnglishLine; bez „to”, „a”, „i”). */
+    private const ENGLISH_FUNCTION_WORDS = '/\b(?:the|and|with|for|of|is|are|from|your|you|this|that|which|can|use|used|if|when|its|or|be)\b/u';
+
+    /** Angielskie słowa z nazw części i akcesoriów 3M, których nie ma w polskich nazwach (isEnglishName). */
+    private const ENGLISH_NAME_WORDS = '/\b(?:with|for|and|kit|assembly|replacement|spare|cable|bag|hose|valve|cover|plug|spring|seal|gasket|'
+        .'harness|lifeline|bracket|bracketry|ladder|guide|traveler|traveller|stainless|steel|each|case|black|white|blue|left|right|piece|couplings?)\b/u';
 
     private const SHOP_SECTION_TRADE = 'Informacje handlowe';
 
@@ -392,6 +404,47 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         }
 
         return $lines;
+    }
+
+    /**
+     * Karta z angielskim tekstem do przetłumaczenia: linia opisu po angielsku (isEnglishLine) albo angielska nazwa
+     * (isEnglishName).
+     */
+    public function hasForeignDescription(B2bRemoteProduct $product): bool
+    {
+        foreach (preg_split('/\R+/u', $this->description($product)) ?: [] as $line) {
+            if (self::isEnglishLine($line)) {
+                return true;
+            }
+        }
+
+        return self::isEnglishName($product->name);
+    }
+
+    /**
+     * Linia opisu po angielsku: bez polskich liter, co najmniej cztery słowa i angielskie słowo funkcyjne. Krótkie
+     * punkty 3M mają ich mało („- Optimized speakers for use in noisy environments”, karta 45793), więc jedno wystarcza;
+     * polska linia z czterech słów prawie zawsze ma polską literę, a tych słów polszczyzna nie zna.
+     */
+    public static function isEnglishLine(string $line): bool
+    {
+        $low = mb_strtolower($line);
+        if (preg_match('/[ąćęłńóśźż]/u', $low) === 1 || preg_match_all("/\p{L}{2,}/u", $low) < 4) {
+            return false;
+        }
+
+        return preg_match(self::ENGLISH_FUNCTION_WORDS, $low) === 1;
+    }
+
+    /**
+     * Nazwa pozycji po angielsku: bez polskich liter i z angielskim słowem z nazw części 3M („Spring”, „Hose …
+     * Assembly”, „Blank Plug … for RAS-ASB, 2 Each/Case”). Polska nazwa bez ogonków („Kask X5A”) takiego słowa nie ma.
+     */
+    public static function isEnglishName(string $name): bool
+    {
+        $low = mb_strtolower($name);
+
+        return preg_match('/[ąćęłńóśźż]/u', $low) !== 1 && preg_match(self::ENGLISH_NAME_WORDS, $low) === 1;
     }
 
     public function manufacturer(B2bRemoteProduct $product): string

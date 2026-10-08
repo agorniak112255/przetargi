@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\TranslateB2bProductTextJob;
 use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
@@ -997,6 +998,48 @@ final class MmmConnectorTest extends TestCase
         );
         $this->assertSame($real, ProductImage::query()->where('product_id', $card->id)->where('is_primary', true)->value('source_url'));
         $this->assertSame(4, ProductDocument::query()->where('product_id', $card->id)->count());
+    }
+
+    public function test_only_cards_with_english_text_or_name_are_sent_to_translation_also_on_the_next_run(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->fakeSite();
+        $this->items = [
+            self::item('7012471080', '', '3M™ Scott™ Spring 1028418', 'EA', 'szt', 'EA', 'szt', '1'),
+            self::item('7000001005', '6200', 'Półmaska 3M 6200, rozmiar M', 'EA', 'szt', 'CS', 'karton', '24'),
+            self::item('7000001006', 'MT73', 'Kabel 3M™ PELTOR™ FLX2, MT73', 'EA', 'szt', 'CS', 'karton', '10'),
+            self::item('7000001007', 'X5A', 'Kask 3M PELTOR X5A', 'EA', 'szt', 'CS', 'karton', '10'),
+        ];
+        foreach (['7012471080', '7000001005', '7000001006', '7000001007'] as $id) {
+            $this->prices[$id] = self::price('10,00 PLN / szt', '20,00 PLN / szt', '1 szt');
+        }
+        $this->pdps = [
+            '7012471080' => ['mmm_id' => '7012471080', 'name' => 'Spring', 'description' => '', 'classified' => []],
+            '7000001005' => ['mmm_id' => '7000001005', 'name' => '6200', 'description' => 'Półmaska wielokrotnego użytku.', 'classified' => []],
+            '7000001006' => ['mmm_id' => '7000001006', 'name' => 'FLX2', 'description' => 'Kabel do zestawów słuchawkowych.',
+                'benefits' => ['Optimized speakers for use in noisy environments', 'Złącze FLX2'], 'classified' => []],
+            '7000001007' => ['mmm_id' => '7000001007', 'name' => 'X5A', 'description' => 'Nauszniki przeciwhałasowe X5A.', 'classified' => []],
+        ];
+        $account = $this->account(['live' => true]);
+        $run = fn (): array => app(B2bAccountSyncRunner::class)->run(
+            $account->fresh() ?? $account, delayMs: 0, withImages: false, connector: MmmB2bConnector::forAccount($account->fresh() ?? $account, 0),
+        );
+        $queued = static fn (): array => Queue::pushed(TranslateB2bProductTextJob::class)
+            ->map(static fn (TranslateB2bProductTextJob $job): string => Product::query()->whereKey($job->productId)->value('sku').($job->translateName ? '+nazwa' : ''))
+            ->sort()->values()->all();
+
+        $this->assertSame(4, $run()['created']);
+        $this->assertSame(['7000001006+nazwa', '7012471080+nazwa'], $queued());
+
+        // karty już w katalogu (jak na produkcji): nazwa ze źródła wciąż po angielsku — zlecenie przy każdym przebiegu,
+        // polska karta i karta z nazwą poprawioną ręcznie bez nazwy
+        Product::query()->where('sku', '7012471080')->update(['name' => 'Sprężyna 3M Scott 1028418']);
+        Queue::fake();
+        $run();
+        $this->assertSame(['7000001006+nazwa'], $queued());
+        $this->assertFalse(MmmB2bConnector::isEnglishName('Kask 3M PELTOR X5A'));
+        $this->assertTrue(MmmB2bConnector::isEnglishName('3M™ Blank Plug RAS-935 DIN40 for RAS-ASB, 2 Each/Case'));
     }
 
     /**
