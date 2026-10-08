@@ -805,6 +805,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         if ($card === [] || $named === [] || array_intersect($named, $card) !== []) {
             return null;
         }
+        // „2019.05”, „2024.1” to zwykle data wydania pliku, nie model — liczba z lat 1990–2039 sama pliku nie
+        // odrzuca (UVEX ma model 2000: 2000.002, 2000.018; ten pasuje już wyżej, gdy jest modelem karty)
+        $named = array_values(array_filter($named, static fn (string $model): bool => (int) $model < 1990 || (int) $model > 2039));
+        if ($named === []) {
+            return null;
+        }
 
         return 'model '.implode(', ', $named).', karta '.implode(', ', array_unique($card));
     }

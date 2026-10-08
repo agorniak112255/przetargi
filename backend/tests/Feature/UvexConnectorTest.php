@@ -815,6 +815,12 @@ final class UvexConnectorTest extends TestCase
         $this->assertNull(UvexB2bConnector::foreignModelFile('SST 8534.pdf', ['8534/8/52']), 'nazwa bez wariantu nic nie rozstrzyga');
         // nie kody modeli: rozporządzenie, normy, kody rękawic i laserów; karta bez numeru modelu UVEX
         $this->assertNull(UvexB2bConnector::foreignModelFile('Deklaracja UE 2016/425 EN 1149-5 ISO 20345:2011', ['6937/8']));
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST uvex 2 trend 2019.05', ['6937/8']), 'data wydania to nie model');
+        $this->assertNull(UvexB2bConnector::foreignModelFile('katalog 2024.1.pdf', ['9730.330']));
+        $this->assertSame('model 9731, karta 9730', UvexB2bConnector::foreignModelFile('SST pronamic B-WR 9731.030 2019.05', ['9730.330']));
+        // model 2000 istnieje (2000.002) — przy własnej karcie zgodny, przy cudzej nie przesądza
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST uvex 2000 2000.018', ['2000.002']));
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST uvex 2000 2000.018', ['9730.330']));
         $this->assertNull(UvexB2bConnector::foreignModelFile('SST C300 dry 60549.pdf', ['60549']));
         $this->assertNull(UvexB2bConnector::foreignModelFile('lv details F22.P1M02.1001.pdf', ['F22P1M031001']));
         $this->assertNull(UvexB2bConnector::foreignModelFile('SST uvex 2 trend 6936.8', ['HECKEL6273/3/36', 'HA2023(L)']));
