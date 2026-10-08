@@ -54,6 +54,15 @@ final class ProductPageFetcher
     private const OWN_BLOCK = '/(?:^|[\s_-])(?:docs?|documents?|dokumenty|downloads?|files?|pliki|pdfs?|attachments?|'
         .'certificates?|certyfikaty|datasheets?|norms?|normy|accessor(?:y|ies)|akcesoria|zubeh(?:ö|oe?)r)(?:[\s_-]|$)/iu';
 
+    /** Bezpieczniki kosztu cięcia bloków po nagłówkach (withoutRelatedProductHtml). */
+    private const RELATED_CUT_MAX_ELEMENTS = 20000;
+
+    private const RELATED_CUT_MAX_HEADINGS = 400;
+
+    private const RELATED_CUT_MAX_FOREIGN_HEADINGS = 20;
+
+    private const RELATED_CUT_MAX_CLIMB = 12;
+
     /**
      * Nagłówek bloku innych wyrobów, poradników i kategorii — tylko na początku krótkiego nagłówka. „Więcej” tylko
      * z grupą wyrobów: „Więcej ochrony dzięki powłoce” to treść karty. Bez „Akcesoria”/„Zubehör” (części wyrobu).
@@ -2865,10 +2874,19 @@ final class ProductPageFetcher
             $cuts[] = [$tree['start'][$i], $tree['end'][$i]];
         }
 
-        for ($i = 0; $i < $count; $i++) {
+        // Bezpiecznik kosztu (przegląd bezpieczeństwa 08.10.2026): cięcie po nagłówkach liczy tekst przodków i skanuje
+        // nagłówki przy każdym kroku w górę — na stronie z tysiącami elementów albo nagłówków (złośliwa albo wygenerowana)
+        // byłoby kwadratowe. Wtedy zostaje samo cięcie po klasie/id; na prawdziwych kartach (≤ kilka tysięcy elementów,
+        // kilkadziesiąt nagłówków) bez zmian.
+        $headingCuts = $count <= self::RELATED_CUT_MAX_ELEMENTS && count($headings) <= self::RELATED_CUT_MAX_HEADINGS;
+        $foreignHeadings = 0;
+        for ($i = 0; $headingCuts && $i < $count; $i++) {
             $level = $this->foreignHeadingLevel($html, $tree, $i);
             if ($level === null) {
                 continue;
+            }
+            if (++$foreignHeadings > self::RELATED_CUT_MAX_FOREIGN_HEADINGS) {
+                break;
             }
             $headingText = $this->elementText($html, $tree['start'][$i], $tree['end'][$i]);
             // Inny nagłówek tego samego albo wyższego stopnia w przodku = przodek obejmuje też inną sekcję (np. opis
@@ -2885,7 +2903,9 @@ final class ProductPageFetcher
             };
             // w górę, dopóki nagłówek otwiera tekst przodka (coba.com: div.mb-8 > h2 „Buying Guides” w kontenerze z kafelkami)
             $node = $i;
+            $climbs = 0;
             while (($parent = $tree['parent'][$node]) >= 0
+                && ++$climbs <= self::RELATED_CUT_MAX_CLIMB
                 && ! in_array($tree['name'][$parent], [...$protected, 'article'], true)
                 && ! $holdsTitle($parent)
                 && ! $holdsOtherHeading($parent)

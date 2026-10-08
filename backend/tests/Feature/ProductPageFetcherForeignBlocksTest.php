@@ -224,6 +224,22 @@ final class ProductPageFetcherForeignBlocksTest extends TestCase
      * najbliższego „>” — ucięte opisy obuwia UVEX i sklejone tabele laserowe (08.10.2026). Przed parsowaniem strona
      * idzie przez HtmlBareLessThan::escape; prawdziwe znaczniki zostają.
      */
+    public function test_pathological_page_with_thousands_of_headings_is_cut_by_class_only_and_fast(): void
+    {
+        // przegląd bezpieczeństwa 08.10.2026: cięcie po nagłówkach jest kwadratowe przy tysiącach nagłówków w głębokim
+        // drzewie — ponad bezpiecznikiem zostaje samo cięcie po klasie, a strona przetwarza się szybko
+        $nested = str_repeat('<div>', 300).'<p>Rękawica nitrylowa EN 388 4131X.</p>'
+            .str_repeat('<h3>Podobne produkty</h3><p>obca cecha</p>', 1500).str_repeat('</div>', 300);
+        $html = '<html><body><h1>Rękawica</h1>'.$nested.'<section class="related products"><p>kafelek innego wyrobu</p></section></body></html>';
+
+        $started = microtime(true);
+        $text = app(ProductPageFetcher::class)->mainTextFromHtml($html);
+
+        $this->assertLessThan(5.0, microtime(true) - $started, 'bezpiecznik kosztu cięcia po nagłówkach');
+        $this->assertStringContainsString('EN 388 4131X', $text);
+        $this->assertStringNotContainsString('kafelek innego wyrobu', $text, 'cięcie po klasie działa zawsze');
+    }
+
     public function test_bare_less_than_is_text_not_a_tag(): void
     {
         $html = '<html><body><h1>Półbuty uvex 2 S3</h1><div class="product-description">'
