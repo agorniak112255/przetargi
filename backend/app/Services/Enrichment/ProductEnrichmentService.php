@@ -7593,24 +7593,26 @@ SYS,
      */
     private function supplementPageNamesCardVariant(Product $product, array $page): bool
     {
+        // lista, nie klucze tablicy: kod z samych cyfr („46017”, Lahti Pro) jako klucz staje się liczbą, a funkcje
+        // tekstowe poniżej przy strict_types rzucały wtedy TypeError (produkcja 08.10.2026)
         $own = [];
         foreach ([(string) $product->sku, $this->identity->catalogSkuWithoutSize($product)] as $code) {
             $key = self::supplementCodeKey($code);
-            if (mb_strlen($key) >= self::SUPPLEMENT_MIN_CODE_CHARS) {
-                $own[$key] = true;
+            if (mb_strlen($key) >= self::SUPPLEMENT_MIN_CODE_CHARS && ! in_array($key, $own, true)) {
+                $own[] = $key;
             }
         }
         if ($own === []) {
             return true;
         }
         $head = rawurldecode((string) ($page['url'] ?? ''))."\n".(string) ($page['title'] ?? '');
-        foreach (array_keys($own) as $key) {
+        foreach ($own as $key) {
             if (self::textCarriesCode($head, $key)) {
                 return true;
             }
         }
         $inText = false;
-        foreach (array_keys($own) as $key) {
+        foreach ($own as $key) {
             if (self::textCarriesCode((string) ($page['text'] ?? ''), $key)) {
                 $inText = true;
                 break;
@@ -7621,12 +7623,12 @@ SYS,
         }
         $headKey = self::supplementCodeKey($head);
         foreach ($this->manufacturerCatalogCodes($product) as $foreign) {
-            if (isset($own[$foreign])) {
+            if (in_array($foreign, $own, true)) {
                 continue;
             }
             // kod innej karty zawarty w naszym (COBPSI w COBPSIX) to nie inny wariant na stronie
             $insideOwn = false;
-            foreach (array_keys($own) as $key) {
+            foreach ($own as $key) {
                 if (str_contains($key, $foreign)) {
                     $insideOwn = true;
                     break;

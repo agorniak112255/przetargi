@@ -154,6 +154,36 @@ final class SupplementB2bDescriptionTest extends TestCase
         $this->assertStringNotContainsString('Podobne produkty', $this->prompts[0]);
     }
 
+    public function test_numeric_card_code_passes_the_variant_gate_and_keeps_out_another_numeric_variant(): void
+    {
+        // produkcja 08.10.2026 (Lahti Pro 46017, 46033): kod z samych cyfr jako klucz tablicy stawał się liczbą, a bramka
+        // wariantu przekazywała go do funkcji tekstowych — TypeError i próba „failed” zamiast opisu
+        $product = $this->product();
+        $product->forceFill(['sku' => '46017', 'name' => 'Gogle ochronne Norvik 46017'])->save();
+        Product::query()->create([
+            'sku' => '46033', 'name' => 'Okulary ochronne Norvik 46033', 'manufacturer' => 'NORVIK',
+            'catalog_price_net' => 10, 'purchase_price' => 5, 'currency' => 'PLN',
+        ]);
+        $own = 'https://www.konto-sklep.example/gogle-norvik-46017';
+        $this->pagesHtml[$own] = '<html><head><title>Gogle ochronne Norvik 46017</title></head><body><h1>Gogle ochronne NORVIK 46017</h1>'
+            .'<div class="product-description"><p>Gogle NORVIK 46017 z poliwęglanu, gumka regulowana.</p><p>'
+            .str_repeat('Szybka z poliwęglanu w goglach NORVIK 46017. ', 20).'</p></div></body></html>';
+        // strona innego wariantu wymienia nasz kod w treści, a w tytule ma swój numer
+        $other = 'https://www.konto-sklep.example/okulary-norvik';
+        $this->pagesHtml[$other] = '<html><head><title>Okulary ochronne Norvik 46033</title></head><body><h1>Okulary ochronne NORVIK 46033</h1>'
+            .'<div class="product-description"><p>Okulary NORVIK z poliwęglanu. Podobne produkty: gogle 46017.</p><p>'
+            .str_repeat('Szybka z poliwęglanu w okularach NORVIK. ', 20).'</p></div></body></html>';
+        $this->search(fn (MockInterface $search) => $search->shouldReceive('searchOnHosts')->once()->andReturn([
+            ['url' => $other, 'title' => 'Okulary Norvik 46033', 'snippet' => ''],
+            ['url' => $own, 'title' => 'Gogle Norvik 46017', 'snippet' => ''],
+        ]));
+        $this->answer = $this->answerWith(self::LONG_DESCRIPTION);
+
+        $result = $this->supplement($product);
+
+        $this->assertSame([$own], $result['web_source_urls']);
+    }
+
     public function test_page_without_the_card_code_gives_no_pages(): void
     {
         $product = $this->product();
