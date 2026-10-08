@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\ErpItem;
 use App\Models\ErpItemLink;
+use App\Models\ErpItemPurchase;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Erp\ErpItemMatcher;
@@ -74,6 +75,88 @@ final class ErpItemAdminApiTest extends TestCase
         $this->assertSame(['SOK9174065'], $this->codes('search=9174.065'));
         $this->assertSame(['ARĘKTACTYL', 'BTR123', 'SOK9174065', 'TBUTAR'], $this->codes('sort=code&dir=asc'));
         $this->assertSame($review->id, $this->getJson('/api/admin/erp-items?status=review')->json('data.0.id'));
+    }
+
+    public function test_stale_filter_value_and_summary_follow_inventory_rules(): void
+    {
+        $this->travelTo('2026-10-08 10:00:00');
+        $card = $this->card('P-1', 'UVEX', 'Okulary P');
+        $this->item('ASTARY', 'KURTKA STARA', 'no_code', stock: 5, sold: '-8 months', value: 120.5);
+        $this->item('ASWIEZY', 'KURTKA ŚWIEŻA', 'no_code', stock: 5, sold: '-2 months');
+        $this->item('ABRAK', 'KURTKA BEZ STANU', 'no_code', stock: 0, sold: '-20 months');
+        // nigdy niesprzedany liczy się dopiero, gdy jego najstarsza partia leży dłużej niż próg
+        $this->item('ANIGDY', 'KURTKA NIGDY', 'no_match', stock: 3, oldestLot: '-14 months');
+        $this->item('ANOWY', 'KURTKA NOWA', 'no_match', stock: 3, oldestLot: '-1 month');
+        // stan tylko w magazynie usługowym: Zapasy liczą wszystkie magazyny, więc to też zalega
+        $service = $this->item('AUSLUGA', 'KURTKA USŁUGA', 'search_suggested', stock: 0, stockTotal: 4, sold: '-13 months');
+        $this->purchase($service, 2.5);
+        $linked = $this->item('APOLACZ', 'KURTKA POŁĄCZONA', 'auto', stock: 2, sold: '-9 months', value: 50);
+        $this->link($linked, $card, ErpItemLink::STATUS_AUTO);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->assertSame(['ANIGDY', 'APOLACZ', 'ASTARY', 'AUSLUGA'], $this->codes('stale_months=6&sort=code&dir=asc'));
+        $this->assertSame(['ANIGDY', 'AUSLUGA'], $this->codes('stale_months=12&sort=code&dir=asc'));
+        $this->assertSame(['ANIGDY', 'ASTARY', 'AUSLUGA'], $this->codes('stale_months=6&status=unlinked&sort=code&dir=asc'));
+
+        // wartość = ilość × cena zakupu: partie, bez nich stan × ostatnia PZ; bez stanu albo ceny — na końcu
+        $rows = collect($this->getJson('/api/admin/erp-items?sort=value&dir=desc')->assertOk()->json('data'))->keyBy('code');
+        $this->assertSame(['ASTARY', 'APOLACZ', 'AUSLUGA'], array_slice($rows->keys()->all(), 0, 3));
+        $this->assertSame(['AUSLUGA', 'APOLACZ', 'ASTARY'], array_slice($this->codes('sort=value&dir=asc'), 0, 3));
+        $this->assertEquals(120.5, $rows['ASTARY']['stock_value']);
+        $this->assertEquals(10, $rows['AUSLUGA']['stock_value']);
+        $this->assertNull($rows['ANIGDY']['stock_value']);
+        $this->assertNull($rows['ABRAK']['stock_value']);
+
+        // kafelek: te same liczby co „W tym bez karty” w Zapasach przy domyślnych 6 miesiącach
+        $summary = $this->getJson('/api/admin/erp-items/summary')->assertOk()->json('unlinked_stale');
+        $this->assertSame(['months' => 6, 'items' => 3, 'value' => 130.5, 'value_unknown' => 1], $summary);
+        $inventory = $this->getJson('/api/inventory?months=6&warehouses=all')->assertOk()->json('summary');
+        $this->assertSame(4, $inventory['items']);
+        $this->assertSame($summary['items'], $inventory['without_card']);
+
+        // eksport: kolumna wartości i filtr w zestawieniu
+        $book = IOFactory::load($this->get('/api/admin/erp-items/export?stale_months=6&sort=value&dir=desc')->assertOk()->baseResponse->getFile()->getPathname());
+        $sheet = $book->getSheetByName('Towary')?->toArray(null, false, false) ?? [];
+        $this->assertSame(['Wartość zapasu (zł, cena zakupu)', 'ASTARY', 120.5], [$sheet[0][6], $sheet[1][0], (float) $sheet[1][6]]);
+        $flat = array_map(static fn (array $r): string => implode('|', array_map('strval', array_filter($r, static fn ($c) => $c !== null))),
+            $book->getSheetByName('Zestawienie')?->toArray(null, false, false) ?? []);
+        $this->assertContains('Zalegające (stan, bez sprzedaży)|od 6 mies.', $flat);
+        $this->assertContains('Sortowanie|wartość zapasu, malejąco', $flat);
+
+        $this->assertSame([], $this->codes('stale_months=24'));
+        $this->getJson('/api/admin/erp-items?stale_months=5')->assertUnprocessable();
+    }
+
+    public function test_proposal_count_and_supplier_evidence_filters(): void
+    {
+        $a = $this->card('A-1', 'UVEX', 'Okulary A');
+        $b = $this->card('B-1', 'UVEX', 'Okulary B');
+        $one = $this->item('SONE', 'OKULARY ONE', 'suggested', stock: 1, value: 42);
+        $oneLink = $this->link($one, $a, ErpItemLink::STATUS_SUGGESTED, ['supplier_match' => true, 'supplier' => 'UVEX']);
+        $weak = $this->item('SWEAK', 'OKULARY WEAK', 'search_suggested');
+        $this->link($weak, $a, ErpItemLink::STATUS_SUGGESTED, ['supplier_match' => false, 'supplier' => null]);
+        $many = $this->item('SMANY', 'OKULARY MANY', 'ambiguous');
+        $this->link($many, $a, ErpItemLink::STATUS_SUGGESTED, ['supplier_match' => false]);
+        $this->link($many, $b, ErpItemLink::STATUS_SUGGESTED, ['supplier_match' => true, 'supplier' => 'UVEX']);
+        $this->item('SNONE', 'OKULARY NONE', 'no_code');
+        $rejected = $this->item('SREJ', 'OKULARY REJ', 'rejected');
+        $this->link($rejected, $b, ErpItemLink::STATUS_REJECTED, ['supplier_match' => true]);
+        $confirmed = $this->item('SCONF', 'OKULARY CONF', 'confirmed');
+        $this->link($confirmed, $b, ErpItemLink::STATUS_CONFIRMED, ['supplier_match' => true]);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->assertSame(['SONE', 'SWEAK'], $this->codes('proposals=one&sort=code&dir=asc'));
+        $this->assertSame(['SMANY'], $this->codes('proposals=many'));
+        // potwierdzona i odrzucona karta to decyzja, nie propozycja
+        $this->assertSame(['SCONF', 'SNONE', 'SREJ'], $this->codes('proposals=none&sort=code&dir=asc'));
+        $this->assertSame(['SMANY', 'SONE'], $this->codes('supplier_match=1&sort=code&dir=asc'));
+        $this->assertSame(['SONE'], $this->codes('proposals=one&supplier_match=1'));
+        $this->getJson('/api/admin/erp-items?proposals=two')->assertUnprocessable();
+
+        // wiersz po decyzji ma wartość zapasu jak lista (ekran podmienia wiersz odpowiedzią)
+        $this->postJson('/api/admin/erp-links/'.$oneLink->id.'/confirm')->assertOk()
+            ->assertJsonPath('item.outcome', 'confirmed')
+            ->assertJsonPath('item.stock_value', 42);
     }
 
     public function test_summary_counts_gaps(): void
@@ -291,10 +374,12 @@ final class ErpItemAdminApiTest extends TestCase
         $this->assertCount(3, $rows);
         $this->assertSame('OKULARY "AUTO" <A&B>', $rows[2][1]);
         $this->assertSame(5, (int) $rows[2][4]);
-        $this->assertSame(['potwierdzone', 'B-1', 'Ala'], [$rows[1][9], $rows[1][10], $rows[1][15]]);
-        $this->assertSame(['połączone automatycznie', 'A-1', 'automat'], [$rows[2][9], $rows[2][10], $rows[2][15]]);
+        // kolumna 6 to wartość zapasu (test zalegających); bez partii i bez PZ — pusta
+        $this->assertNull($rows[2][6]);
+        $this->assertSame(['potwierdzone', 'B-1', 'Ala'], [$rows[1][10], $rows[1][11], $rows[1][16]]);
+        $this->assertSame(['połączone automatycznie', 'A-1', 'automat'], [$rows[2][10], $rows[2][11], $rows[2][16]]);
         // data połączenia: prawdziwa data Excela w czasie polskim (10:00 UTC = 12:00)
-        $at = $book->getSheetByName('Towary')?->getCell('Q2');
+        $at = $book->getSheetByName('Towary')?->getCell('R2');
         $this->assertSame('2026-10-01 12:00', ExcelDate::excelToDateTimeObject((float) $at?->getValue())->format('Y-m-d H:i'));
         $this->assertSame('yyyy-mm-dd hh:mm', $at?->getStyle()->getNumberFormat()->getFormatCode());
 
@@ -348,21 +433,36 @@ final class ErpItemAdminApiTest extends TestCase
         ?string $supplier = null,
         string $name1 = '',
         array $suppliers = [],
+        ?float $stockTotal = null,
+        ?float $value = null,
+        ?string $oldestLot = null,
     ): ErpItem {
         return ErpItem::query()->create([
             'xl_gid' => $this->gid++, 'code' => $code, 'name' => $name, 'name1' => $name1 !== '' ? $name1 : null,
-            'unit' => 'szt', 'archived' => $archived, 'stock_trade' => $stock, 'stock_total' => $stock,
+            'unit' => 'szt', 'archived' => $archived, 'stock_trade' => $stock, 'stock_total' => $stockTotal ?? $stock,
+            'stock_value' => $value,
+            'oldest_lot_at' => $oldestLot !== null ? now()->modify($oldestLot)->toDateString() : null,
             'last_sale_at' => $sold !== null ? now()->modify($sold)->toDateString() : null,
             'last_supplier' => $supplier, 'match_outcome' => $outcome, 'match_value' => $matchValue, 'synced_at' => now(),
             'suppliers' => array_map(static fn (string $s): array => ['supplier' => $s], $suppliers),
         ]);
     }
 
-    private function link(ErpItem $item, Product $card, string $status): ErpItemLink
+    /** @param  array<string, mixed>|null  $evidence */
+    private function link(ErpItem $item, Product $card, string $status, ?array $evidence = null): ErpItemLink
     {
         return ErpItemLink::query()->create([
             'erp_item_id' => $item->id, 'product_id' => $card->id, 'status' => $status,
-            'method' => ErpItemLink::METHOD_NAME, 'matched_value' => $card->sku, 'last_seen_at' => now(),
+            'method' => ErpItemLink::METHOD_NAME, 'matched_value' => $card->sku, 'evidence' => $evidence, 'last_seen_at' => now(),
+        ]);
+    }
+
+    private function purchase(ErpItem $item, float $unitPrice): void
+    {
+        ErpItemPurchase::query()->create([
+            'erp_item_id' => $item->id, 'document_type' => 1489, 'document_id' => $item->id, 'document_line' => 1,
+            'purchased_at' => now()->subYear()->toDateString(), 'supplier' => 'X', 'quantity' => 10, 'document_unit' => 'szt',
+            'net_value_pln' => 10 * $unitPrice, 'unit_price_pln' => $unitPrice, 'document_price' => $unitPrice, 'currency' => 'PLN',
         ]);
     }
 }

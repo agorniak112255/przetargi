@@ -10,6 +10,7 @@ use App\Models\ErpItemLink;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Erp\ErpLinkDecisions;
+use App\Services\Erp\InventoryQuery;
 use App\Support\PolishTime;
 use App\Support\XlsxStreamWriter;
 use Carbon\CarbonImmutable;
@@ -26,6 +27,9 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 /**
  * Ekran „Powiązania z ERP XL”: towary XL (aktywne, bez usuniętych z XL) z wynikiem łączenia i powiązanymi kartami,
  * liczniki braków i decyzje człowieka. Niczego nie zapisuje w XL.
+ *
+ * Zalegające (stale_months) i wartość zapasu liczą się jak w Zapasach (InventoryQuery, wszystkie magazyny) — żeby
+ * najpierw łączyć towar, w którym stoi najwięcej pieniędzy.
  */
 class ErpItemController extends Controller
 {
@@ -53,6 +57,24 @@ class ErpItemController extends Controller
 
     /** Sortowania po wartościach z powiązań (podzapytania) — towary bez wartości zawsze na końcu. */
     private const LINK_SORTS = ['status', 'card', 'linked_at', 'linked_by'];
+
+    /** Sortowanie po wartości zapasu (valueSql) — towary bez stanu albo bez ceny zakupu zawsze na końcu. */
+    private const SORT_VALUE = 'value';
+
+    /** Zalegające: stan i brak sprzedaży od N miesięcy (progi z Zapasów). */
+    private const STALE_MONTHS = [3, 6, 12, 24];
+
+    /** Kafelek „Zalegające bez karty” — domyślny próg Zapasów. */
+    private const SUMMARY_STALE_MONTHS = 6;
+
+    /** Filtr liczby propozycji kart (powiązania auto / suggested z kartą): jedna — gotowe do zbiorczego potwierdzenia. */
+    private const PROPOSALS = ['one', 'many', 'none'];
+
+    private const PROPOSAL_LABELS = [
+        'one' => 'jedna karta',
+        'many' => 'kilka kart',
+        'none' => 'bez propozycji',
+    ];
 
     /** Kolejność statusów przy sortowaniu: połączone, do decyzji, bez karty, bez kodu, odrzucone, nie przeliczone. */
     private const OUTCOME_RANK = [
@@ -111,6 +133,7 @@ class ErpItemController extends Controller
 
     private const SORT_LABELS = [
         'stock' => 'stan HANDEL',
+        self::SORT_VALUE => 'wartość zapasu',
         'last_sale' => 'ostatnia sprzedaż',
         'last_purchase' => 'ostatni zakup',
         'code' => 'kod XL',
@@ -152,7 +175,7 @@ class ErpItemController extends Controller
         // zestawienie „kto ile połączył” dla tych samych filtrów, bez filtra osoby — widać wszystkich w okresie
         $linkers = $this->linkers(clone $query);
         $this->filterLinkerAndSort($query, $v);
-        $page = $query
+        $page = $this->withValue($query)
             ->with(['links.product:id,sku,name,manufacturer', 'links.decider:id,name'])
             ->paginate((int) ($v['per_page'] ?? 50));
 
@@ -185,12 +208,13 @@ class ErpItemController extends Controller
             abort(500, 'Nie udało się przygotować pliku.');
         }
         $xlsx = new XlsxStreamWriter($path);
-        $xlsx->addSheet('Towary', [14, 45, 18, 7, 10, 10, 12, 12, 26, 30, 22, 45, 16, 14, 18, 22, 17, 17, 22], header: true);
-        $xlsx->addRow(['Kod XL', 'Nazwa XL', 'Nazwa1', 'Jedn.', 'Stan HANDEL', 'Stan wszystkie magazyny', 'Ostatnia sprzedaż',
-            'Ostatni zakup', 'Ostatni dostawca', 'Status', 'Karta (SKU)', 'Nazwa karty', 'Producent karty', 'Skąd kod',
-            'Kod z XL', 'Połączył', 'Data połączenia', 'Automat połączył', 'Odrzucone karty (SKU)']);
+        $xlsx->addSheet('Towary', [14, 45, 18, 7, 10, 10, 12, 12, 12, 26, 30, 22, 45, 16, 14, 18, 22, 17, 17, 22], header: true);
+        $xlsx->addRow(['Kod XL', 'Nazwa XL', 'Nazwa1', 'Jedn.', 'Stan HANDEL', 'Stan wszystkie magazyny',
+            'Wartość zapasu (zł, cena zakupu)', 'Ostatnia sprzedaż', 'Ostatni zakup', 'Ostatni dostawca', 'Status', 'Karta (SKU)',
+            'Nazwa karty', 'Producent karty', 'Skąd kod', 'Kod z XL', 'Połączył', 'Data połączenia', 'Automat połączył',
+            'Odrzucone karty (SKU)']);
         foreach (array_chunk($ids, 500) as $chunk) {
-            $items = ErpItem::query()
+            $items = $this->withValue(ErpItem::query())
                 ->whereIn('id', $chunk)
                 ->with(['links.product:id,sku,name,manufacturer', 'links.decider:id,name'])
                 ->get()
@@ -231,12 +255,15 @@ class ErpItemController extends Controller
             'group' => ['nullable', 'string', Rule::in([...self::GROUPS, 'other'])],
             'in_stock' => ['nullable', 'boolean'],
             'sold_months' => ['nullable', 'integer', Rule::in([3, 6, 12])],
+            'stale_months' => ['nullable', 'integer', Rule::in(self::STALE_MONTHS)],
+            'proposals' => ['nullable', 'string', Rule::in(self::PROPOSALS)],
+            'supplier_match' => ['nullable', 'boolean'],
             'supplier' => ['nullable', 'string', 'max:100'],
             'search' => ['nullable', 'string', 'max:150'],
             'linked_by' => ['nullable', 'string', 'regex:/^(auto|[1-9]\d{0,9})$/'],
             'linked_from' => ['nullable', 'date_format:Y-m-d'],
             'linked_to' => ['nullable', 'date_format:Y-m-d', ...($request->filled('linked_from') ? ['after_or_equal:linked_from'] : [])],
-            'sort' => ['nullable', 'string', Rule::in([...array_keys(self::SORTS), ...self::LINK_SORTS])],
+            'sort' => ['nullable', 'string', Rule::in([...array_keys(self::SORTS), ...self::LINK_SORTS, self::SORT_VALUE])],
             'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
         ];
     }
@@ -273,6 +300,25 @@ class ErpItemController extends Controller
         if (! empty($v['sold_months'])) {
             $query->where('last_sale_at', '>=', now()->subMonths((int) $v['sold_months'])->toDateString());
         }
+        if (! empty($v['stale_months'])) {
+            $this->stale($query, (int) $v['stale_months']);
+        }
+        $proposals = (string) ($v['proposals'] ?? '');
+        if ($proposals !== '') {
+            $count = '(select count(*) from erp_item_links pc where pc.erp_item_id = erp_items.id'
+                .' and pc.product_id is not null and pc.status in (?, ?))';
+            $query->whereRaw($count.match ($proposals) {
+                'one' => ' = 1',
+                'many' => ' > 1',
+                default => ' = 0',
+            }, [ErpItemLink::STATUS_AUTO, ErpItemLink::STATUS_SUGGESTED]);
+        }
+        if (! empty($v['supplier_match'])) {
+            // propozycja z dowodem „dostawca z zakupów XL = producent karty” (ErpItemMatcher / ErpSearchSuggester)
+            $query->whereHas('links', fn (Builder $l) => $l->whereNotNull('product_id')
+                ->whereIn('status', [ErpItemLink::STATUS_AUTO, ErpItemLink::STATUS_SUGGESTED])
+                ->where('evidence->supplier_match', true));
+        }
         $supplier = trim((string) ($v['supplier'] ?? ''));
         if ($supplier !== '') {
             $query->where('last_supplier', 'like', '%'.$this->like($supplier).'%');
@@ -307,7 +353,9 @@ class ErpItemController extends Controller
         }
         $sort = (string) ($v['sort'] ?? 'stock');
         $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
-        if (in_array($sort, self::LINK_SORTS, true)) {
+        if ($sort === self::SORT_VALUE) {
+            $query->orderByRaw(self::valueSql().' is null')->orderByRaw(self::valueSql().' '.$dir);
+        } elseif (in_array($sort, self::LINK_SORTS, true)) {
             $this->orderByLinkValue($query, $sort, $dir);
         } else {
             $query->orderBy(self::SORTS[$sort], $dir);
@@ -342,6 +390,7 @@ class ErpItemController extends Controller
             $row['unit'],
             $row['stock_trade'],
             $row['stock_total'],
+            $row['stock_value'],
             XlsxStreamWriter::date($row['last_sale_at']),
             XlsxStreamWriter::date($row['last_purchase_at']),
             $row['last_supplier'],
@@ -386,6 +435,9 @@ class ErpItemController extends Controller
             ['Grupa', ($v['group'] ?? '') !== '' ? (string) $v['group'] : 'wszystkie'],
             ['Sprzedaż', ! empty($v['sold_months']) ? 'w ostatnich '.$v['sold_months'].' mies.' : 'dowolna'],
             ['Tylko ze stanem HANDEL', ! empty($v['in_stock']) ? 'tak' : 'nie'],
+            ['Zalegające (stan, bez sprzedaży)', ! empty($v['stale_months']) ? 'od '.$v['stale_months'].' mies.' : '—'],
+            ['Propozycje kart', self::PROPOSAL_LABELS[(string) ($v['proposals'] ?? '')] ?? 'dowolnie'],
+            ['Dostawca XL = producent karty', ! empty($v['supplier_match']) ? 'tak' : '—'],
             ['Dostawca', trim((string) ($v['supplier'] ?? '')) ?: '—'],
             ['Szukaj', trim((string) ($v['search'] ?? '')) ?: '—'],
             ['Połączył', match (true) {
@@ -425,6 +477,7 @@ class ErpItemController extends Controller
         $order = array_flip([...self::GROUPS, 'other']);
         uksort($groups, static fn (string $a, string $b): int => $order[$a] <=> $order[$b]);
         $syncedAt = $this->active()->max('synced_at');
+        $stale = InventoryQuery::totals($this->stale($unlinked(), self::SUMMARY_STALE_MONTHS), valueSql: self::valueSql());
 
         return response()->json([
             'total' => $this->active()->count(),
@@ -432,6 +485,8 @@ class ErpItemController extends Controller
             'by_outcome' => $byOutcome,
             'unlinked_sold_12m' => $unlinked()->where('last_sale_at', '>=', now()->subMonths(12)->toDateString())->count(),
             'unlinked_in_stock' => $unlinked()->where('stock_trade', '>', 0)->count(),
+            // zalegające bez karty jak w Zapasach: wartość = ilość × cena zakupu, value_unknown = bez ceny zakupu
+            'unlinked_stale' => ['months' => self::SUMMARY_STALE_MONTHS] + $stale,
             'groups' => array_values($groups),
             'linkers' => $this->linkers($this->active()),
         ]);
@@ -480,6 +535,39 @@ class ErpItemController extends Controller
     private function like(string $value): string
     {
         return addcslashes($value, '%_\\');
+    }
+
+    /**
+     * Zalegające jak lista Zapasów (InventoryQuery::inStock + unsoldSince, wszystkie magazyny): stan > 0 i ostatnia
+     * sprzedaż przed progiem; nigdy niesprzedany — tylko gdy jego najstarsza partia leży dłużej niż próg.
+     *
+     * @param  Builder<ErpItem>  $query
+     * @return Builder<ErpItem>
+     */
+    private function stale(Builder $query, int $months): Builder
+    {
+        return InventoryQuery::unsoldSince(
+            $query->whereRaw(InventoryQuery::quantitySql().' > 0'),
+            CarbonImmutable::today()->subMonthsNoOverflow($months),
+        );
+    }
+
+    /**
+     * Wartość zapasu towaru jak w Zapasach (ilość × cena zakupu: partie, a bez nich stan × ostatnia PZ, wszystkie
+     * magazyny); towar bez stanu — null, nie „0 zł”.
+     */
+    private static function valueSql(): string
+    {
+        return '(case when '.InventoryQuery::quantitySql().' > 0 then '.InventoryQuery::valueSql().' end)';
+    }
+
+    /**
+     * @param  Builder<ErpItem>  $query
+     * @return Builder<ErpItem>
+     */
+    private function withValue(Builder $query): Builder
+    {
+        return $query->select('erp_items.*')->selectRaw(self::valueSql().' as purchase_value');
     }
 
     /**
@@ -621,7 +709,11 @@ class ErpItemController extends Controller
     /** @return array<string, mixed> */
     private function presentFresh(ErpItem $item): array
     {
-        return $this->present($item->fresh(['links.product:id,sku,name,manufacturer', 'links.decider:id,name']) ?? $item);
+        $fresh = $this->withValue(ErpItem::query())
+            ->with(['links.product:id,sku,name,manufacturer', 'links.decider:id,name'])
+            ->find($item->id);
+
+        return $this->present($fresh ?? $item);
     }
 
     /** @return array<string, mixed> */
@@ -658,6 +750,8 @@ class ErpItemController extends Controller
             'archived' => (bool) $item->archived,
             'stock_trade' => (float) $item->stock_trade,
             'stock_total' => (float) $item->stock_total,
+            // ilość × cena zakupu (withValue); null = bez stanu albo bez ceny zakupu
+            'stock_value' => $item->getAttribute('purchase_value') !== null ? round((float) $item->getAttribute('purchase_value'), 2) : null,
             'last_sale_at' => $item->last_sale_at?->toDateString(),
             'last_purchase_at' => $item->last_purchase_at?->toDateString(),
             'last_supplier' => $item->last_supplier,

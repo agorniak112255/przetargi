@@ -14,7 +14,8 @@ import {
   type ErpOutcome,
 } from '../lib/api'
 import { erpQty, erpUnitLabel } from '../lib/erpStock'
-import { formatDate, formatDateTime } from '../lib/priceChange'
+import { formatDate, formatDateTime, formatPrice } from '../lib/priceChange'
+import { fmtBigZl } from '../lib/reports'
 
 type ItemsPage = {
   data: ErpAdminItem[]
@@ -33,10 +34,21 @@ type StatusFilter =
   | 'no_code'
   | 'rejected'
   | 'unlinked'
-type SortKey = 'stock' | 'last_sale' | 'last_purchase' | 'code' | 'name' | 'status' | 'card' | 'linked_at' | 'linked_by'
+type SortKey =
+  | 'stock'
+  | 'value'
+  | 'last_sale'
+  | 'last_purchase'
+  | 'code'
+  | 'name'
+  | 'status'
+  | 'card'
+  | 'linked_at'
+  | 'linked_by'
 type SortDir = 'asc' | 'desc'
 const SORT_KEYS: readonly SortKey[] = [
   'stock',
+  'value',
   'last_sale',
   'last_purchase',
   'code',
@@ -71,9 +83,19 @@ const GROUP_LABEL: Record<string, string> = {
 }
 const GROUPS = ['A', 'B', 'S', 'T', 'H', 'other']
 const SOLD_MONTHS = ['3', '6', '12']
+/** Zalegające jak w Zapasach: stan (wszystkie magazyny) i brak sprzedaży od tylu miesięcy. */
+const STALE_MONTHS = ['3', '6', '12', '24']
+type ProposalsFilter = '' | 'one' | 'many' | 'none'
+const PROPOSAL_OPTIONS: { value: ProposalsFilter; label: string }[] = [
+  { value: '', label: 'dowolnie' },
+  { value: 'one', label: 'jedna karta' },
+  { value: 'many', label: 'kilka kart' },
+  { value: 'none', label: 'bez propozycji' },
+]
 const PER_PAGE_OPTIONS = [50, 100, 200]
 const DEFAULT_DIR: Record<SortKey, SortDir> = {
   stock: 'desc',
+  value: 'desc',
   last_sale: 'desc',
   last_purchase: 'desc',
   code: 'asc',
@@ -226,18 +248,34 @@ type Tile = {
   label: string
   hint: string
   count: (s: ErpAdminSummary) => number
-  /** Filtry ustawiane kliknięciem (pozostałe — grupa, dostawca, szukajka — zostają). */
-  preset: { status: StatusFilter; in_stock: string; sold_months: string }
+  /** Dodatkowa linia pod opisem (np. wartość zapasu). */
+  detail?: (s: ErpAdminSummary) => string
+  /**
+   * Filtry ustawiane kliknięciem (pozostałe — grupa, dostawca, szukajka — zostają); sort — kolejność listy po
+   * kliknięciu (zdjęcie kafelka jej nie cofa).
+   */
+  preset: { status: StatusFilter; in_stock: string; sold_months: string; stale_months: string; sort?: SortKey }
   tone: 'warn' | 'ok' | 'neutral'
 }
 
 const TILES: Tile[] = [
   {
+    key: 'stale',
+    label: 'Zalegające bez karty',
+    hint: 'stan, bez sprzedaży od 6 mies. — najdroższe na górze',
+    count: (s) => s.unlinked_stale.items,
+    detail: (s) =>
+      `wartość ${fmtBigZl(s.unlinked_stale.value)}` +
+      (s.unlinked_stale.value_unknown > 0 ? ` (bez ceny: ${fmtInt(s.unlinked_stale.value_unknown)})` : ''),
+    preset: { status: 'unlinked', in_stock: '', sold_months: '', stale_months: '6', sort: 'value' },
+    tone: 'warn',
+  },
+  {
     key: 'sold12',
     label: 'Z ruchem 12 mies. bez karty',
     hint: 'sprzedawane w ostatnim roku, bez połączonej karty',
     count: (s) => s.unlinked_sold_12m,
-    preset: { status: 'unlinked', in_stock: '', sold_months: '12' },
+    preset: { status: 'unlinked', in_stock: '', sold_months: '12', stale_months: '' },
     tone: 'warn',
   },
   {
@@ -245,7 +283,7 @@ const TILES: Tile[] = [
     label: 'Ze stanem bez karty',
     hint: 'stan HANDEL > 0, bez połączonej karty',
     count: (s) => s.unlinked_in_stock,
-    preset: { status: 'unlinked', in_stock: '1', sold_months: '' },
+    preset: { status: 'unlinked', in_stock: '1', sold_months: '', stale_months: '' },
     tone: 'warn',
   },
   {
@@ -257,7 +295,7 @@ const TILES: Tile[] = [
       (s.by_outcome.ambiguous ?? 0) +
       (s.by_outcome.name_suggested ?? 0) +
       (s.by_outcome.search_suggested ?? 0),
-    preset: { status: 'review', in_stock: '', sold_months: '' },
+    preset: { status: 'review', in_stock: '', sold_months: '', stale_months: '' },
     tone: 'warn',
   },
   {
@@ -265,7 +303,7 @@ const TILES: Tile[] = [
     label: 'Połączone',
     hint: 'automatycznie i potwierdzone',
     count: (s) => (s.by_outcome.auto ?? 0) + (s.by_outcome.confirmed ?? 0),
-    preset: { status: 'linked', in_stock: '', sold_months: '' },
+    preset: { status: 'linked', in_stock: '', sold_months: '', stale_months: '' },
     tone: 'ok',
   },
   {
@@ -273,7 +311,7 @@ const TILES: Tile[] = [
     label: 'Kod bez karty w katalogu',
     hint: 'kod jest w nazwie XL, karty brak',
     count: (s) => (s.by_outcome.no_match ?? 0) + (s.by_outcome.family_conflict ?? 0),
-    preset: { status: 'no_card', in_stock: '', sold_months: '' },
+    preset: { status: 'no_card', in_stock: '', sold_months: '', stale_months: '' },
     tone: 'neutral',
   },
   {
@@ -281,7 +319,7 @@ const TILES: Tile[] = [
     label: 'Bez kodu w nazwie',
     hint: 'nie ma po czym szukać karty',
     count: (s) => s.by_outcome.no_code ?? 0,
-    preset: { status: 'no_code', in_stock: '', sold_months: '' },
+    preset: { status: 'no_code', in_stock: '', sold_months: '', stale_months: '' },
     tone: 'neutral',
   },
 ]
@@ -306,6 +344,13 @@ export function AdminErpItems() {
   const group = pick(params.get('group'), GROUPS, '')
   const inStock = params.get('in_stock') === '1' ? '1' : ''
   const soldMonths = pick(params.get('sold_months'), SOLD_MONTHS, '')
+  const staleMonths = pick(params.get('stale_months'), STALE_MONTHS, '')
+  const proposals = pick<ProposalsFilter>(
+    params.get('proposals'),
+    PROPOSAL_OPTIONS.map((o) => o.value),
+    '',
+  )
+  const supplierMatch = params.get('supplier_match') === '1' ? '1' : ''
   const supplier = params.get('supplier') ?? ''
   const search = params.get('search') ?? ''
   const linkedByParam = params.get('linked_by') ?? ''
@@ -326,6 +371,9 @@ export function AdminErpItems() {
     if (group) qs.set('group', group)
     if (inStock) qs.set('in_stock', '1')
     if (soldMonths) qs.set('sold_months', soldMonths)
+    if (staleMonths) qs.set('stale_months', staleMonths)
+    if (proposals) qs.set('proposals', proposals)
+    if (supplierMatch) qs.set('supplier_match', '1')
     if (supplier.trim()) qs.set('supplier', supplier.trim())
     if (search.trim()) qs.set('search', search.trim())
     if (linkedBy) qs.set('linked_by', linkedBy)
@@ -336,7 +384,24 @@ export function AdminErpItems() {
     qs.set('page', String(page))
     qs.set('per_page', String(perPage))
     return qs.toString()
-  }, [status, group, inStock, soldMonths, supplier, search, linkedBy, linkedFrom, linkedTo, sort, dir, page, perPage])
+  }, [
+    status,
+    group,
+    inStock,
+    soldMonths,
+    staleMonths,
+    proposals,
+    supplierMatch,
+    supplier,
+    search,
+    linkedBy,
+    linkedFrom,
+    linkedTo,
+    sort,
+    dir,
+    page,
+    perPage,
+  ])
 
   const [summary, setSummary] = useState<ErpAdminSummary | null>(null)
   const [summaryErr, setSummaryErr] = useState('')
@@ -460,7 +525,7 @@ export function AdminErpItems() {
   const selectedIds = selectableIds.filter((id) => selected[id])
   const allVisibleSelected = selectableIds.length > 0 && selectableIds.every((id) => selected[id])
   const showSelect = canManage
-  const colCount = 9 + (showSelect ? 1 : 0)
+  const colCount = 10 + (showSelect ? 1 : 0)
   // opcje „Połączył”: wszyscy łączący z liczników; wybrana osoba zostaje, nawet gdy liczniki jeszcze się wczytują
   const linkerOptions = (summary?.linkers ?? []).filter((l): l is ErpAdminLinker & { key: string } => l.key !== null)
   if (linkedBy && !linkerOptions.some((l) => l.key === linkedBy)) {
@@ -613,11 +678,21 @@ export function AdminErpItems() {
   function applyTile(t: Tile) {
     const active = isTileActive(t)
     setMsg('')
-    setFilters(active ? { status: null, in_stock: null, sold_months: null } : t.preset)
+    const { sort: presetSort, ...filters } = t.preset
+    setFilters(
+      active
+        ? { status: null, in_stock: null, sold_months: null, stale_months: null }
+        : { ...filters, ...(presetSort ? { sort: presetSort === 'stock' ? null : presetSort, dir: null } : {}) },
+    )
   }
 
   function isTileActive(t: Tile): boolean {
-    return status === t.preset.status && inStock === t.preset.in_stock && soldMonths === t.preset.sold_months
+    return (
+      status === t.preset.status &&
+      inStock === t.preset.in_stock &&
+      soldMonths === t.preset.sold_months &&
+      staleMonths === t.preset.stale_months
+    )
   }
 
   function clickSort(key: SortKey) {
@@ -636,7 +711,18 @@ export function AdminErpItems() {
   }
 
   const hasFilters = Boolean(
-    status || group || inStock || soldMonths || supplier || search || linkedBy || linkedFromParam || linkedToParam,
+    status ||
+      group ||
+      inStock ||
+      soldMonths ||
+      staleMonths ||
+      proposals ||
+      supplierMatch ||
+      supplier ||
+      search ||
+      linkedBy ||
+      linkedFromParam ||
+      linkedToParam,
   )
   const meta = result?.meta
   const busy = bulkBusy || busyItemId !== null
@@ -666,7 +752,7 @@ export function AdminErpItems() {
         </p>
       )}
 
-      <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
         {TILES.map((t) => {
           const active = isTileActive(t)
           return (
@@ -687,6 +773,7 @@ export function AdminErpItems() {
               </div>
               <div className="text-xs font-medium text-slate-800">{t.label}</div>
               <div className="text-[11px] text-slate-500">{t.hint}</div>
+              {t.detail && summary && <div className="text-[11px] font-medium text-amber-800">{t.detail(summary)}</div>}
             </button>
           )
         })}
@@ -747,6 +834,24 @@ export function AdminErpItems() {
             ))}
           </select>
         </label>
+        <label
+          className="flex flex-col gap-0.5 text-[11px] text-slate-500"
+          title="Jak w Zapasach: stan we wszystkich magazynach i brak sprzedaży (faktura, paragon, WZ) od tylu miesięcy. Towar nigdy niesprzedany — tylko gdy jego najstarsza dostawa leży dłużej."
+        >
+          Zalegające
+          <select
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
+            value={staleMonths}
+            onChange={(e) => setFilters({ stale_months: e.target.value })}
+          >
+            <option value="">—</option>
+            {STALE_MONTHS.map((m) => (
+              <option key={m} value={m}>
+                bez sprzedaży od {m} mies.
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
           Sprzedaż
           <select
@@ -769,6 +874,34 @@ export function AdminErpItems() {
             onChange={(e) => setFilters({ in_stock: e.target.checked ? '1' : null })}
           />
           tylko ze stanem HANDEL
+        </label>
+        <label
+          className="flex flex-col gap-0.5 text-[11px] text-slate-500"
+          title="Ile kart zaproponował automat (połączone automatycznie i propozycje do decyzji). „Jedna karta” — zaznacz widoczne i potwierdź naraz."
+        >
+          Propozycje
+          <select
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
+            value={proposals}
+            onChange={(e) => setFilters({ proposals: e.target.value })}
+          >
+            {PROPOSAL_OPTIONS.map((o) => (
+              <option key={o.value || 'any'} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label
+          className="flex items-center gap-1.5 pb-1 text-xs text-slate-700"
+          title="Propozycja, w której dostawca z zakupów w XL to producent karty — najmocniejszy dowód automatu"
+        >
+          <input
+            type="checkbox"
+            checked={supplierMatch === '1'}
+            onChange={(e) => setFilters({ supplier_match: e.target.checked ? '1' : null })}
+          />
+          dostawca XL = producent karty
         </label>
         <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
           Dostawca
@@ -928,6 +1061,7 @@ export function AdminErpItems() {
               <SortTh label="Kod XL" k="code" sort={sort} dir={dir} onSort={clickSort} />
               <SortTh label="Nazwa XL" k="name" sort={sort} dir={dir} onSort={clickSort} />
               <SortTh label="HANDEL" k="stock" sort={sort} dir={dir} onSort={clickSort} align="right" />
+              <SortTh label="Wartość" k="value" sort={sort} dir={dir} onSort={clickSort} align="right" />
               <SortTh label="Ostatnia sprzedaż" k="last_sale" sort={sort} dir={dir} onSort={clickSort} />
               <SortTh label="Ostatni zakup / dostawca" k="last_purchase" sort={sort} dir={dir} onSort={clickSort} />
               <SortTh label="Status" k="status" sort={sort} dir={dir} onSort={clickSort} />
@@ -994,6 +1128,21 @@ export function AdminErpItems() {
                       {erpQty(item.stock_trade)}
                     </span>
                     <span className="text-slate-500">{erpUnitLabel(item.unit)}</span>
+                    {item.stock_total !== item.stock_trade && (
+                      <div className="text-[11px] text-slate-500">wszystkie: {erpQty(item.stock_total)}</div>
+                    )}
+                  </td>
+                  <td
+                    className="whitespace-nowrap p-2 text-right tabular-nums text-slate-700"
+                    title="Jak w Zapasach: ilość we wszystkich magazynach × cena zakupu (partie z XL, a bez nich ostatnia PZ)"
+                  >
+                    {item.stock_value != null ? (
+                      `${formatPrice(item.stock_value)} zł`
+                    ) : item.stock_total > 0 ? (
+                      <span className="text-[11px] text-slate-400">brak ceny zakupu</span>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap p-2 text-slate-700">
                     {item.last_sale_at ? formatDate(item.last_sale_at) : <span className="text-slate-400">—</span>}

@@ -8,7 +8,8 @@ import { AppFrame, Btn, Card, Field, LiveFrame, LivePage, LiveScreen, Mark, Slid
 /**
  * Samouczek „Nowości (październik 2026)”. Ogłoszenia z Biuletynu Zamówień Publicznych. Etapy 3–4: kalendarz terminów i subskrypcja w programie pocztowym,
  * wyszukiwanie Ctrl+K, karta klienta i notatki, powiązanie zapytania z klientem, wynik zapytania i podpowiedź z ERP XL,
- * ważność oferty, cele handlowców i przypisanie pracownika ERP XL, okno łączenia towaru XL z kartą; „Czego jeszcze nie ma”. Etapy 0–1: godzina składania
+ * ważność oferty, cele handlowców i przypisanie pracownika ERP XL, okno łączenia towaru XL z kartą, zalegające i filtry propozycji
+ * w Powiązaniach z ERP XL; „Czego jeszcze nie ma”. Etapy 0–1: godzina składania
  * i numer ogłoszenia, wynik przetargu i pobieranie wyniku z Biuletynu, raport skuteczności, powiadomienia i wzmianki
  * „@”, „Do zrobienia dziś”, stan systemu. Wynik kampanii w Raportach i zespoły w Rolach.
  * Ekrany to rysunki poglądowe z przykładowymi danymi (poza dashboardem i stanem systemu — tam prawdziwy widok).
@@ -514,6 +515,54 @@ function Stage34Slideshow() {
                 </div>
                 <div className="text-right">
                   <Btn label="Połącz z RTEPO" />
+                </div>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Powiązania z ERP XL — najpierw zalegający towar',
+          does: 'Kafelek „Zalegające bez karty” pokazuje towary z ERP XL, które leżą na magazynie (wszystkie magazyny), nie sprzedały się od 6 miesięcy i nie mają jeszcze karty — z łączną wartością (ilość × cena zakupu). Liczy się tak samo jak „W tym bez karty” w Zapasach: towar, który nigdy się nie sprzedał, wchodzi dopiero wtedy, gdy jego najstarsza dostawa leży dłużej niż próg. Liczba bywa o kilka mniejsza niż w Zapasach, bo ten ekran nie pokazuje towarów archiwalnych w ERP XL. Kliknięcie kafelka układa te towary od najdroższego. Filtr „Zalegające” zmienia próg na 3, 6, 12 albo 24 miesiące. Kolumna „Wartość” pokazuje, ile pieniędzy stoi w towarze (kliknięcie nagłówka sortuje); „brak ceny zakupu” — towar ma stan, ale ERP XL nie podaje ani wartości dostaw, ani ceny z ostatniego przyjęcia. Pod stanem HANDEL widać stan we wszystkich magazynach, gdy jest inny. Filtr „Propozycje”: „jedna karta” — automat zaproponował jedną kartę, takie towary można przejrzeć i potwierdzić naraz; „kilka kart” — przy każdym trzeba wybrać „To ta”; „bez propozycji” — kartę trzeba znaleźć samemu („Wybierz kartę…”). Pole „dostawca XL = producent karty” zostawia propozycje, w których dostawca z zakupów w ERP XL jest producentem karty — to najmocniejsza wskazówka automatu, ale nazwę i tak warto sprawdzić. Eksport do Excela ma kolumnę „Wartość zapasu”.',
+          click: 'Administracja → Powiązania z ERP XL → kafelek „Zalegające bez karty” → „Propozycje: jedna karta” → przejrzyj nazwy → „Zaznacz widoczne do potwierdzenia” → „Potwierdź zaznaczone”. Potem „Propozycje: bez propozycji” i „Wybierz kartę…” w wierszu.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Administracja">
+              <Card className="space-y-2 text-xs">
+                <Mark>
+                  <div className="rounded-xl border border-sky-400 bg-sky-50 px-3 py-2 text-left">
+                    <div className="text-xl font-semibold text-amber-800">2 203</div>
+                    <div className="font-medium text-slate-800">Zalegające bez karty</div>
+                    <div className="text-[11px] text-slate-500">stan, bez sprzedaży od 6 mies. — najdroższe na górze</div>
+                    <div className="text-[11px] font-medium text-amber-800">wartość 1,1 mln zł</div>
+                  </div>
+                </Mark>
+                <div className="flex flex-wrap gap-2 text-[11px] text-slate-600">
+                  <span className="rounded border border-slate-300 px-2 py-1">Zalegające: bez sprzedaży od 6 mies.</span>
+                  <span className="rounded border border-blue-400 px-2 py-1">Propozycje: jedna karta</span>
+                  <span className="rounded border border-slate-300 px-2 py-1">☐ dostawca XL = producent karty</span>
+                </div>
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-600">
+                      <Th>Kod XL</Th>
+                      <Th>HANDEL</Th>
+                      <Th>Wartość ▼</Th>
+                      <Th>Karta</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-t">
+                      <td className="p-2 font-mono">BTR5555</td>
+                      <td className="p-2 tabular-nums">120 par</td>
+                      <td className="p-2 tabular-nums">8 640,00 zł</td>
+                      <td className="p-2">
+                        <span className="font-mono text-blue-600">5555-S3</span> · dostawca = producent
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div className="text-right">
+                  <Btn label="Potwierdź zaznaczone (1)" />
                 </div>
               </Card>
             </AppFrame>

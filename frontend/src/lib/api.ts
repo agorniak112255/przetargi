@@ -999,6 +999,8 @@ export type ErpAdminItem = {
   archived: boolean
   stock_trade: number
   stock_total: number
+  /** Wartość zapasu jak w Zapasach: ilość × cena zakupu, wszystkie magazyny; null = bez stanu albo bez ceny zakupu. */
+  stock_value: number | null
   /** 'YYYY-MM-DD' */
   last_sale_at: string | null
   last_purchase_at: string | null
@@ -1024,6 +1026,8 @@ export type ErpAdminSummary = {
   by_outcome: Partial<Record<NonNullable<ErpOutcome>, number>>
   unlinked_sold_12m: number
   unlinked_in_stock: number
+  /** Zalegające bez karty jak w Zapasach (stan, bez sprzedaży od `months` mies.); value_unknown = bez ceny zakupu. */
+  unlinked_stale: { months: number; items: number; value: number; value_unknown: number }
   groups: { group: string; total: number; linked: number }[]
   /** Wszyscy, którzy łączyli (automat pierwszy) — opcje filtra „Połączył”. */
   linkers: ErpAdminLinker[]
