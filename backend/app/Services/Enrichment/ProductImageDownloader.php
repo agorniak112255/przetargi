@@ -472,19 +472,10 @@ final class ProductImageDownloader
      */
     private static function nonImageContentReason(string $bytes, string $headerMime): ?string
     {
-        $head = substr($bytes, 0, 512);
-        if (str_starts_with($head, "\xEF\xBB\xBF")) {
-            $head = substr($head, 3);
-        }
-        $head = strtolower(ltrim($head));
         $header = $headerMime !== '' ? ' (nagłówek '.$headerMime.')' : '';
-        foreach (['<!doctype', '<html', '<head', '<body'] as $tag) {
-            if (str_starts_with($head, $tag)) {
-                return 'To strona HTML, nie obraz'.$header;
-            }
-        }
-        if (str_starts_with($head, '<?xml') || str_starts_with($head, '<svg')) {
-            return (str_contains($head, '<svg') ? 'To grafika SVG, nie zdjęcie' : 'To dokument XML, nie obraz').$header;
+        $markup = self::markupContentReason($bytes);
+        if ($markup !== null) {
+            return $markup.$header;
         }
         $sniffed = strtolower((string) (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes));
         if (isset(self::ALLOWED_MIME[$sniffed])) {
@@ -492,6 +483,30 @@ final class ProductImageDownloader
         }
 
         return 'Odpowiedź nie jest obrazem ('.$sniffed.')'.$header;
+    }
+
+    /**
+     * Bajty zaczynające się od znaczników strony HTML, dokumentu XML albo grafiki SVG; null = nie wyglądają na znaczniki.
+     * Bez rozpoznawania typu przez libmagic — tej części używa też storeBytes, a łączniki i ich testy podają tam
+     * prawdziwe obrazy albo dowolne bajty z nagłówkiem obrazu.
+     */
+    private static function markupContentReason(string $bytes): ?string
+    {
+        $head = substr($bytes, 0, 512);
+        if (str_starts_with($head, "\xEF\xBB\xBF")) {
+            $head = substr($head, 3);
+        }
+        $head = strtolower(ltrim($head));
+        foreach (['<!doctype', '<html', '<head', '<body'] as $tag) {
+            if (str_starts_with($head, $tag)) {
+                return 'To strona HTML, nie obraz';
+            }
+        }
+        if (str_starts_with($head, '<?xml') || str_starts_with($head, '<svg')) {
+            return str_contains($head, '<svg') ? 'To grafika SVG, nie zdjęcie' : 'To dokument XML, nie obraz';
+        }
+
+        return null;
     }
 
     /** Profil producenta karty — jak ProductEnrichmentService::profiles(), przez kontener (konstruktor bez zmian). */
@@ -518,6 +533,11 @@ final class ProductImageDownloader
         }
         $size = strlen($bytes);
         if ($bytes === '' || $size > self::MAX_BYTES) {
+            return null;
+        }
+        // Strona „404 Resource not found” pod nagłówkiem image/jpeg z serwera plików dostawcy (multimedia.3m.com,
+        // audyt 3M 08.10.2026: 46491, 46551, 40641) — bramka downloadOne tu nie działa, więc zapis szedł jako .jpg.
+        if (self::markupContentReason($bytes) !== null) {
             return null;
         }
 

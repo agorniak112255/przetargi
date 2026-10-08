@@ -57,6 +57,20 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
 
     private const DATASHEET_TYPE = 'arkusze danych';
 
+    /**
+     * Zaślepki zamiast zdjęcia wyrobu (audyt 08.10.2026: główne zdjęcie 248 kart Scott i 53 kart części) — numer zasobu
+     * multimedia.3m.com albo nazwa pliku: „3M Scott Spares and Accessories” (2100067) i „Spare Part” (2549891).
+     */
+    private const PLACEHOLDER_ASSETS = ['2100067', '2549891'];
+
+    private const PLACEHOLDER_NAMES = ['spare-and-accessories-icon', 'spare-part-picto'];
+
+    /**
+     * Szara ikona pliku, którą multimedia.3m.com oddaje zamiast obrazu zasobu bez wersji graficznej (obroty 360°, filmy)
+     * — spod zwykłych adresów zdjęć (2593907Z „…6059-abek1.jpg”), za każdym razem z innymi bajtami, zawsze 240×175.
+     */
+    private const FILE_ICON_SIZE = [240, 175];
+
     private const SHOP_SECTION_TRADE = 'Informacje handlowe';
 
     private const SHOP_SECTION_TECHNICAL = 'Dane techniczne';
@@ -90,6 +104,15 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
 
     /** @var array<string, true> */
     private array $withoutDescription = [];
+
+    /** Bramka plików karty z kodami wszystkich pozycji listy (products()); bez listy — tylko materiały marketingowe. */
+    private ?MmmDocumentGate $documentGate = null;
+
+    /** @var array<string, int> powód pominięcia pliku → liczba dołączeń w przebiegu */
+    private array $skippedDocuments = [];
+
+    /** Zaślepki i obrazy-nie-obrazy pominięte w galeriach przebiegu. */
+    private int $skippedImages = 0;
 
     private ?string $pdpId = null;
 
@@ -181,8 +204,15 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         $this->pdp = [];
         $this->colourCards = 0;
         $this->colourMembers = 0;
+        $this->skippedDocuments = [];
+        $this->skippedImages = 0;
 
         $items = $this->listItems();
+        $codes = [];
+        foreach ($items as $item) {
+            array_push($codes, ...MmmDocumentGate::accountCodes((string) $item['catalog'], (string) $item['name']));
+        }
+        $this->documentGate = new MmmDocumentGate($codes);
         $colours = self::colourGroups($items);
         // na start zakładamy, że każda grupa kolorów da jedną kartę; po cenach — liczba faktycznie wydanych produktów
         $this->total = count($items) - count($colours) + count(array_unique(array_column($colours, 'key')));
@@ -351,6 +381,12 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         if ($this->colourCards > 0) {
             $lines[] = 'Warianty kolorystyczne 3M: '.$this->colourCards.' wyrobów z '.$this->colourMembers.' pozycji';
         }
+        foreach ($this->skippedDocuments as $reason => $count) {
+            $lines[] = 'Pliki z karty 3M pominięte — '.$reason.': '.$count;
+        }
+        if ($this->skippedImages > 0) {
+            $lines[] = 'Zdjęcia z karty 3M pominięte (zaślepka, ikona pliku albo strona zamiast obrazu): '.$this->skippedImages;
+        }
         if ($this->account !== null && $this->client->isLoggedIn()) {
             $lines[] = $this->saveSession() ?? 'Sesja 3M zapisana na koncie';
         }
@@ -457,12 +493,27 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
             $parts[] = implode("\n", $benefits);
         }
 
-        $description = mb_substr(implode("\n\n", $parts), 0, 20000);
+        $description = mb_substr(self::sourceMarkup(implode("\n\n", $parts)), 0, 20000);
         if ($description === '') {
             $this->withoutDescription[$product->remoteId] = true;
         }
 
         return $description;
+    }
+
+    /**
+     * Znaczniki z systemu redakcyjnego 3M zostawione w tekście (audyt 08.10.2026) — tylko te trzy wzory, reszta tekstu
+     * dosłownie:
+     * - „(bul)” zamiast punktu listy (kable PELTOR: „… (bul) Współpracuje z … (bul) Umożliwia …”) → nowy punkt „- ”;
+     * - „¬” — miękki podział wyrazu z PDF-u w środku słowa („poja¬wienia”) → usunięty;
+     * - notatki redaktora po numerze normy: „EN 12492 (dodać normę) … EN 397 (opis)” (16 hełmów X5000) → usunięte.
+     */
+    private static function sourceMarkup(string $text): string
+    {
+        $text = (string) preg_replace('/[ \t]*\(bul\)[ \t]*/u', "\n- ", $text);
+        $text = (string) preg_replace('/(?<=\p{L})¬[ \t]?(?=\p{L})/u', '', $text);
+
+        return (string) preg_replace('/(EN(?: ISO)? \d[\d\-:+A]*)[ \t]*\((?:dodać normę|opis)\)/u', '$1', $text);
     }
 
     /**
@@ -528,6 +579,8 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
     public function documents(B2bRemoteProduct $product): array
     {
         $documents = [];
+        $gate = $this->documentGate ?? new MmmDocumentGate([]);
+        $codes = self::cardCodes($product);
         foreach (self::listOf($this->pdpOf($product)['media_links_documents'] ?? null) as $row) {
             if (! is_array($row)) {
                 continue;
@@ -544,6 +597,15 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
             if ($url === null || isset($documents[$url])) {
                 continue;
             }
+            // banery, ulotki sprzedażowe i karty innych pozycji 3M podpięte pod kartę rodziny (MmmDocumentGate);
+            // limit plików liczy się dopiero po bramce — inaczej obce pliki wypierałyby kartę techniczną wyrobu
+            $rejection = $gate->rejection($codes, $title, $url);
+            if ($rejection !== null) {
+                $key = preg_replace('/ \(.*$/u', '', $rejection) ?? $rejection;
+                $this->skippedDocuments[$key] = ($this->skippedDocuments[$key] ?? 0) + 1;
+
+                continue;
+            }
             $documents[$url] = new B2bRemoteDocument(
                 mb_substr($title !== '' ? $title : rawurldecode(basename((string) parse_url($url, PHP_URL_PATH))), 0, 255),
                 $url,
@@ -555,6 +617,31 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         }
 
         return array_values($documents);
+    }
+
+    /**
+     * Kody karty dla bramki plików: numery 3M i nazwa pozycji (na karcie kolorów — każdej pozycji i nazwa karty).
+     *
+     * @return list<string>
+     */
+    private static function cardCodes(B2bRemoteProduct $product): array
+    {
+        $item = is_array($product->raw['item'] ?? null) ? $product->raw['item'] : [];
+        $numbers = [$product->sku, $product->remoteId];
+        foreach (['catalog', 'id', 'legacy', 'gtin'] as $key) {
+            $numbers[] = (string) ($item[$key] ?? '');
+        }
+        $names = [$product->name, (string) ($product->cardName ?? '')];
+        foreach ($product->members as $member) {
+            $numbers[] = (string) ($member['remote_id'] ?? '');
+            $numbers[] = (string) ($member['sku'] ?? '');
+            $names[] = (string) ($member['name'] ?? '');
+        }
+
+        return MmmDocumentGate::cardCodes(
+            array_values(array_filter($numbers, static fn (string $v): bool => $v !== '')),
+            array_values(array_filter($names, static fn (string $v): bool => $v !== '')),
+        );
     }
 
     /**
@@ -589,6 +676,11 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
             }
             $pattern = html_entity_decode(self::value($row['url_pattern'] ?? null), ENT_QUOTES | ENT_HTML5);
             $url = str_contains($pattern, '<R>') ? str_replace('<R>', 'Z', $pattern) : self::value($row['url'] ?? null);
+            if (self::isPlaceholderImageUrl($url)) {
+                $this->skippedImages++;
+
+                continue;
+            }
             if ($url !== '' && MmmB2bClient::isFileUrl($url) && self::hasImageExtension($url)) {
                 $urls[$url] = true;
             }
@@ -598,7 +690,7 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         }
         if ($urls === []) {
             $listed = (string) ($product->raw['item']['image'] ?? '');
-            if ($listed !== '' && MmmB2bClient::isFileUrl($listed)) {
+            if ($listed !== '' && MmmB2bClient::isFileUrl($listed) && ! self::isPlaceholderImageUrl($listed)) {
                 $urls[$listed] = true;
             }
         }
@@ -606,19 +698,53 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         return array_keys($urls);
     }
 
+    /**
+     * Obraz spod adresu galerii — tylko gdy bajty to naprawdę obraz. Nagłówkowi nie ufamy: multimedia.3m.com oddaje
+     * pod nagłówkiem obrazu stronę „404 Resource not found” (zapisaną dawniej jako .jpg na 46491, 46551, 40641…)
+     * albo szarą ikonę pliku 240×175 zamiast zdjęcia (isFileIcon). Jedno i drugie = brak zdjęcia (null).
+     */
     public function imageAt(string $url): ?B2bRemoteImage
     {
         $file = $this->client->fileBytes($url);
         if ($file['bytes'] === '') {
             return null;
         }
-        $mime = $file['mime'];
-        if (! str_starts_with($mime, 'image/')) {
-            $info = @getimagesizefromstring($file['bytes']);
-            $mime = is_array($info) ? (string) $info['mime'] : '';
+        $info = @getimagesizefromstring($file['bytes']);
+        if (! is_array($info) || ! str_starts_with((string) $info['mime'], 'image/') || self::isFileIcon($info)) {
+            $this->skippedImages++;
+
+            return null;
         }
 
-        return str_starts_with($mime, 'image/') ? new B2bRemoteImage(bytes: $file['bytes'], mime: $mime, sourceUrl: $url) : null;
+        return new B2bRemoteImage(bytes: $file['bytes'], mime: (string) $info['mime'], sourceUrl: $url);
+    }
+
+    /**
+     * Zaślepka 3M zamiast zdjęcia wyrobu: zasób 2100067/2549891 (dowolny wariant: …Z, …J) albo nazwa pliku zaślepki.
+     */
+    public static function isPlaceholderImageUrl(string $url): bool
+    {
+        $path = mb_strtolower((string) parse_url($url, PHP_URL_PATH));
+        if (preg_match('#/mws/media/(\d+)[a-z]/#', $path, $m) === 1 && in_array($m[1], self::PLACEHOLDER_ASSETS, true)) {
+            return true;
+        }
+        foreach (self::PLACEHOLDER_NAMES as $name) {
+            if (str_contains(basename($path), $name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Szara ikona pliku multimedia.3m.com — po wymiarach (FILE_ICON_SIZE), bo bajty bywają za każdym razem inne.
+     *
+     * @param  array<int|string, mixed>  $info  getimagesizefromstring
+     */
+    public static function isFileIcon(array $info): bool
+    {
+        return [(int) ($info[0] ?? 0), (int) ($info[1] ?? 0)] === self::FILE_ICON_SIZE;
     }
 
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage

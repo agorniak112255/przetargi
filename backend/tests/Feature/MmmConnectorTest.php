@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
@@ -69,6 +70,9 @@ final class MmmConnectorTest extends TestCase
     private const SAML_RESPONSE = 'PHNhbWxwOlJlc3BvbnNlPg==';
 
     private const MEDIA = 'https://multimedia.3m.com/mws/media/';
+
+    /** Początek strony, którą multimedia.3m.com oddaje pod nagłówkiem image/jpeg (zapisana jako .jpg na 46491). */
+    private const RESOURCE_404 = "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n<html><head><title>404 Not Found</title></head><body><h1>Resource not found</h1></body></html>";
 
     /** @var list<string> ważne sesje sklepu (JSESSIONID) */
     private array $storeSessions = ['live'];
@@ -847,6 +851,212 @@ final class MmmConnectorTest extends TestCase
 
     // ---- pomocnicze ----
 
+    public function test_gallery_skips_3m_placeholders_file_icons_and_pages_served_as_images(): void
+    {
+        $this->fakeSite();
+        $this->mediaCatalog();
+        $connector = $this->connector();
+        $mask = self::byId(iterator_to_array($connector->products(), false))['7000001001'];
+
+        // zaślepki „Scott Spares and Accessories” i „Spare Part” odpadają po adresie, bez pobierania
+        $this->assertSame([
+            self::MEDIA.'2593907Z/brak-zasobu-6200.jpg',
+            self::MEDIA.'2593908Z/ikona-pliku-6200.jpg',
+            self::MEDIA.'1287824Z/polmaska-6200.jpg',
+        ], $connector->imageUrls($mask));
+        // strona 404 i ikona pliku 240×175 mają nagłówek obrazu — liczą się bajty
+        $this->assertNull($connector->imageAt(self::MEDIA.'2593907Z/brak-zasobu-6200.jpg'));
+        $this->assertNull($connector->imageAt(self::MEDIA.'2593908Z/ikona-pliku-6200.jpg'));
+        $this->assertSame('image/jpeg', $connector->imageAt(self::MEDIA.'1287824Z/polmaska-6200.jpg')?->mime);
+        $this->assertTrue(MmmB2bConnector::isPlaceholderImageUrl(self::MEDIA.'2100067J/inna-nazwa.jpg'));
+        $this->assertFalse(MmmB2bConnector::isPlaceholderImageUrl(self::MEDIA.'21000671Z/hełm.jpg'));
+        $this->assertStringContainsString('Zdjęcia z karty 3M pominięte (zaślepka, ikona pliku albo strona zamiast obrazu): 4', implode("\n", $connector->runSummary()));
+    }
+
+    public function test_documents_skip_marketing_and_files_of_other_3m_positions_but_keep_family_files(): void
+    {
+        $this->fakeSite();
+        $this->mediaCatalog();
+        $connector = $this->connector();
+        $products = self::byId(iterator_to_array($connector->products(), false));
+
+        $this->assertSame([
+            'Karta danych 6200.pdf',
+            'Broszura półmasek wielokrotnego użytku.pdf',
+            'Instrukcja 3M 6000 – półmaski 6100, 6200, 6300',
+        ], array_map(static fn ($d): string => $d->title, $connector->documents($products['7000001001'])));
+        // ta sama karta 9936 przy własnej pozycji zostaje
+        $this->assertSame(['Karta techniczna 3M Aura 9936'], array_map(static fn ($d): string => $d->title, $connector->documents($products['7000001002'])));
+
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringContainsString('Pliki z karty 3M pominięte — materiał marketingowy 3M: 2', $summary);
+        $this->assertStringContainsString('Pliki z karty 3M pominięte — plik innego wyrobu 3M: 2', $summary);
+    }
+
+    public function test_description_drops_3m_editorial_markup_and_keeps_the_rest_verbatim(): void
+    {
+        $this->fakeSite();
+        $this->mediaCatalog();
+        $connector = $this->connector();
+        $products = self::byId(iterator_to_array($connector->products(), false));
+
+        $this->assertSame(
+            "Przewód do radiotelefonu.\n- Współpracuje z PELTOR\n- Umożliwia podłączenie\n\n"
+            .'Hełmy mogą spełniać wymagania normy EN 12492 lub wymagania normy EN 397, przy pojawieniu się hałasu (opis w instrukcji).',
+            $connector->description($products['7000001001']),
+        );
+    }
+
+    public function test_media_audit_removes_legacy_placeholders_pages_and_foreign_files_and_the_next_sync_adds_none_back(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->fakeSite();
+        $this->mediaCatalog();
+        $account = $this->account(['live' => true]);
+        $sync = fn (): array => app(B2bAccountSyncRunner::class)->run(
+            $account->fresh() ?? $account, delayMs: 0, withImages: true, connector: MmmB2bConnector::forAccount($account->fresh() ?? $account, 0),
+        );
+
+        $first = $sync();
+        $this->assertSame(2, $first['created'], implode(' | ', $first['errors']));
+        $card = Product::query()->where('sku', '7000001001')->sole();
+        $real = self::MEDIA.'1287824Z/polmaska-6200.jpg';
+        $this->assertSame([$real], ProductImage::query()->where('product_id', $card->id)->pluck('source_url')->all());
+        $this->assertSame(
+            ['Karta danych 6200.pdf', 'Broszura półmasek wielokrotnego użytku.pdf', 'Instrukcja 3M 6000 – półmaski 6100, 6200, 6300'],
+            ProductDocument::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('title')->all(),
+        );
+
+        // stan karty z produkcji sprzed poprawki: zaślepka jako zdjęcie główne, strona 404 jako .jpg, ikona pliku,
+        // karta techniczna innej pozycji i baner — wszystko z kontem 3M; obok zdjęcie z sieci i plik bez konta
+        $legacy = [
+            ['zaslepka.jpg', self::jpeg('z', 300, 300), self::MEDIA.'2100067Z/3m-scott-spare-and-accessories-icon-for-b-com.jpg', $account->id],
+            ['strona.jpg', self::RESOURCE_404, self::MEDIA.'2593907Z/brak-zasobu-6200.jpg', $account->id],
+            ['ikona.jpg', self::jpeg('i', 240, 175), self::MEDIA.'2593909Z/inny-zasob.jpg', $account->id],
+            ['z-sieci.jpg', self::jpeg('w', 300, 300), 'https://sklep.example.com/polmaska-6200.jpg', null],
+        ];
+        foreach ($legacy as $i => [$file, $bytes, $url, $owner]) {
+            Storage::disk('public')->put('products/'.$card->id.'/'.$file, $bytes);
+            ProductImage::query()->forceCreate([
+                'product_id' => $card->id, 'b2b_account_id' => $owner, 'path' => 'products/'.$card->id.'/'.$file,
+                'source_url' => $url, 'is_primary' => $i === 0, 'sort_order' => $i === 0 ? 0 : 10 + $i, 'checksum' => hash('sha256', $bytes),
+            ]);
+        }
+        ProductImage::query()->where('source_url', $real)->update(['is_primary' => false, 'sort_order' => 5]);
+        foreach ([
+            ['Karta techniczna 3M Aura 9936', self::MEDIA.'1400001O/karta-9936.pdf', $account->id],
+            ['Peltor Comtac IX Facebook banner', self::MEDIA.'2648535O/3m-peltor-comtac-ix-facebook-banner-ce-version.pdf', $account->id],
+            ['Karta techniczna 3M Aura 9936', 'https://sklep.example.com/karta-9936.pdf', null],
+        ] as $i => [$title, $url, $owner]) {
+            Storage::disk('public')->put('products/'.$card->id.'/docs/legacy'.$i.'.pdf', '%PDF-1.4 '.$title);
+            ProductDocument::query()->forceCreate([
+                'product_id' => $card->id, 'b2b_account_id' => $owner, 'path' => 'products/'.$card->id.'/docs/legacy'.$i.'.pdf',
+                'source_url' => $url, 'title' => $title, 'kind' => ProductDocument::KIND_DATASHEET, 'sort_order' => 20 + $i,
+                'checksum' => hash('sha256', $title.$i), 'size_bytes' => 10,
+            ]);
+        }
+        $imagesBefore = ProductImage::query()->count();
+        $documentsBefore = ProductDocument::query()->count();
+
+        // sam przebieg zastanych wierszy nie usuwa (synchronizacja tylko dokłada)
+        $this->assertSame(0, $sync()['created']);
+        $this->assertSame($imagesBefore, ProductImage::query()->count());
+        $this->assertSame($documentsBefore, ProductDocument::query()->count());
+
+        // raport niczego nie usuwa
+        $this->artisan('b2b:mmm-media-audit')
+            ->expectsOutputToContain('zaślepki i ikony pliku: 2; strony zamiast obrazu: 1')
+            ->expectsOutputToContain('do usunięcia: 2')
+            ->assertSuccessful();
+        $this->assertSame($imagesBefore, ProductImage::query()->count());
+        $this->assertSame($documentsBefore, ProductDocument::query()->count());
+
+        $this->artisan('b2b:mmm-media-audit --apply')->assertSuccessful();
+        $this->assertSame(
+            [$real, 'https://sklep.example.com/polmaska-6200.jpg'],
+            ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('source_url')->all(),
+        );
+        $this->assertTrue(ProductImageRejection::query()->where('product_id', $card->id)->where('source_url', 'like', '%2100067Z%')->exists());
+        $this->assertTrue(ProductImageRejection::query()->where('product_id', $card->id)->where('source_url', 'like', '%2593909Z%')->exists());
+        // strona 404 bez śladu odrzucenia — adres może kiedyś oddać prawdziwe zdjęcie
+        $this->assertFalse(ProductImageRejection::query()->where('source_url', 'like', '%2593907Z%')->exists());
+        $this->assertSame(
+            ['Karta danych 6200.pdf', 'Broszura półmasek wielokrotnego użytku.pdf', 'Instrukcja 3M 6000 – półmaski 6100, 6200, 6300', 'Karta techniczna 3M Aura 9936'],
+            ProductDocument::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('title')->all(),
+        );
+        $this->assertNull(ProductDocument::query()->where('product_id', $card->id)->where('title', 'Karta techniczna 3M Aura 9936')->value('b2b_account_id'));
+        // karta 9936 przy swojej pozycji zostaje
+        $this->assertTrue(ProductDocument::query()->where('product_id', Product::query()->where('sku', '7000001002')->value('id'))->where('title', 'Karta techniczna 3M Aura 9936')->exists());
+
+        // kolejny przebieg nie dokłada niczego z powrotem, a zdjęcie wyrobu jest główne
+        $sync();
+        $this->assertSame(
+            [$real, 'https://sklep.example.com/polmaska-6200.jpg'],
+            ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('source_url')->all(),
+        );
+        $this->assertSame($real, ProductImage::query()->where('product_id', $card->id)->where('is_primary', true)->value('source_url'));
+        $this->assertSame(4, ProductDocument::query()->where('product_id', $card->id)->count());
+    }
+
+    /**
+     * Dwie pozycje: półmaska 6200 z galerią i plikami jak na karcie 3M po audycie 08.10.2026 (zaślepki, strona 404
+     * i ikona pliku pod nagłówkiem obrazu, baner, karta innej pozycji) i półmaska 9936 — jej kod czyni plik
+     * „Karta techniczna 3M Aura 9936” plikiem innej pozycji przy 6200.
+     */
+    private function mediaCatalog(): void
+    {
+        $this->items = [
+            self::item('7000001001', '6200', 'Półmaska 3M 6200, rozmiar M', 'EA', 'szt', 'CS', 'karton', '24'),
+            self::item('7000001002', '9936', 'Półmaska filtrująca 3M Aura, FFP3, 9936', 'EA', 'szt', 'CS', 'karton', '10'),
+        ];
+        $this->prices = [
+            '7000001001' => self::price('24,54 PLN / szt', '49,08 PLN / szt', '1 szt'),
+            '7000001002' => self::price('12,00 PLN / szt', '20,00 PLN / szt', '1 szt'),
+        ];
+        $pdf = static fn (string $asset, string $title, string $type = 'Arkusze danych'): array => [
+            'url' => self::MEDIA.$asset.'J/'.$asset.'.jpg', 'title' => $title, 'content_type' => $type, 'mime_type' => 'application/pdf',
+        ];
+        $image = static fn (string $asset, string $file, bool $main = false): array => [
+            'url' => self::MEDIA.$asset.'J/'.$file, 'url_pattern' => self::MEDIA.$asset.'<R>/'.$file, 'is_main_image' => $main, 'mime_type' => 'image/jpeg',
+        ];
+        $this->pdps = [
+            '7000001001' => [
+                'mmm_id' => '7000001001',
+                'name' => 'Półmaska 3M 6200',
+                'description' => 'Przewód do radiotelefonu. (bul) Współpracuje z PELTOR (bul) Umożliwia podłączenie',
+                'long_description' => 'Hełmy mogą spełniać wymagania normy EN 12492 (dodać normę) lub wymagania normy EN 397 (opis), '
+                    .'przy poja¬wieniu się hałasu (opis w instrukcji).',
+                'classified' => [],
+                'media_links_images' => [
+                    $image('2100067', '3m-scott-spare-and-accessories-icon-for-b-com.jpg', true),
+                    $image('2549891', 'emea-psd-spare-part-picto-with-white-mesh.jpg'),
+                    $image('2593907', 'brak-zasobu-6200.jpg'),
+                    $image('2593908', 'ikona-pliku-6200.jpg'),
+                    $image('1287824', 'polmaska-6200.jpg'),
+                ],
+                'media_links_documents' => [
+                    $pdf('1400010', 'Karta danych 6200.pdf'),
+                    $pdf('1400001', 'Karta techniczna 3M Aura 9936'),
+                    $pdf('2648535', 'Peltor Comtac IX Facebook banner', 'Grafika'),
+                    $pdf('2390788', 'Infografika 3M: Testowanie słuchu i kompatybilność', 'Ulotki'),
+                    $pdf('1400002', 'Broszura półmasek wielokrotnego użytku.pdf', 'Broszury'),
+                    // plik z kodem tej karty zostaje, choć wymienia też inne pozycje
+                    $pdf('1400003', 'Instrukcja 3M 6000 – półmaski 6100, 6200, 6300', 'Instrukcje'),
+                    $pdf('1400004', 'tds-vflex-9936-pl.pdf'),
+                ],
+            ],
+            '7000001002' => [
+                'mmm_id' => '7000001002',
+                'name' => 'Aura 9936',
+                'description' => 'Półmaska filtrująca FFP3.',
+                'classified' => [],
+                'media_links_images' => [],
+                'media_links_documents' => [$pdf('1400001', 'Karta techniczna 3M Aura 9936')],
+            ],
+        ];
+    }
+
     private function client(): MmmB2bClient
     {
         return new MmmB2bClient(self::EMAIL, self::PASSWORD, [], 0, static function (int $ms): void {});
@@ -1261,6 +1471,14 @@ final class MmmConnectorTest extends TestCase
                 if (str_ends_with($path, '.pdf')) {
                     return Http::response("%PDF-1.4\n".basename($path)."\n%%EOF", 200, ['Content-Type' => 'application/pdf']);
                 }
+                // jak na żywo (audyt 08.10.2026): zasób bez wersji graficznej — strona 404 albo szara ikona pliku
+                // 240×175, obie z nagłówkiem obrazu i kodem 200
+                if (str_contains($path, 'brak-zasobu')) {
+                    return Http::response(self::RESOURCE_404, 200, ['Content-Type' => 'image/jpeg']);
+                }
+                if (str_contains($path, 'ikona-pliku')) {
+                    return Http::response(self::jpeg($path, 240, 175), 200, ['Content-Type' => 'image/jpeg']);
+                }
 
                 return Http::response(self::jpeg($path), 200, ['Content-Type' => 'image/jpeg']);
             }
@@ -1374,9 +1592,9 @@ final class MmmConnectorTest extends TestCase
             .'</form></body></html>';
     }
 
-    private static function jpeg(string $path): string
+    private static function jpeg(string $path, int $width = 1, int $height = 1): string
     {
-        $image = imagecreatetruecolor(1, 1);
+        $image = imagecreatetruecolor($width, $height);
         imagesetpixel($image, 0, 0, crc32($path) & 0xFFFFFF);
         ob_start();
         imagejpeg($image);
