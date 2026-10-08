@@ -10,7 +10,9 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
+use Throwable;
 
 /**
  * Zdjęcia VM Footwear bez tła (PNG) z folderu producenta na SharePoincie — link „Do pobrania” ze strony głównej
@@ -180,13 +182,27 @@ final class VmFootwearSharePoint
     public function fileBytes(string $url): array
     {
         $path = $this->pathFromUrl($url);
-        $response = $this->send(fn (PendingRequest $http): Response => $http->accept('*/*')->get(
+        // limit w trakcie pobierania (nagłówek albo pobrane bajty), nie po wczytaniu całości do pamięci
+        $tooLarge = static function (int $bytes) use ($url): void {
+            if ($bytes > self::FILE_MAX_BYTES) {
+                throw new B2bFileTooLargeException('plik ponad '.intdiv(self::FILE_MAX_BYTES, 1_000_000).' MB pominięty: '.$url);
+            }
+        };
+        $response = $this->send(fn (PendingRequest $http): Response => $http->accept('*/*')->withOptions([
+            'on_headers' => static function (ResponseInterface $response) use ($tooLarge): void {
+                $length = $response->getHeaderLine('Content-Length');
+                if (ctype_digit($length)) {
+                    $tooLarge((int) $length);
+                }
+            },
+            'progress' => static function (int $total, int $downloaded) use ($tooLarge): void {
+                $tooLarge($downloaded);
+            },
+        ])->get(
             $this->origin.$this->site."/_api/web/GetFileByServerRelativeUrl('".self::odataPath($path)."')/\$value"
         ));
         $bytes = $response->body();
-        if (strlen($bytes) > self::FILE_MAX_BYTES) {
-            throw new RuntimeException('plik ponad '.intdiv(self::FILE_MAX_BYTES, 1_000_000).' MB: '.$url);
-        }
+        $tooLarge(strlen($bytes));
         if (! str_starts_with($bytes, "\x89PNG\r\n\x1A\n")) {
             throw new RuntimeException('SharePoint nie wydał PNG: '.$url);
         }
@@ -425,8 +441,18 @@ final class VmFootwearSharePoint
             $response = null;
             $error = null;
             try {
-                $response = $call(Http::timeout(self::TIMEOUT_SECONDS)->withOptions(['cookies' => $this->jar]));
-            } catch (ConnectionException $e) {
+                // bez przekierowań: API SharePointu odpowiada wprost; 3xx = błąd, nie wycieczka na inny host
+                $response = $call(Http::timeout(self::TIMEOUT_SECONDS)->withOptions(['cookies' => $this->jar, 'allow_redirects' => false]));
+            } catch (Throwable $e) {
+                // przerwane pobranie za dużego pliku (on_headers/progress) — bez ponawiania i bez liczenia do serii
+                // błędów; Guzzle opakowuje nasz wyjątek, więc szukamy go w łańcuchu
+                $tooLarge = B2bFileTooLargeException::in($e);
+                if ($tooLarge !== null) {
+                    throw new RuntimeException($tooLarge->getMessage(), 0, $e);
+                }
+                if (! $e instanceof ConnectionException) {
+                    throw $e;
+                }
                 $error = 'brak połączenia ('.$e->getMessage().')';
             }
             if ($response !== null && ($response->successful() || ($okRedirect && $response->redirect()))) {

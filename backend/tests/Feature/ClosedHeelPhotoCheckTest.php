@@ -126,6 +126,23 @@ final class ClosedHeelPhotoCheckTest extends TestCase
         $this->assertGreaterThan(240, $corner['green'] + 0);
     }
 
+    public function test_transparent_png_with_too_many_pixels_is_not_decoded(): void
+    {
+        $card = $this->sandal('S-BOMB', 'Sandał ochronny S1 P ESD.');
+        $image = $this->supplierImage($card);
+        // sam nagłówek PNG 10000×10000 RGBA: mały plik, który GD rozpakowałby do ~500 MB
+        $ihdr = 'IHDR'.pack('NNCCCCC', 10000, 10000, 8, 6, 0, 0, 0);
+        Storage::disk('public')->put((string) $image->path, "\x89PNG\r\n\x1A\n".pack('N', 13).$ihdr.pack('N', crc32($ihdr)));
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $result = app(ProductVisualFeatureCheck::class)->checkClosedHeel($card);
+
+        $this->assertSame('zdjęcie w nieobsługiwanym formacie albo za duże', $result['skip']);
+        $this->assertFalse($result['attempted']);
+    }
+
     public function test_card_with_heel_wording_is_not_sent_to_the_model(): void
     {
         $card = $this->sandal('S-2', 'Sandał z zabudowaną piętą.');

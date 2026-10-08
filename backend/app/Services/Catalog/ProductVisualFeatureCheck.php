@@ -39,6 +39,9 @@ final class ProductVisualFeatureCheck
     /** Dłuższy bok zdjęcia z przezroczystością po położeniu na białe tło. */
     private const FLATTENED_SIDE = 1600;
 
+    /** Najwięcej pikseli zdjęcia przed położeniem na białe tło (~24 Mpx = 6000×4000, ok. 120 MB w GD). */
+    private const FLATTEN_MAX_PIXELS = 24_000_000;
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly PpeAssortment $assortment,
@@ -97,6 +100,11 @@ final class ProductVisualFeatureCheck
         // PNG bez tła (np. VM Footwear z SharePointu): przezroczyste piksele mają kolor czarny, a model dostaje obraz
         // bez kanału alfa — czarny but na czarnym tle. Kładziemy go na białe tło, jak widzi go człowiek.
         if (in_array($mime, ['image/png', 'image/webp'], true) && ImageReencoder::hasAlphaChannel($bytes)) {
+            // dekodowanie GD trzyma cały obraz w pamięci — mały plik może rozpakować się do ogromnej liczby pikseli
+            $dimensions = @getimagesizefromstring($bytes);
+            if (! is_array($dimensions) || (int) $dimensions[0] * (int) $dimensions[1] > self::FLATTEN_MAX_PIXELS) {
+                return ['check' => null, 'skip' => 'zdjęcie w nieobsługiwanym formacie albo za duże', 'attempted' => false];
+            }
             $flat = $this->whiteTrim->toJpeg($bytes, self::FLATTENED_SIDE);
             if ($flat === null) {
                 return ['check' => null, 'skip' => 'nie udało się położyć przezroczystego zdjęcia na białe tło', 'attempted' => false];

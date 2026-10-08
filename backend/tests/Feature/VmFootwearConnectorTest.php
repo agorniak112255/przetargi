@@ -24,7 +24,10 @@ use App\Services\B2b\B2bShopFieldSource;
 use App\Services\B2b\VmFootwearB2bClient;
 use App\Services\B2b\VmFootwearB2bConnector;
 use App\Services\B2b\VmFootwearSharePoint;
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
+use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -32,6 +35,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Tests\TestCase;
+use Throwable;
 
 /**
  * Łącznik pl.b2b.vmfootwear.cz (AB Solutions, ERP Cézar) na atrapie sklepu (Http::fake). Znaczniki HTML odwzorowują
@@ -90,6 +94,9 @@ final class VmFootwearConnectorTest extends TestCase
 
     /** Ciasteczko FedAuth, które SharePoint teraz przyjmuje (zmiana = wygaśnięcie poprzedniego). */
     private string $shareCookie = 'fed1';
+
+    /** Plik z SharePointu ponad limit: 'headers' (Content-Length) albo 'progress' (bez nagłówka), null = nie. */
+    private ?string $shareOversized = null;
 
     /** @var list<string> pobrane pliki SharePointu */
     private array $shareDownloads = [];
@@ -506,6 +513,34 @@ final class VmFootwearConnectorTest extends TestCase
         $this->assertNotNull($connector->imageAt($url));
     }
 
+    public function test_file_over_the_limit_is_stopped_while_downloading_and_not_retried(): void
+    {
+        $this->addShoe();
+        $this->shareLink = self::SHARE_LINK;
+        $this->shareFiles = ['obuv - shoes/9100-O6_TESTOWO' => ['9100_O6.png' => self::png(300, 200)]];
+        $this->fakeSite();
+        $pauses = [];
+        $connector = new VmFootwearB2bConnector($this->client(), new VmFootwearSharePoint(0, static function (int $ms) use (&$pauses): void {
+            $pauses[] = $ms;
+        }));
+        $connector->login();
+        $products = iterator_to_array($connector->products(), false);
+        $url = $connector->imageUrls($products[0])[0];
+
+        foreach (['headers', 'progress'] as $mode) {
+            $this->shareOversized = $mode;
+            try {
+                $connector->imageAt($url);
+                $this->fail('za duży plik przyjęty ('.$mode.')');
+            } catch (RuntimeException $e) {
+                $this->assertSame('plik ponad 30 MB pominięty: '.$url, $e->getMessage(), $mode);
+            }
+        }
+
+        $this->assertSame([], $pauses, 'za duży plik nie jest ponawiany');
+        $this->assertCount(2, $this->shareDownloads);
+    }
+
     // ---- pomocnicze ----
 
     private function connectorWithShare(): VmFootwearB2bConnector
@@ -615,10 +650,10 @@ final class VmFootwearConnectorTest extends TestCase
 
     private function fakeSite(): void
     {
-        Http::fake(function (Request $request) {
+        Http::fake(function (Request $request, array $options) {
             $url = $request->url();
             if (parse_url($url, PHP_URL_HOST) === self::SHARE_HOST) {
-                return $this->sharePointResponse($request);
+                return $this->sharePointResponse($request, $options);
             }
             $path = (string) parse_url($url, PHP_URL_PATH);
             $query = (string) parse_url($url, PHP_URL_QUERY);
@@ -810,7 +845,10 @@ final class VmFootwearConnectorTest extends TestCase
      * Atrapa udostępnienia SharePoint: link → 302 z ciasteczkiem FedAuth i folderem w „id”; REST Folders/Files
      * i $value tylko z ciasteczkiem (bez niego 403, jak na żywo 08.10.2026).
      */
-    private function sharePointResponse(Request $request): PromiseInterface
+    /**
+     * @param  array<string, mixed>  $options  opcje Guzzle (on_headers, progress) — atrapa wywołuje je sama, jak curl
+     */
+    private function sharePointResponse(Request $request, array $options): PromiseInterface
     {
         $path = rawurldecode((string) parse_url($request->url(), PHP_URL_PATH));
         if (str_starts_with($path, '/:f:/')) {
@@ -847,6 +885,17 @@ final class VmFootwearConnectorTest extends TestCase
         if (preg_match("#/_api/web/GetFileByServerRelativeUrl\\('(.+)'\\)/\\\$value$#", $path, $m) === 1) {
             $file = substr(str_replace("''", "'", $m[1]), strlen(self::SHARE_ROOT) + 1);
             $this->shareDownloads[] = $file;
+            if ($this->shareOversized === 'headers') {
+                try {
+                    ($options['on_headers'])(new Psr7Response(200, ['Content-Length' => '40000000']));
+                } catch (Throwable $e) {
+                    return Create::rejectionFor(new RequestException('An error was encountered during the on_headers event', $request->toPsrRequest(), null, $e));
+                }
+            }
+            if ($this->shareOversized === 'progress') {
+                // bez Content-Length limit łapie progress — jego wyjątek wychodzi z curla bez opakowania
+                ($options['progress'])(0, 40_000_000, 0, 0);
+            }
             $folder = dirname($file);
 
             return isset($this->shareFiles[$folder][basename($file)])
