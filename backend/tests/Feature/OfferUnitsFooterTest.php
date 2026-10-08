@@ -277,7 +277,9 @@ final class OfferUnitsFooterTest extends TestCase
         $this->assertStringContainsString('>www.supon.rzeszow.pl<', str_replace(["\n", ' '], '', $html));
         $this->assertStringContainsString('https://przetargi.example.pl/campaign/footer-logo.png', $html);
         $this->assertStringContainsString('PHT SUPON Sp. z o.o. · ul. Miłocińska 17, 35-232 Rzeszów', $html);
-        $this->assertStringContainsString('https://www.supon.rzeszow.pl/259-outlet-bhp', $html);
+        // pasek „Sprawdź: Promocje | Outlet | Blog” usunięty ze stopki (prośba właściciela 08.10.2026)
+        $this->assertStringNotContainsString('259-outlet-bhp', $html);
+        $this->assertStringNotContainsString('Sprawdź:', $html);
         $this->assertSame(self::FOOTER, $this->getJson('/api/me/mail-footer')->json('footer'));
         // dane stopki nie wychodzą w danych konta
         $this->assertArrayNotHasKey('mail_footer', $user->fresh()->toArray());
@@ -347,7 +349,9 @@ final class OfferUnitsFooterTest extends TestCase
             $this->assertStringContainsString('href="tel:600903483"', $html);
             $this->assertStringContainsString('src="https://przetargi.example.pl/campaign/footer-phone.png"', $html);
             $this->assertStringNotContainsString('tel. 600 000 000', $html);
-            $this->assertStringContainsString("Anna Nowak\nSpecjalista ds. sprzedaży\ntel. 600 903 483 / (17) 860-28-49\ne-mail: anna@supon.example.pl\nwww: www.supon.rzeszow.pl\nPHT SUPON Sp. z o.o. · ul. Miłocińska 17, 35-232 Rzeszów\nSprawdź: Promocje https://www.supon.rzeszow.pl/231-promocja | Outlet https://www.supon.rzeszow.pl/259-outlet-bhp | Blog https://www.supon.rzeszow.pl/nowosci", $text);
+            $this->assertStringContainsString("Anna Nowak\nSpecjalista ds. sprzedaży\ntel. 600 903 483 / (17) 860-28-49\ne-mail: anna@supon.example.pl\nwww: www.supon.rzeszow.pl\nPHT SUPON Sp. z o.o. · ul. Miłocińska 17, 35-232 Rzeszów", $text);
+            $this->assertStringNotContainsString('Sprawdź:', $text);
+            $this->assertStringNotContainsString('Sprawdź:', $html);
             $this->assertStringNotContainsString('tel. 600 000 000', $text);
         }
     }
