@@ -50,14 +50,7 @@ final class ProductImageController extends Controller
         return response()->json([
             'message' => 'Usunięto zdjęcie. Synchronizacja i wzbogacanie nie dodadzą go ponownie.',
             'images' => $product->images()->orderBy('sort_order')->orderBy('id')->get()
-                ->map(static fn (ProductImage $img): array => [
-                    'id' => $img->id,
-                    'url' => $img->url(),
-                    'thumb_url' => $img->thumbUrl(),
-                    'source_url' => $img->source_url,
-                    'is_primary' => $img->is_primary,
-                    'sort_order' => $img->sort_order,
-                ])->values()->all(),
+                ->map(static fn (ProductImage $img): array => $img->panelView())->values()->all(),
         ]);
     }
 }

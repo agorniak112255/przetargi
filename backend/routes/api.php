@@ -76,6 +76,7 @@ use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductCrossRefController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
+use App\Http\Controllers\Api\ProductImageBackgroundController;
 use App\Http\Controllers\Api\ProductImageController;
 use App\Http\Controllers\Api\ProductImageThumbController;
 use App\Http\Controllers\Api\ProductKitController;
@@ -366,6 +367,14 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::delete('/products/{product}/images/{image}', [ProductImageController::class, 'destroy'])
         ->whereNumber('image')
         ->middleware('permission:products.images.delete');
+    // usuwanie tła ze zdjęć kart (rembg w kolejce `images`) — karta, zaznaczone na liście, przywrócenie oryginału
+    Route::post('/products/images-background', [ProductImageBackgroundController::class, 'queueMany'])
+        ->middleware('permission:products.images.background');
+    Route::post('/products/{product}/images-background', [ProductImageBackgroundController::class, 'queueProduct'])
+        ->middleware('permission:products.images.background');
+    Route::post('/products/{product}/images/{image}/background-restore', [ProductImageBackgroundController::class, 'restore'])
+        ->whereNumber('image')
+        ->middleware('permission:products.images.background');
     Route::post('/products/{product}/kit-suggestions', [ProductKitController::class, 'suggest'])->middleware('permission:products.view');
     Route::post('/products/{product}/kit', [ProductKitController::class, 'attach'])->middleware('permission:products.view');
     Route::delete('/products/{product}/kit', [ProductKitController::class, 'destroy'])->middleware('permission:products.view');

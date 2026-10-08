@@ -62,6 +62,11 @@ final class ProductImageThumbService
     private function cacheKey(ProductImage $image, string $variant): string
     {
         $sum = (string) ($image->checksum ?: hash('sha256', $image->path.'|'.(string) $image->source_url));
+        // checksum zostaje od oryginału także po wycięciu tła — miniatura wycięcia musi mieć własny klucz, zależny od
+        // pliku (wytnij → przywróć → wytnij innym modelem daje nowy plik i nową miniaturę)
+        if ($image->hasBackgroundRemoved()) {
+            $sum .= '-nb'.substr(sha1((string) $image->path), 0, 10);
+        }
 
         return 'product-thumbs/'.$image->id.'-'.$sum.$variant.'.jpg';
     }

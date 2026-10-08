@@ -167,6 +167,7 @@ final class ProductImageWhiteTrim
             [$r, $g, $b, $a] = $this->rgba($src, $x, $y);
             if ($a > 100) {
                 $transparent++;
+
                 continue;
             }
             $sumR += $r;
@@ -287,6 +288,8 @@ final class ProductImageWhiteTrim
             if ($copy === false) {
                 return null;
             }
+            // białe płótno pod zdjęciem: PNG bez tła (wycięte albo od producenta) inaczej dostawał czarne tło
+            imagefill($copy, 0, 0, imagecolorallocate($copy, 255, 255, 255));
             imagecopy($copy, $src, 0, 0, 0, 0, $width, $height);
 
             return $this->encodeJpeg($copy);

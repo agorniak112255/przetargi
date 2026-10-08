@@ -36,6 +36,15 @@ return [
     ),
 
     /*
+    | Usuwanie tła ze zdjęć kart (rembg na serwerze, ~20 s na zdjęcie, po jednym naraz) — własna tabela, jak
+    | wektory, tylko przy kolejce w bazie. Worker: `queue:work database_images --queue=images` (jeden).
+    */
+    'images_connection' => env(
+        'QUEUE_IMAGES_CONNECTION',
+        env('QUEUE_CONNECTION', 'database') === 'database' ? 'database_images' : null
+    ),
+
+    /*
     |--------------------------------------------------------------------------
     | Queue Connections
     |--------------------------------------------------------------------------
@@ -87,6 +96,17 @@ return [
             'table' => 'jobs_inquiries',
             'queue' => 'inquiries',
             'retry_after' => 1500,
+            'after_commit' => false,
+        ],
+
+        // Usuwanie tła ze zdjęć: zadanie do ~6 min (zapytanie do rembg do 300 s), retry_after dłuższe niż timeout
+        // zadania (420 s) — inaczej drugi worker wziąłby to samo zdjęcie. Własna tabela: bez zakleszczeń z `jobs`.
+        'database_images' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => 'jobs_images',
+            'queue' => 'images',
+            'retry_after' => 480,
             'after_commit' => false,
         ],
 

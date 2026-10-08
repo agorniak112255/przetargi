@@ -44,7 +44,9 @@ final class ProductMediaReportCommand extends Command
         $files = $disk->allFiles('products');
 
         // Ścieżki, do których prowadzi wiersz w bazie — te są używane.
+        // Oryginał zdjęcia z wyciętym tłem (original_path) też jest używany — przywrócenie go potrzebuje.
         $used = ProductImage::query()->pluck('path')
+            ->merge(ProductImage::query()->whereNotNull('original_path')->pluck('original_path'))
             ->merge(ProductDocument::query()->pluck('path'))
             ->filter()
             ->map(static fn (string $path): string => ltrim($path, '/'))

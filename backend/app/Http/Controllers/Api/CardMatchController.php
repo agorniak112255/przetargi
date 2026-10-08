@@ -394,7 +394,7 @@ class CardMatchController extends Controller
                 ->orderByDesc('is_primary')
                 ->orderBy('sort_order')
                 ->orderBy('id')
-                ->get(['id', 'product_id', 'is_primary', 'sort_order']) as $image) {
+                ->get(['id', 'product_id', 'is_primary', 'sort_order', 'path', 'original_path']) as $image) {
                 $thumbs[(int) $image->product_id] ??= $image->thumbUrl();
             }
             $slots = ProductSourcePrice::query()

@@ -159,11 +159,15 @@ export function ProductDetail() {
   const canExportPresta = can(user, 'presta.export')
   const canDelete = can(user, 'products.delete')
   const canDeleteImages = can(user, 'products.images.delete')
+  const canRemoveBackground = can(user, 'products.images.background')
   const [p, setP] = useState<Detail | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [batch, setBatch] = useState<EnrichmentBatch | null>(null)
   const [imageModalUrl, setImageModalUrl] = useState<string | null>(null)
+  /** Usuwanie tła ze zdjęć: zlecanie / przywracanie w toku i komunikat przy zdjęciach. */
+  const [backgroundBusy, setBackgroundBusy] = useState(false)
+  const [backgroundMsg, setBackgroundMsg] = useState('')
   const [prestaOpen, setPrestaOpen] = useState(false)
   const [prestaBusy, setPrestaBusy] = useState(false)
   const [prestaErr, setPrestaErr] = useState('')
@@ -422,6 +426,60 @@ export function ProductDetail() {
       setImageDeleteId(null)
     }
   }
+
+  async function removeBackgrounds() {
+    if (!id || !p) return
+    const count = (p.images ?? []).filter((img) => img.background?.status !== 'done').length
+    const ok = window.confirm(
+      `Usunąć tło ze zdjęć tej karty (${count})?
+
+Wycinanie trwa w tle ok. 20 s na zdjęcie. Oryginał zostaje — przywrócisz go przyciskiem „Przywróć oryginał” przy zdjęciu.`,
+    )
+    if (!ok) return
+    setBackgroundBusy(true)
+    setErr('')
+    try {
+      const res = await api<{ message: string; images: NonNullable<Detail['images']> }>(`/products/${id}/images-background`, {
+        method: 'POST',
+      })
+      setP((prev) => (prev ? { ...prev, images: res.images } : prev))
+      setBackgroundMsg(res.message)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić usunięcia tła')
+    } finally {
+      setBackgroundBusy(false)
+    }
+  }
+
+  async function restoreBackground(imageId: number) {
+    if (!id) return
+    setBackgroundBusy(true)
+    setErr('')
+    try {
+      const res = await api<{ message: string; images: NonNullable<Detail['images']> }>(
+        `/products/${id}/images/${imageId}/background-restore`,
+        { method: 'POST' },
+      )
+      setP((prev) => (prev ? { ...prev, images: res.images } : prev))
+      setBackgroundMsg(res.message)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się przywrócić oryginału')
+    } finally {
+      setBackgroundBusy(false)
+    }
+  }
+
+  // zdjęcia w kolejce usuwania tła — odświeżanie co 10 s, dopóki któreś czeka
+  const backgroundQueued = (p?.images ?? []).some((img) => img.background?.status === 'queued')
+  useEffect(() => {
+    if (!id || !backgroundQueued) return
+    const timer = window.setInterval(() => {
+      api<Detail>(`/products/${id}`)
+        .then((fresh) => setP((prev) => (prev ? { ...prev, images: fresh.images } : prev)))
+        .catch(() => undefined)
+    }, 10000)
+    return () => window.clearInterval(timer)
+  }, [id, backgroundQueued])
 
   async function openKitSuggest() {
     if (!id) return
@@ -1288,7 +1346,21 @@ export function ProductDetail() {
         (p.documents && p.documents.length > 0) ||
         p.enrichment_payload) && (
         <div className="mb-4 min-w-0 overflow-x-hidden rounded-xl bg-white p-4 shadow-sm">
-          <h2 className="mb-2 text-sm font-semibold">Opis i zdjęcia</h2>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Opis i zdjęcia</h2>
+            {canRemoveBackground && p.images && p.images.some((img) => img.background?.status !== 'done') && (
+              <button
+                type="button"
+                onClick={() => void removeBackgrounds()}
+                disabled={backgroundBusy || backgroundQueued}
+                className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+                title="Wycina tło ze wszystkich zdjęć karty (w tle, ok. 20 s na zdjęcie); oryginał zostaje do przywrócenia"
+              >
+                {backgroundQueued ? 'Usuwanie tła w toku…' : 'Usuń tło ze zdjęć'}
+              </button>
+            )}
+          </div>
+          {backgroundMsg && <p className="mb-2 text-xs text-emerald-700">{backgroundMsg}</p>}
           {p.images && p.images.length > 0 ? (
             <div className="mb-3 flex flex-wrap gap-2">
               {p.images.map((img) => (
@@ -1332,6 +1404,11 @@ export function ProductDetail() {
                     {imageDeleteId === img.id ? '…' : '×'}
                   </button>
                 )}
+                {img.background && <BackgroundState
+                  background={img.background}
+                  canRestore={canRemoveBackground && !backgroundBusy}
+                  onRestore={() => void restoreBackground(img.id)}
+                />}
                 </div>
               ))}
             </div>
@@ -1438,5 +1515,41 @@ export function ProductDetail() {
         />
       )}
     </div>
+  )
+}
+
+/** Stan usuwania tła pod miniaturą: w kolejce / bez tła (z przywróceniem) / błąd albo pominięte z powodem. */
+function BackgroundState({
+  background,
+  canRestore,
+  onRestore,
+}: {
+  background: NonNullable<NonNullable<Detail['images']>[number]['background']>
+  canRestore: boolean
+  onRestore: () => void
+}) {
+  if (background.status === 'queued') {
+    return <p className="mt-0.5 w-32 text-[11px] text-slate-500">usuwanie tła w kolejce…</p>
+  }
+  if (background.status === 'done') {
+    return (
+      <p className="mt-0.5 flex w-32 items-center justify-between gap-1 text-[11px] text-emerald-700">
+        <span>bez tła</span>
+        {canRestore && (
+          <button type="button" onClick={onRestore} className="text-blue-700 underline hover:text-blue-900">
+            Przywróć oryginał
+          </button>
+        )}
+      </p>
+    )
+  }
+  return (
+    <p
+      className={`mt-0.5 w-32 truncate text-[11px] ${background.status === 'failed' ? 'text-red-700' : 'text-slate-500'}`}
+      title={background.note ?? undefined}
+    >
+      {background.status === 'failed' ? 'tło nie wycięte' : 'pominięte'}
+      {background.note ? `: ${background.note}` : ''}
+    </p>
   )
 }

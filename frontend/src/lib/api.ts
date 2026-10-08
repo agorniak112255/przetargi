@@ -453,6 +453,13 @@ export function unmuteSystemAlert(alertId: number): Promise<SystemAlertRow> {
   return api<SystemAlertRow>(`/admin/system-alerts/${alertId}/unmute`, { method: 'POST' })
 }
 
+/** Usuwanie tła ze zdjęcia (rembg): queued = w kolejce, done = wycięte (oryginał do przywrócenia), failed/skipped z powodem. */
+export type ProductImageBackground = {
+  status: 'queued' | 'done' | 'failed' | 'skipped'
+  note: string | null
+  removed_at: string | null
+}
+
 export type ProductImage = {
   id: number
   url: string
@@ -460,6 +467,8 @@ export type ProductImage = {
   source_url: string | null
   is_primary: boolean
   sort_order: number
+  /** null = usuwania tła nikt nie zlecał */
+  background?: ProductImageBackground | null
 }
 
 export type DescriptionLayoutBlock = {

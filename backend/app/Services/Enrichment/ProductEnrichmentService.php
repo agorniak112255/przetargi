@@ -3639,7 +3639,8 @@ final class ProductEnrichmentService
         $removed = false;
         foreach ($images as $image) {
             try {
-                Storage::disk('public')->delete($image->path);
+                // z oryginałem zdjęcia z wyciętym tłem (original_path) — wiersz znika, plik nie ma po co zostać
+                Storage::disk('public')->delete(array_values(array_filter([$image->path, $image->original_path])));
             } catch (Throwable) {
                 // ignore missing file
             }

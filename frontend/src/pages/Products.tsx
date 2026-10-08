@@ -304,6 +304,7 @@ export function Products() {
   const canMergeCards = can(user, 'card_matches.decide')
   const canCampaign = can(user, 'campaigns.use')
   const canOffer = can(user, 'offers.use')
+  const canRemoveBackground = can(user, 'products.images.background')
   // lista otwarta z kreatora kampanii (?kampania=ID) — „Dodaj do K-…” i powrót do kampanii
   const campaignPick = useCampaignTarget()
   // lista otwarta z oferty (?oferta=ID) — „Dodaj do OF-…” i powrót do oferty
@@ -313,6 +314,7 @@ export function Products() {
     canEnrich ||
     canDelete ||
     canMergeCards ||
+    canRemoveBackground ||
     (canCampaign && campaignPick.campaignId !== null) ||
     (canOffer && offerPick.offerId !== null)
   const hasActions = canEnrich || canExportPresta || canDelete
@@ -358,6 +360,8 @@ export function Products() {
   const [selected, setSelected] = useState<Record<number, boolean>>({})
   const lastSelectIndex = useRef<number | null>(null)
   const [msg, setMsg] = useState('')
+  /** Zlecanie usuwania tła ze zdjęć zaznaczonych kart w toku. */
+  const [backgroundBusy, setBackgroundBusy] = useState(false)
   const [err, setErr] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [imageModal, setImageModal] = useState<{ name: string; url: string } | null>(null)
@@ -723,6 +727,30 @@ export function Products() {
     } finally {
       setEnrichBusy(false)
       setEnrichRowId(null)
+    }
+  }
+
+  async function removeBackgrounds(ids: number[]) {
+    if (ids.length === 0) return
+    const ok = window.confirm(
+      `Usunąć tło ze wszystkich zdjęć zaznaczonych kart (${ids.length})?
+
+Wycinanie trwa w tle ok. 20 s na zdjęcie — przy wielu kartach to nawet kilka godzin. Oryginały zostają; przywrócisz je w karcie produktu przyciskiem „Przywróć oryginał”.`,
+    )
+    if (!ok) return
+    setBackgroundBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>('/products/images-background', {
+        method: 'POST',
+        body: JSON.stringify({ product_ids: ids }),
+      })
+      setMsg(res.message)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić usunięcia tła')
+    } finally {
+      setBackgroundBusy(false)
     }
   }
 
@@ -1113,6 +1141,21 @@ export function Products() {
               }
             >
               Połącz zaznaczone{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
+            </button>
+          )}
+          {canRemoveBackground && (
+            <button
+              type="button"
+              disabled={backgroundBusy || selectedIds.length === 0 || selectedIds.length > 200}
+              onClick={() => void removeBackgrounds(selectedIds)}
+              className="rounded border border-slate-300 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              title={
+                selectedIds.length > 200
+                  ? 'Naraz najwyżej 200 kart'
+                  : 'Wycina tło ze wszystkich zdjęć zaznaczonych kart (w tle, ok. 20 s na zdjęcie); oryginały zostają do przywrócenia'
+              }
+            >
+              {backgroundBusy ? 'Zlecam…' : `Usuń tło ze zdjęć${selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}`}
             </button>
           )}
           {canDelete && (

@@ -41,7 +41,8 @@ class ProductImageRejection extends Model
         $productId = (int) $image->product_id;
         $sourceUrl = (string) ($image->source_url ?? '');
         // bez adresu (plik wgrany lokalnie) kluczem jest ścieżka — i tak nic jej ponownie nie pobierze
-        $key = $sourceUrl !== '' ? ProductImageDownloader::sameFileKey($sourceUrl) : 'path:'.$image->path;
+        // (oryginału, gdy tło było wycięte — ścieżka wycięcia jest losowa i nic jej nie odtworzy)
+        $key = $sourceUrl !== '' ? ProductImageDownloader::sameFileKey($sourceUrl) : 'path:'.($image->original_path ?? $image->path);
 
         DB::transaction(static function () use ($image, $productId, $sourceUrl, $key, $reason, $userId): void {
             self::query()->updateOrCreate(

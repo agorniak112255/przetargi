@@ -107,6 +107,10 @@ final class ProductEnrichmentResetter
                     ->whereIn('id', $imageIds)->get();
                 foreach ($images as $image) {
                     $paths[] = (string) $image->path;
+                    if ($image->original_path !== null) {
+                        // oryginał zdjęcia z wyciętym tłem
+                        $paths[] = (string) $image->original_path;
+                    }
                     $image->delete();
                 }
                 if ($images->isNotEmpty()) {

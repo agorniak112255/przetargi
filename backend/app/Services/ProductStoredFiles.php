@@ -37,6 +37,8 @@ final class ProductStoredFiles
 
         $paths = [
             ...ProductImage::query()->whereIn('product_id', $productIds)->pluck('path')->all(),
+            // oryginał zdjęcia z wyciętym tłem — plik zostaje na dysku do przywrócenia, kasujemy go razem z kartą
+            ...ProductImage::query()->whereIn('product_id', $productIds)->whereNotNull('original_path')->pluck('original_path')->all(),
             ...ProductDocument::query()->whereIn('product_id', $productIds)->pluck('path')->all(),
         ];
 

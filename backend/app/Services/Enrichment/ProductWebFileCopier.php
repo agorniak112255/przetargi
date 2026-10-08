@@ -29,7 +29,8 @@ final class ProductWebFileCopier
             return null;
         }
         $disk = Storage::disk('public');
-        $path = (string) $img->path;
+        // zdjęcie z wyciętym tłem: kopiujemy oryginał (checksum jest jego) — na innej karcie o wycięciu decyduje człowiek
+        $path = (string) ($img->original_path ?? $img->path);
         if (! self::isLocalPath($path) || ! $disk->exists($path)) {
             return null;
         }

@@ -1088,6 +1088,36 @@ function ProductsHelp() {
             </AppFrame>
           ),
         },
+        {
+          action: 'Usuwanie tła ze zdjęć',
+          does: 'Wycina tło ze zdjęć karty — produkt zostaje na przezroczystym tle (w ofertach i mailach na białym). Wycinanie trwa w tle ok. 20 s na zdjęcie; pod miniaturą widać „w kolejce…”, potem „bez tła”. Oryginał zostaje: „Przywróć oryginał” pod miniaturą wraca do zdjęcia z tłem. Zdjęcia już bez tła (np. PNG od producenta) są pomijane. Uwaga: przy zdjęciach na lustrze (np. VM) model zostawia odbicie pod podeszwą — wtedy przywróć oryginał.',
+          click: 'Karta produktu → „Opis i zdjęcia” → „Usuń tło ze zdjęć”. Dla wielu kart: lista Produkty, zaznacz karty i kliknij „Usuń tło ze zdjęć (N)”. Uprawnienie „Produkty — usuwanie tła ze zdjęć” (domyślnie administrator).',
+          tone: 'violet',
+          screen: (
+            <AppFrame nav="Produkty">
+              <Card>
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold">Opis i zdjęcia</h2>
+                  <Mark>
+                    <span className="rounded border border-slate-300 px-2 py-1 text-xs">Usuń tło ze zdjęć</span>
+                  </Mark>
+                </div>
+                <div className="flex gap-3 text-[11px]">
+                  <div>
+                    <div className="h-24 w-24 rounded border border-slate-200 bg-slate-100" />
+                    <p className="mt-0.5 text-slate-500">usuwanie tła w kolejce…</p>
+                  </div>
+                  <div>
+                    <div className="h-24 w-24 rounded border border-slate-200 bg-white" />
+                    <p className="mt-0.5 text-emerald-700">
+                      bez tła · <span className="text-blue-700 underline">Przywróć oryginał</span>
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            </AppFrame>
+          ),
+        },
       ]}
     />
   )

@@ -18,7 +18,23 @@ class ProductImage extends Model
         'is_primary',
         'sort_order',
         'checksum',
+        'original_path',
+        'background_status',
+        'background_note',
+        'background_removed_at',
     ];
+
+    /** Usuwanie tła zlecone, zdjęcie czeka w kolejce `images`. */
+    public const BACKGROUND_QUEUED = 'queued';
+
+    /** Tło wycięte: `path` = PNG bez tła, `original_path` = oryginał do przywrócenia. */
+    public const BACKGROUND_DONE = 'done';
+
+    /** Nie udało się (usługa, bramka wyniku) — oryginał bez zmian, powód w `background_note`. */
+    public const BACKGROUND_FAILED = 'failed';
+
+    /** Nie było czego wycinać (zdjęcie już przezroczyste, zdjęcie zdalne) — powód w `background_note`. */
+    public const BACKGROUND_SKIPPED = 'skipped';
 
     /**
      * Ustala kolejność zdjęć karty i wskazuje główne. Jedna reguła pierwszeństwa dla wszystkich
@@ -71,6 +87,50 @@ class ProductImage extends Model
         return [
             'is_primary' => 'boolean',
             'sort_order' => 'integer',
+            'background_removed_at' => 'datetime',
+        ];
+    }
+
+    /** Czy `path` wskazuje wycięcie (PNG bez tła), a oryginał leży pod `original_path`. */
+    public function hasBackgroundRemoved(): bool
+    {
+        return ($this->getAttributes()['original_path'] ?? null) !== null;
+    }
+
+    /**
+     * Zdjęcie w odpowiedziach panelu (lista produktów, karta, usuwanie zdjęć i tła) — jeden kształt.
+     *
+     * @return array{id: int, url: string, thumb_url: string, source_url: string|null, is_primary: bool, sort_order: int, background: array{status: string, note: string|null, removed_at: string|null}|null}
+     */
+    public function panelView(): array
+    {
+        return [
+            'id' => (int) $this->id,
+            'url' => $this->url(),
+            'thumb_url' => $this->thumbUrl(),
+            'source_url' => $this->source_url,
+            'is_primary' => (bool) $this->is_primary,
+            'sort_order' => (int) $this->sort_order,
+            'background' => $this->backgroundView(),
+        ];
+    }
+
+    /**
+     * Stan usuwania tła dla panelu: null = nikt nie zlecał.
+     *
+     * @return array{status: string, note: string|null, removed_at: string|null}|null
+     */
+    public function backgroundView(): ?array
+    {
+        $status = $this->getAttributes()['background_status'] ?? null;
+        if ($status === null) {
+            return null;
+        }
+
+        return [
+            'status' => (string) $status,
+            'note' => $this->background_note,
+            'removed_at' => $this->background_removed_at?->toIso8601String(),
         ];
     }
 
@@ -89,8 +149,18 @@ class ProductImage extends Model
         return $this->publicUrl();
     }
 
+    /**
+     * Miniatura idzie z nagłówkiem cache na 30 dni pod stałym adresem — po wycięciu tła (inny plik pod tym samym id)
+     * adres dostaje wersję z bieżącego pliku, inaczej przeglądarka pokazywałaby starą miniaturę z tłem. Wersja tylko
+     * przy wyciętym tle: pozostałe adresy bez zmian. Zapytanie bez kolumn path/original_path daje adres bez wersji.
+     */
     public function thumbUrl(): string
     {
+        $attributes = $this->getAttributes();
+        if (($attributes['original_path'] ?? null) !== null && isset($attributes['path'])) {
+            return route('product-images.thumb', ['image' => $this, 'v' => substr(sha1((string) $attributes['path']), 0, 10)]);
+        }
+
         return route('product-images.thumb', $this);
     }
 
@@ -122,7 +192,7 @@ class ProductImage extends Model
             ->orderByDesc('is_primary')
             ->orderBy('sort_order')
             ->orderBy('id')
-            ->get(['id', 'product_id', 'path', 'source_url']) as $image) {
+            ->get(['id', 'product_id', 'path', 'original_path', 'source_url']) as $image) {
             $out[(int) $image->product_id] ??= $image;
         }
 

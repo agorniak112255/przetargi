@@ -17,6 +17,7 @@ use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -271,14 +272,7 @@ class ProductController extends Controller
         $page->getCollection()->transform(function (Product $product) use (&$models): array {
             $models[(int) $product->id] = $product;
             $row = $product->toArray();
-            $row['images'] = $product->images->map(static fn ($img): array => [
-                'id' => $img->id,
-                'url' => $img->url(),
-                'thumb_url' => $img->thumbUrl(),
-                'source_url' => $img->source_url,
-                'is_primary' => $img->is_primary,
-                'sort_order' => $img->sort_order,
-            ])->values()->all();
+            $row['images'] = $product->images->map(static fn (ProductImage $img): array => $img->panelView())->values()->all();
             $row['documents'] = $product->documents->map(static fn ($doc): array => [
                 'id' => $doc->id,
                 'url' => $doc->url(),
@@ -467,14 +461,7 @@ class ProductController extends Controller
         ]);
 
         $payload = $this->withManufacturerNorms($product->toArray(), $product);
-        $payload['images'] = $product->images->map(static fn ($img): array => [
-            'id' => $img->id,
-            'url' => $img->url(),
-            'thumb_url' => $img->thumbUrl(),
-            'source_url' => $img->source_url,
-            'is_primary' => $img->is_primary,
-            'sort_order' => $img->sort_order,
-        ])->values()->all();
+        $payload['images'] = $product->images->map(static fn (ProductImage $img): array => $img->panelView())->values()->all();
         $payload['documents'] = $product->documents->map(static fn ($doc): array => [
             'id' => $doc->id,
             'url' => $doc->url(),
