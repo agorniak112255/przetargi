@@ -234,16 +234,21 @@ final class EnrichmentPublicUrlGuardTest extends TestCase
         $indexer = app(CatalogSitemapIndexer::class);
         $run = (new \ReflectionMethod($indexer, 'runWithinFileLimit'))->getClosure($indexer);
         $path = (string) tempnam(sys_get_temp_dir(), 'smap-test');
-        $writer = 'for ($i = 0; $i < 200; $i++) { file_put_contents($argv[1], str_repeat("A", 1 << 20), FILE_APPEND); usleep(10000); }';
+        // pisze dalej ponad limit, potem stoi minutę i dopiero wtedy kończy z kodem 0 — zakończony w pół minuty
+        // i bez powodzenia znaczy: zatrzymany przez limit pliku. Ile bajtów dojdzie do zatrzymania, zależy od systemu
+        // (Windows zabija przez taskkill, pod obciążeniem to trwa), więc liczby bajtów test nie sprawdza.
+        $writer = 'for ($i = 0; $i < 20; $i++) { file_put_contents($argv[1], str_repeat("A", 1 << 20), FILE_APPEND); usleep(10000); } sleep(60);';
 
         try {
             $started = microtime(true);
-            $this->assertFalse($run(new Process([PHP_BINARY, '-r', $writer, $path]), $path, 3_000_000));
-            // przerwany w trakcie, nie po zapisaniu 200 MB
-            $this->assertLessThan(5.0, microtime(true) - $started);
-            clearstatcache(true, $path);
-            $this->assertLessThan(50_000_000, (int) filesize($path));
+            $bomb = new Process([PHP_BINARY, '-r', $writer, $path]);
+            $this->assertFalse($run($bomb, $path, 3_000_000));
+            $this->assertLessThan(30.0, microtime(true) - $started);
+            $this->assertFalse($bomb->isRunning());
+            $this->assertFalse($bomb->isSuccessful());
 
+            // plik ponad limit po zwykłym zakończeniu też odpada (zatrzymanie nie zdążyło), a w limicie — przechodzi
+            $this->assertFalse($run(new Process([PHP_BINARY, '-r', 'file_put_contents($argv[1], str_repeat("A", 3_000_001));', $path]), $path, 3_000_000));
             file_put_contents($path, '');
             $this->assertTrue($run(new Process([PHP_BINARY, '-r', 'file_put_contents($argv[1], "<urlset/>");', $path]), $path, 3_000_000));
             $this->assertFalse($run(new Process([PHP_BINARY, '-r', 'exit(6);']), $path, 3_000_000));
