@@ -320,7 +320,7 @@ class ProductController extends Controller
         $cheaper = $this->comparison->cheaperSources(collect(array_values($models)), $mask);
         // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — stała liczba zapytań na stronę
         $orderQuantities = $this->comparison->orderQuantities(collect(array_values($models)), $mask);
-        // modele połączone w karcie (ELTEN red + black) — trzy zapytania na stronę
+        // modele połączone w karcie (ELTEN red + black, kolory Portwest, Mascot…) — do czterech zapytań na stronę
         $sourceModels = app(CardSourceModels::class)->forProducts($pageIds);
         $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities, $erpCodes, $numberHits, $sourceModels, $mask): array {
             $id = (int) $row['id'];

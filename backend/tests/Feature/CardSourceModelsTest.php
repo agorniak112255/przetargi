@@ -98,6 +98,116 @@ final class CardSourceModelsTest extends TestCase
         $this->assertSame([], $this->getJson('/api/products/'.$elten->id)->assertOk()->json('source_models'));
     }
 
+    public function test_colours_without_model_numbers_are_grouped_from_size_rows(): void
+    {
+        // Portwest (prośba 08.10.2026: lista jak u ELTEN dla wszystkich cenników): kolor tylko w etykiecie i kodzie
+        // każdego rozmiaru, rozmiary od dostawcy alfabetycznie
+        $card = $this->card('S843', 'Fartuch z kieszenią Portwest S843');
+        foreach (['S843BGRL/XL' => 'Bottle Green (BGR) / L/XL', 'S843BGRS/M' => 'Bottle Green (BGR) / S/M', 'S843BGRXXL' => 'Bottle Green (BGR) / XXL',
+            'S843BKRL/XL' => 'Black (BKR) / L/XL', 'S843BKRS/M' => 'Black (BKR) / S/M'] as $code => $label) {
+            $this->sizeRow($card, (string) $code, (string) $code, $label);
+        }
+
+        $this->assertSame([
+            ['number' => 'S843BGR', 'name' => 'Bottle Green (BGR)', 'sizes' => ['S/M', 'L/XL', 'XXL']],
+            ['number' => 'S843BKR', 'name' => 'Black (BKR)', 'sizes' => ['S/M', 'L/XL']],
+        ], $this->getJson('/api/products/'.$card->id)->assertOk()->json('source_models'));
+        $rows = collect($this->getJson('/api/products?sort=sku')->assertOk()->json('data'))->keyBy('sku');
+        $this->assertCount(2, $rows['S843']['source_models']);
+    }
+
+    public function test_group_number_is_the_common_code_part(): void
+    {
+        // Canis: rozmiar zakodowany liczbą („-92” = S) — wspólny początek do granicy członu
+        $canis = $this->card('1610-001-000-00', 'Koszulka CXS DANIEL');
+        foreach (['1610-001-100-92' => 'kolor biały / S', '1610-001-100-93' => 'kolor biały / M',
+            '1610-001-400-92' => 'kolor granatowy / S', '1610-001-400-93' => 'kolor granatowy / M'] as $code => $label) {
+            $this->sizeRow($canis, (string) $code, (string) $code, $label);
+        }
+        // Hultafors: kod bez członów, kolor „0404” z etykiety kończy numer; Delta Plus bez kodu w etykiecie — „…”
+        $hultafors = $this->card('1100', 'AllroundWork, Kurtka ocieplana 1100');
+        foreach (['11000404004' => '0404 - Black\Black / S', '11000404005' => '0404 - Black\Black / M',
+            '11009504004' => '9504 - Navy\Black / S', '11009504012' => '9504 - Navy\Black / XXXXXL'] as $code => $label) {
+            $this->sizeRow($hultafors, (string) $code, (string) $code, $label);
+        }
+        $delta = $this->card('M5PA3TSTR', 'SPODNIE ROBOCZE RIPSTOP M5PA3TSTR');
+        foreach (['M5PA3TSTRNOGT' => 'Czarny L', 'M5PA3TSTRNOTM' => 'Czarny M', 'M5PA3TSTRBM3X' => 'Granatowy 3XL'] as $code => $label) {
+            $this->sizeRow($delta, (string) $code, (string) $code, $label);
+        }
+
+        // Raw-Pol: kolor przyklejony do rozmiaru („KOS-5P” + „XXL”), etykieta „2xl” — bez cofania do „KOS”
+        $rawpol = $this->card('KOS-5', 'Koszulka KOS-5');
+        foreach (['KOS-5PM' => 'pomarańczowy m', 'KOS-5PXXL' => 'pomarańczowy 2xl', 'KOS-5SEM' => 'żółty m', 'KOS-5SEL' => 'żółty l'] as $code => $label) {
+            $this->sizeRow($rawpol, (string) $code, (string) $code, $label);
+        }
+
+        // Raw-Pol: kolor = jeden rozmiar, kod bez koloru („RNYDO8”) — po odcięciu rozmiaru wszędzie „RNYDO”, więc cały kod
+        $rnydo = $this->card('RNYDO', 'Rękawice RNYDO');
+        foreach (['RNYDO7' => 'biało-zielony 7', 'RNYDO8' => 'biało-czerwony 8'] as $code => $label) {
+            $this->sizeRow($rnydo, (string) $code, (string) $code, $label);
+        }
+
+        $numbers = fn (Product $card): array => array_column($this->getJson('/api/products/'.$card->id)->assertOk()->json('source_models'), 'number');
+        $this->assertSame(['KOS-5P', 'KOS-5SE'], $numbers($rawpol));
+        $this->assertSame(['RNYDO7', 'RNYDO8'], $numbers($rnydo));
+        $this->assertSame(['1610-001-100', '1610-001-400'], $numbers($canis));
+        $this->assertSame(['11000404', '11009504'], $numbers($hultafors));
+        $this->assertSame(['M5PA3TSTRNO…', 'M5PA3TSTRBM3X'], $numbers($delta));
+        $this->assertSame(['M', 'L'], $this->getJson('/api/products/'.$delta->id)->json('source_models.0.sizes'));
+    }
+
+    public function test_colour_only_rows_are_models_and_code_label_is_not_a_size(): void
+    {
+        // 3M: wiersz = kolor bez rozmiaru; ELTEN sznurówki: bez rozmiaru łącznik wpisuje do etykiety kod pozycji
+        $helmet = $this->card('G3000NUV', 'Hełm ochronny 3M G3000NUV');
+        $this->sizeRow($helmet, '7100001960', 'G3000NUV-VI', 'biały');
+        $this->sizeRow($helmet, '7000009701', 'G3000NUV-GU', 'żółty');
+        $laces = $this->card('0260090-0', 'ELTEN Laces');
+        $this->sizeRow($laces, '0260090-0', '0260090-0', 'black / 0260090-0');
+        $this->sizeRow($laces, '0260092-0', '0260092-0', 'beige / 0260092-0');
+        // MAVIBO „kolor 20” bez rozmiaru — 20 to kolor, nie rozmiar
+        $cap = $this->card('31000', 'Czapka 31000');
+        $this->sizeRow($cap, '31000 20', '31000 20', 'kolor 20');
+        $this->sizeRow($cap, '31000 22', '31000 22', 'kolor 22');
+
+        $this->assertSame([
+            ['number' => 'G3000NUV-VI', 'name' => 'biały', 'sizes' => []],
+            ['number' => 'G3000NUV-GU', 'name' => 'żółty', 'sizes' => []],
+        ], $this->getJson('/api/products/'.$helmet->id)->assertOk()->json('source_models'));
+        $this->assertSame([
+            ['number' => '0260090-0', 'name' => 'black', 'sizes' => []],
+            ['number' => '0260092-0', 'name' => 'beige', 'sizes' => []],
+        ], $this->getJson('/api/products/'.$laces->id)->assertOk()->json('source_models'));
+        $this->assertSame(['kolor 20', 'kolor 22'], array_column($this->getJson('/api/products/'.$cap->id)->json('source_models'), 'name'));
+    }
+
+    public function test_size_only_labels_are_not_models(): void
+    {
+        // etykiety z produkcji (08.10.2026), które bez rozpoznania rozmiaru dawały „modele” będące rozmiarami
+        $cases = [
+            'Hultafors' => ['XS Regular*', 'S Regular', 'M Long*', 'XXXXXL Short*'],
+            'Ejendals' => ['S=35-38', 'M=37-40', 'XL=45-48+'],
+            'Safety Jogger' => ['S (34-38)', 'M (39-43)', 'W42L30', 'W44L34'],
+            'Mascot' => ['82C42', '82C44', 'XS ONE', '2XLONE', '35/383PC', '39/433PC'],
+            'Profix' => ['S (48)', '2L (54)', '35/36'],
+            'Sara' => ['XXLA', 'XXXLA', 'LS', '1SIZE'],
+            'JHK' => ['100x50', '140X70'],
+            'Protekt' => ['mały', 'duży'],
+            'SIR' => ['6-', '7-', '8'],
+            'Canis' => ['48; / 50', '52; / 54'],
+            'P4S' => ['rozmiar 22,5/35,0', 'rozmiar 23,0/36,0'],
+            'Hultafors one size' => ['One-size', 'uni'],
+            'Raw-Pol' => ['czarny 40', 'czarny 42', 'czarny uni'],
+        ];
+        foreach ($cases as $supplier => $labels) {
+            $card = $this->card($supplier, $supplier);
+            foreach ($labels as $i => $label) {
+                $this->sizeRow($card, $supplier.$i, $supplier.'-'.$i, $label);
+            }
+            $this->assertSame([], $this->getJson('/api/products/'.$card->id)->assertOk()->json('source_models'), $supplier);
+        }
+    }
+
     private function card(string $sku, string $name): Product
     {
         return Product::query()->create([
@@ -128,7 +238,8 @@ final class CardSourceModelsTest extends TestCase
                 'b2b_account_id' => $this->account->id, 'remote_id' => $position, 'product_id' => $card->id,
                 'remote_sku' => $number.' '.$size, 'remote_name' => $name.$nameSeparator.$size,
             ]);
-            $this->sizeRow($card, $position, $number.$sizeSeparator.$size, ($colour !== null ? $colour.' / ' : '').$size);
+            // artykuł zdjęty ze źródła traci w pełnym przebiegu i identyfikator, i wiersze rozmiarów (sweepSizeRows)
+            $this->sizeRow($card, $position, $number.$sizeSeparator.$size, ($colour !== null ? $colour.' / ' : '').$size, $removed);
         }
     }
 
@@ -142,11 +253,17 @@ final class CardSourceModelsTest extends TestCase
         ]);
     }
 
-    private function sizeRow(Product $card, string $remoteId, string $sku, string $label): void
+    private function sizeRow(Product $card, string $remoteId, string $sku, string $label, bool $removed = false): void
     {
+        // wiersz rozmiaru = pozycja B2B powiązana z kartą (synchronizacja zapisuje oba)
+        B2bProductLink::query()->firstOrCreate(
+            ['b2b_account_id' => $this->account->id, 'remote_id' => $remoteId],
+            ['product_id' => $card->id, 'remote_sku' => $sku],
+        );
         ProductVariant::query()->create([
             'product_id' => $card->id, 'kind' => ProductVariant::KIND_SIZE, 'source' => 'b2b:'.$this->account->id,
-            'remote_id' => $remoteId, 'sku' => $sku, 'label' => $label,
+            'b2b_account_id' => $this->account->id, 'remote_id' => $remoteId, 'sku' => $sku, 'label' => $label,
+            'removed_at' => $removed ? now() : null,
         ]);
     }
 }

@@ -7,8 +7,8 @@ function sizesLabel(sizes: string[]): string {
 }
 
 /**
- * Modele połączone w jednej karcie (ELTEN MAVERICK red 0723341-0 i black 0723381-0): nazwa u dostawcy, numer
- * i rozmiary — tyle pozycji, ile producent pokazuje w swoim katalogu.
+ * Modele połączone w jednej karcie (ELTEN MAVERICK red 0723341-0 i black 0723381-0; kolory Portwest, Mascot, JHK…
+ * z wierszy rozmiarów): nazwa u dostawcy albo kolor, numer i rozmiary — tyle pozycji, ile producent pokazuje w katalogu.
  */
 export function SourceModelsList({ models, className }: { models: ProductSourceModel[]; className?: string }) {
   if (models.length < 2) return null
@@ -17,10 +17,11 @@ export function SourceModelsList({ models, className }: { models: ProductSourceM
       className={`text-[11px] leading-snug text-slate-600 ${className ?? ''}`}
       title="Modele dostawcy połączone w tej karcie (kolory albo rozmiary pod innym numerem)"
     >
-      {models.map((m) => {
+      {models.map((m, i) => {
         const sizes = sizesLabel(m.sizes)
         return (
-          <li key={m.number} className="break-words">
+          // numer bywa wspólny dla kilku kolorów (kod dostawcy bez koloru) — klucz z pozycją
+          <li key={`${i}-${m.number}`} className="break-words">
             <span className="text-slate-400">• </span>
             {m.name && <>{m.name} – </>}
             <span className="font-mono text-slate-700">{m.number}</span>
