@@ -528,6 +528,52 @@ final class BolleConnectorTest extends TestCase
         }
     }
 
+    public function test_featured_description_without_lowercase_is_a_category_tag_and_is_skipped(): void
+    {
+        // Audyt 08.10.2026: opis wyróżniony to ucięty znacznik kategorii sklepu (STWELD, ETUIS, PSPNESKB04 z cudzą
+        // rodziną RUSH+), który lądował na końcu opisu karty.
+        $connector = $this->connector();
+        $item = static fn (string $featured): B2bRemoteProduct => new B2bRemoteProduct(
+            remoteId: '4874',
+            sku: 'STWELD',
+            name: 'FLASH – Ergonomic headgear',
+            category: 'INDUSTRIAL › GLASSES › Spare Lens',
+            sourceUrl: null,
+            raw: [
+                'status' => 'ok',
+                'itemid' => 'STWELD',
+                'storedescription' => '<p>Ergonomic headgear</p>',
+                'storedetaileddescription' => '<p>Ergonomic headgear with shape memory.</p>',
+                'featureddescription' => $featured,
+            ],
+        );
+
+        foreach (['FLASH WELDING WELDING HEA', '<p>CASES ACCESSORIES CASES N</p>', 'RUSH+ - KIT SAFETY SPARE'] as $tag) {
+            $this->assertSame(
+                "Ergonomic headgear\n\nErgonomic headgear with shape memory.",
+                $connector->description($item($tag)),
+                $tag
+            );
+        }
+        // zwykły opis wyróżniony (wypunktowane cechy) zostaje, także z nazwą modelu wersalikami
+        $this->assertSame(
+            "Ergonomic headgear\n\nErgonomic headgear with shape memory.\n\n- FLASH compatible\n- Shape memory",
+            $connector->description($item('<ul><li>FLASH compatible</li><li>Shape memory</li></ul>'))
+        );
+        // wersaliki, ale nie znacznik: dłuższa linia albo kilka linii (np. oznaczenia soczewki) zostają
+        $kept = [
+            'PLATINUM ANTI-FOG AND ANTI-SCRATCH COATING' => 'PLATINUM ANTI-FOG AND ANTI-SCRATCH COATING',
+            '<p>EN166 FT K N</p><p>EN170 2C-1.2</p>' => "EN166 FT K N\nEN170 2C-1.2",
+        ];
+        foreach ($kept as $featured => $section) {
+            $this->assertSame(
+                "Ergonomic headgear\n\nErgonomic headgear with shape memory.\n\n".$section,
+                $connector->description($item($featured)),
+                $featured
+            );
+        }
+    }
+
     public function test_shop_card_has_the_item_code_and_the_labelled_parameters_without_extra_requests(): void
     {
         $this->fakeSite();

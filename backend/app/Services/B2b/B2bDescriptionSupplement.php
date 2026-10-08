@@ -11,6 +11,7 @@ use App\Models\B2bProductLink;
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductDescriptionText;
+use App\Support\ProductNormsColumn;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -181,11 +182,81 @@ final class B2bDescriptionSupplement
             if (! $apply) {
                 continue;
             }
-            $reason = $this->undoOne($productId, (int) $account->id);
+            $reason = $this->undoOne(
+                $productId,
+                $account,
+                'źródła sprzed bramki wariantu (strony innych wariantów)',
+                'cofnięte — źródła sprzed bramki wariantu, do ponownego uzupełnienia',
+            );
             if ($reason === null) {
                 $out['undone'][] = $productId;
             } else {
                 $out['skipped'][$productId] = $reason;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Cofnięcie uzupełnionego opisu wskazanych kart konta (audyt Bolle 08.10.2026: EN 166 z szablonu sklepu przy
+     * okularach ProBlu, „ATEX…” z nazwy pustego pola, strony innych wariantów) — to samo co undoUngated, ale dla kart
+     * z listy, bez względu na znacznik bramki. $reason trafia do śladu b2b_supplement_undone i komunikatu próby.
+     *
+     * $keepB2b = false: próba „failed” — kolejne zlecenie (queue) opisze kartę od nowa, z obecnymi bramkami.
+     * $keepB2b = true: próba „kept_b2b” (wynik ostateczny dla tego tekstu z B2B) — synchronizacja karty nie zleca
+     * ponownie, karta zostaje z opisem z B2B; wraca tylko przez „także karty już próbowane” (--all).
+     *
+     * @param  list<int>  $productIds
+     * @return array{candidates: list<int>, undone: list<int>, skipped: array<int, string>}
+     */
+    public function undoCards(B2bAccount $account, array $productIds, string $reason, bool $keepB2b, bool $apply): array
+    {
+        $out = ['candidates' => [], 'undone' => [], 'skipped' => []];
+        $ids = array_values(array_unique(array_filter(array_map('intval', $productIds), static fn (int $id): bool => $id > 0)));
+        sort($ids);
+        $message = $keepB2b
+            ? 'cofnięte — '.$reason.'; zostaje opis z B2B'
+            : 'cofnięte — '.$reason.', do ponownego uzupełnienia';
+        foreach ($ids as $productId) {
+            $product = Product::query()->find($productId);
+            if ($product === null) {
+                $out['skipped'][$productId] = 'karty nie ma';
+
+                continue;
+            }
+            $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+            $trace = is_array($payload['b2b_supplement'] ?? null) ? $payload['b2b_supplement'] : [];
+            if (! self::isSupplementResult((string) ($product->description ?? ''), $payload)) {
+                $out['skipped'][$productId] = 'opis karty nie jest wynikiem uzupełnienia (zmieniony albo nieuzupełniony)';
+
+                continue;
+            }
+            if ((int) ($trace['b2b_account_id'] ?? $account->id) !== (int) $account->id) {
+                $out['skipped'][$productId] = 'opis uzupełniony z innego konta (#'.(int) $trace['b2b_account_id'].')';
+
+                continue;
+            }
+            if (trim((string) ($trace['b2b_text'] ?? '')) === '' || trim((string) ($trace['source_sha1'] ?? '')) === '') {
+                $out['skipped'][$productId] = 'ślad bez tekstu z B2B';
+
+                continue;
+            }
+            $out['candidates'][] = $productId;
+            if (! $apply) {
+                continue;
+            }
+            $skip = $this->undoOne(
+                $productId,
+                $account,
+                $reason,
+                $message,
+                $keepB2b ? B2bDescriptionSupplementAttempt::STATUS_KEPT : B2bDescriptionSupplementAttempt::STATUS_FAILED,
+            );
+            if ($skip === null) {
+                $out['undone'][] = $productId;
+            } else {
+                $out['skipped'][$productId] = $skip;
             }
         }
 
@@ -289,10 +360,60 @@ final class B2bDescriptionSupplement
         'primary_source_url', 'primary_source_kind', 'confidence', 'from_cache', 'b2b_supplement',
     ];
 
-    /** Cofnięcie jednej karty (compare-and-set); powód pominięcia albo null. */
-    private function undoOne(int $productId, int $accountId): ?string
+    /**
+     * Dane karty bez wyniku uzupełnienia — przy cofnięciu (undoOne) i gdy synchronizacja zastępuje uzupełniony opis
+     * nowym tekstem od dostawcy (B2bCatalogSync): listy, źródła i normy wyniku odchodzą razem z jego opisem.
+     *
+     * - Klucze spoza wyniku (SUPPLEMENT_PAYLOAD_KEYS) zostają w obecnej postaci — dopisane albo zmienione po uzupełnieniu
+     *   przez inne procesy; klucze wyniku wracają do stanu sprzed uzupełnienia (ślad previous_payload; dawny ślad bez
+     *   niego — bez kluczy wyniku). replaced_description zajęte przez samo uzupełnienie (odcisk = wynik) jest zwalniane.
+     * - Kolumna norm: products:restore-norms-column (07.10.2026) wpisała ją z listy norm uzupełnienia — gdy kolumna to
+     *   wciąż dokładnie ta lista, wraca do listy sprzed uzupełnienia (zwykle pusta). Kolumna o innej treści (ktoś ją
+     *   zmienił) zostaje.
+     * - Ślad wyniku w b2b_supplement_undone (opis, źródła, $reason, dawna kolumna norm, gdy ją zmieniamy).
+     * - Atrybuty (attributes) liczy na nowo wywołujący, z kartą po zmianie.
+     *
+     * @param  array<string, mixed>  $payload  enrichment_payload karty, której opis ($description) jest wynikiem uzupełnienia
+     * @return array{payload: array<string, mixed>, norms: string|null}
+     */
+    public static function withoutResult(array $payload, string $description, ?string $normsColumn, string $reason): array
     {
-        return DB::transaction(function () use ($productId, $accountId): ?string {
+        $trace = is_array($payload['b2b_supplement'] ?? null) ? $payload['b2b_supplement'] : [];
+        $current = array_diff_key($payload, array_flip(self::SUPPLEMENT_PAYLOAD_KEYS));
+        if (($current['replaced_description_hash'] ?? null) === ($trace['result_sha1'] ?? null)) {
+            unset($current['replaced_description'], $current['replaced_description_at'], $current['replaced_description_hash']);
+        }
+        $restored = is_array($trace['previous_payload'] ?? null) ? [...$trace['previous_payload'], ...$current] : $current;
+
+        $supplementNorms = ProductNormsColumn::fromList($payload['norms'] ?? null);
+        $normsFromSupplement = $supplementNorms !== null && $normsColumn === $supplementNorms;
+        $restored['b2b_supplement_undone'] = [
+            'description' => mb_substr($description, 0, 10000),
+            'web_source_urls' => $trace['web_source_urls'] ?? [],
+            'described_at' => $trace['described_at'] ?? null,
+            'undone_at' => now()->toIso8601String(),
+            'reason' => $reason,
+            ...($normsFromSupplement ? ['norms' => $normsColumn] : []),
+        ];
+
+        return [
+            'payload' => $restored,
+            'norms' => $normsFromSupplement ? ProductNormsColumn::fromList($restored['norms'] ?? null) : $normsColumn,
+        ];
+    }
+
+    /** Cofnięcie jednej karty (compare-and-set); powód pominięcia albo null. */
+    private function undoOne(
+        int $productId,
+        B2bAccount $account,
+        string $reason,
+        string $attemptMessage,
+        string $attemptStatus = B2bDescriptionSupplementAttempt::STATUS_FAILED,
+    ): ?string {
+        $accountId = (int) $account->id;
+        $hostsSha1 = $account->enrichmentHostsSha1();
+
+        return DB::transaction(function () use ($productId, $accountId, $hostsSha1, $reason, $attemptMessage, $attemptStatus): ?string {
             $product = Product::query()->lockForUpdate()->find($productId);
             $links = B2bProductLink::query()
                 ->where('b2b_account_id', $accountId)
@@ -316,23 +437,10 @@ final class B2bDescriptionSupplement
             }
             $b2bText = (string) $trace['b2b_text'];
 
-            if (is_array($trace['previous_payload'] ?? null)) {
-                $restored = $trace['previous_payload'];
-            } else {
-                $restored = array_diff_key($payload, array_flip(self::SUPPLEMENT_PAYLOAD_KEYS));
-                // miejsce na opis sprzed tekstu z B2B zajął wtedy sam tekst z B2B — zwalniamy je
-                if (($restored['replaced_description_hash'] ?? null) === ($trace['result_sha1'] ?? null)) {
-                    unset($restored['replaced_description'], $restored['replaced_description_at'], $restored['replaced_description_hash']);
-                }
-            }
-            $restored['b2b_supplement_undone'] = [
-                'b2b_account_id' => $accountId,
-                'description' => mb_substr($description, 0, 10000),
-                'web_source_urls' => $trace['web_source_urls'] ?? [],
-                'described_at' => $trace['described_at'] ?? null,
-                'undone_at' => now()->toIso8601String(),
-                'reason' => 'źródła sprzed bramki wariantu (strony innych wariantów)',
-            ];
+            $without = self::withoutResult($payload, $description, $product->norms, $reason);
+            $restored = $without['payload'];
+            $restored['b2b_supplement_undone'] = ['b2b_account_id' => $accountId, ...$restored['b2b_supplement_undone']];
+            $product->norms = $without['norms'];
             $product->description = $b2bText;
             $product->enrichment_payload = $restored;
             $restored['attributes'] = app(BhpAttributeNormalizer::class)->forProduct($product);
@@ -348,10 +456,13 @@ final class B2bDescriptionSupplement
                 ->where('product_id', $productId)
                 ->where('b2b_account_id', $accountId)
                 ->update([
-                    'status' => B2bDescriptionSupplementAttempt::STATUS_FAILED,
+                    'status' => $attemptStatus,
+                    // odcisk wejścia, dla którego wynik jest ostateczny (kept_b2b) — finalAttempts porównuje oba
+                    'source_sha1' => $sourceSha1,
+                    'hosts_sha1' => $hostsSha1,
                     'result_sha1' => null,
                     'source_urls' => null,
-                    'message' => 'cofnięte — źródła sprzed bramki wariantu, do ponownego uzupełnienia',
+                    'message' => mb_substr($attemptMessage, 0, 500),
                     'updated_at' => now(),
                 ]);
 

@@ -89,6 +89,9 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
 
     private const DATASHEET_DISPLAYNAME = 'Technical Sheet';
 
+    /** Znacznik kategorii w opisie wyróżnionym jest ucięty do 25 znaków — dłuższy tekst nie jest znacznikiem. */
+    private const CATEGORY_TAG_MAX_CHARS = 30;
+
     /** Odczyt tabeli karty technicznej na adres pliku — plik rodziny pobierany najwyżej raz na ten okres. */
     private const DATASHEET_CACHE_DAYS = 30;
 
@@ -256,12 +259,19 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
      * wyróżniony (featureddescription) — sekcja identyczna z wcześniejszą pominięta. Cech z PARAMETERS tu nie ma:
      * to pary „nazwa → wartość”, które podaje shopFields() jako tabelkę „Parametry”. Pozycja bez żadnego z trzech
      * pól opisowych zostaje bez opisu; pusty opis niczego nie nadpisuje (B2bCatalogSync::applyCardDetails).
+     *
+     * Opis wyróżniony bez żadnej małej litery to znacznik kategorii sklepu ucięty do 25 znaków („FLASH WELDING WELDING
+     * HEA”, „CASES ACCESSORIES CASES N”, przy zestawie pianki NESS+ nawet cudza rodzina „RUSH+ - KIT SAFETY SPARE”),
+     * a nie tekst o wyrobie — audyt 08.10.2026: 25 kart, 10 z nich miało go na końcu opisu. Pomijamy go (isCategoryTag).
      */
     public function description(B2bRemoteProduct $product): string
     {
         $sections = [];
         foreach (['storedescription', 'storedetaileddescription', 'featureddescription'] as $field) {
             $text = self::htmlToText((string) ($product->raw[$field] ?? ''));
+            if ($field === 'featureddescription' && self::isCategoryTag($text)) {
+                continue;
+            }
             if ($text !== '' && ! in_array($text, $sections, true)) {
                 $sections[] = $text;
             }
@@ -743,6 +753,19 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
         }
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * Znacznik kategorii sklepu w opisie wyróżnionym: jedna linia do CATEGORY_TAG_MAX_CHARS znaków z literami, bez żadnej
+     * małej litery (pomiar 08.10.2026: wszystkie 25 znaczników to jedna linia po 24–25 znaków, a każda z tych pozycji
+     * ma też zwykły opis). Dłuższy tekst albo kilka linii wersalikami zostaje — to może być treść o wyrobie.
+     */
+    private static function isCategoryTag(string $text): bool
+    {
+        return mb_strlen($text) <= self::CATEGORY_TAG_MAX_CHARS
+            && preg_match('/\R/u', $text) !== 1
+            && preg_match('/\p{L}/u', $text) === 1
+            && preg_match('/\p{Ll}/u', $text) !== 1;
     }
 
     /** Tekst w jednej linii (nazwa, wartość cechy). */

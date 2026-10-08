@@ -3391,6 +3391,11 @@ final class B2bCatalogSync
                     // Zastąpiony tekst zostaje w karcie przebiegu i w payloadzie — nadpisanie
                     // ma być odwracalne, a nie ciche.
                     $payload['enrichment_payload'] = $this->withReplacedDescription($existing, $description);
+                    // Uzupełniony opis odchodzi razem ze swoją kolumną norm (withReplacedDescription zdejmuje listy wyniku).
+                    $supplementNorms = $this->normsWithoutSupplementResult($existing);
+                    if ($supplementNorms !== false) {
+                        $payload['norms'] = $supplementNorms;
+                    }
                     if ($warnings !== null) {
                         $warnings[] = ($fromManufacturer ? 'opis zastąpiony opisem producenta' : 'opis zastąpiony nowym tekstem ze źródła')
                             .' (poprzedni w enrichment_payload.replaced_description)';
@@ -4184,6 +4189,21 @@ final class B2bCatalogSync
     }
 
     /**
+     * Kolumna norm karty po zastąpieniu uzupełnionego opisu (B2bDescriptionSupplement::withoutResult); false = opis nie
+     * jest wynikiem uzupełnienia albo kolumna nie pochodzi z jego listy — bez zmiany.
+     */
+    private function normsWithoutSupplementResult(Product $existing): string|false|null
+    {
+        $payload = is_array($existing->enrichment_payload) ? $existing->enrichment_payload : [];
+        if (! B2bDescriptionSupplement::isSupplementResult((string) $existing->description, $payload)) {
+            return false;
+        }
+        $norms = B2bDescriptionSupplement::withoutResult($payload, (string) $existing->description, $existing->norms, '')['norms'];
+
+        return $norms === $existing->norms ? false : $norms;
+    }
+
+    /**
      * Poprzedni opis karty zapisany obok wyniku wzbogacania — bez tego nadpisanie opisem
      * producenta byłoby nieodwracalne, bo nigdzie indziej starego tekstu nie trzymamy.
      *
@@ -4192,6 +4212,17 @@ final class B2bCatalogSync
     private function withReplacedDescription(Product $existing, string $description): array
     {
         $payload = is_array($existing->enrichment_payload) ? $existing->enrichment_payload : [];
+        // Zastępowany opis to wynik uzupełnienia ze stron (SupplementB2bDescriptionJob): jego listy, źródła i atrybuty
+        // odchodzą razem z nim — inaczej zostawały na karcie normy ze sklepów przy tekście od dostawcy (audyt Bolle
+        // 08.10.2026), a przy kolejnym uzupełnieniu trafiały do previous_payload.
+        if (B2bDescriptionSupplement::isSupplementResult((string) $existing->description, $payload)) {
+            $payload = B2bDescriptionSupplement::withoutResult(
+                $payload,
+                (string) $existing->description,
+                $existing->norms,
+                'nowy tekst u dostawcy (synchronizacja B2B)',
+            )['payload'];
+        }
         $payload['replaced_description'] = mb_substr((string) $existing->description, 0, 10000);
         $payload['replaced_description_at'] = now()->toIso8601String();
         $payload['replaced_description_hash'] = sha1($description);
