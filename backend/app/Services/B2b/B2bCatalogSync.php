@@ -4013,6 +4013,8 @@ final class B2bCatalogSync
             }
 
             return [$stored !== null, null];
+        } catch (B2bFatalException $e) {
+            throw $e;
         } catch (Throwable $e) {
             return [false, $e->getMessage()];
         }
@@ -4057,6 +4059,8 @@ final class B2bCatalogSync
     ): array {
         try {
             $urls = $connector->imageUrls($remote);
+        } catch (B2bFatalException $e) {
+            throw $e;
         } catch (Throwable $e) {
             return [false, $e->getMessage()];
         }
@@ -4080,6 +4084,7 @@ final class B2bCatalogSync
         $saved = false;
         $stamped = false;
         $error = null;
+        $fatal = null;
         // zdjęcia usunięte z karty ręcznie albo audytem — nie pobieramy ich co przebieg tylko po to,
         // żeby storeBytes je odrzucił
         $blocked = ProductImageRejection::blockedKeyHashes((int) $product->id);
@@ -4110,6 +4115,12 @@ final class B2bCatalogSync
                     $saved = true;
                     $position++;
                 }
+            } catch (B2bFatalException $e) {
+                // przebieg się kończy, ale dopiero po ułożeniu galerii — zdjęcie zapisane z numerem 0 jest
+                // główne (storeBytes) obok dotychczasowego głównego, porządkuje to dopiero resequence
+                $fatal = $e;
+
+                break;
             } catch (Throwable $e) {
                 // pierwsze niepobrane zdjęcie idzie do dziennika przebiegu; pozostałych i tak próbujemy
                 $error ??= $e->getMessage();
@@ -4118,6 +4129,9 @@ final class B2bCatalogSync
 
         if ($saved || $stamped || $manufacturerAccountId !== null) {
             ProductImage::resequence((int) $product->id, $manufacturerAccountId);
+        }
+        if ($fatal !== null) {
+            throw $fatal;
         }
 
         return [$saved, $error];
