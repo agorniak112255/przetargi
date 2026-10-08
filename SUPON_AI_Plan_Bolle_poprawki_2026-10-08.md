@@ -98,3 +98,18 @@ Wprowadzone (testy zielone, niezacommitowane):
 Decyzja użytkownika 08.10: 13 kart ProBlu — cofnięcie z `--keep-b2b` (zostaje opis z B2B, bez ponownego uzupełnienia).
 
 Czeka: commit etapu 3 → kod B (§2 B z poprawkami §6.10–6.12) → pomiar M2/M3 → commit + push → polecenia dla użytkownika.
+
+## 8. Wdrożone w kodzie i naprawa danych (08.10 wieczór)
+
+Kod: f6fc37f (część A) + f4d88ce (część B) na origin/main. Pomiar przed wdrożeniem na kopii 415 kart: arbiter oznacza strony z audytu (B9V ×3, TRYON ×2, IRIDPSI2↔IRIDPSI2.5), poza audytem jedna strona rodziny TRYON BSSI (22972); BAXN, BESM, PACCASR-4 bez werdyktu. Sonda p5: 54 karty z list poniżej mają opis z uzupełnienia konta #4.
+
+Polecenia (alias `artisan` na serwerze; najpierw podgląd bez `--apply`):
+1. Wdrożenie: `bash /var/www/vhosts/supon.rzeszow.pl/przetargi.supon.rzeszow.pl/deploy/server-update.sh`
+2. Cofnięcie z pozostawieniem opisu z B2B (49 kart: ProBlu, dane wymyślone, normy ze sklepów, BAXN):
+   `artisan b2b:supplement-descriptions --account=4 --keep-b2b --reason="audyt Bolle 08.10: normy lub dane spoza źródeł" --undo=10147,10158,10164,10187,10188,10200,10204,10209,10210,10211,10216,10223,10272,10275,10286,10311,10331,10339,10346,10353,10363,22925,22933,22935,22937,22945,22997,23006,23007,23024,23025,23026,23030,23032,23033,23045,23046,23047,23048,23053,23056,23057,23058,23059,23063,23065,23068,23069,23111`
+3. Cofnięcie z ponownym uzupełnieniem (5 kart — strona innego wyrobu albo kategorii, nowe bramki to łapią):
+   `artisan b2b:supplement-descriptions --account=4 --reason="audyt Bolle 08.10: strona innego wyrobu lub kategorii" --undo=10195,10270,22932,22958,23102`
+4. Synchronizacja konta Bolle w panelu (25 kart dostaje opis B2B bez znacznika kategorii i tłumaczenie od nowa).
+5. Po tłumaczeniach: `artisan b2b:supplement-descriptions --account=4 --apply` (karty po synchronizacji same nie wracają do uzupełnienia).
+6. Nazwy: `artisan b2b:translate 4 --retry-rejected --id=10240 --id=10243 --id=10254 --id=10373` oraz `artisan b2b:translate 4 --redo-names --id=10251 --id=10255 --id=10256 --id=10257`.
+7. Ręcznie w panelu: nazwy 22956, 22957 (filtr spawalniczy mineralny), 22965, 22966 (szybka ochronna), 22954 (wizjer zapasowy SUPERBLAST); kategoria 10352; PDF iri-s-ft-gb.pdf z 10226, 10227, 10283; dodatkowe zdjęcie procery przy 10183. BL150 w opisie BL15 (10306, 10307) i RUSH+ w RUSH+ 2.0 — błąd tekstu Bolle.
