@@ -7,6 +7,7 @@ namespace App\Services\Offers;
 use App\Models\Offer;
 use App\Models\ProductImage;
 use App\Models\User;
+use App\Services\Campaigns\MailFooter;
 use App\Services\ProductImageThumbService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use DOMDocument;
@@ -14,8 +15,9 @@ use DOMElement;
 
 /**
  * Oferta jako PDF (forma „pdf” i „both”): ten sam mail co w treści (OfferRenderer — baner, kafelki, układ produktów)
- * z podpisem handlowca, przygotowany pod dompdf. Dompdf nie pobiera niczego przez HTTP (enable_remote wyłączone,
- * a lokalny artisan serve jest jednowątkowy) — baner idzie z pliku w public/, zdjęcia produktów z
+ * z podpisem albo stopką maila handlowca, przygotowany pod dompdf. Dompdf nie pobiera niczego przez HTTP (enable_remote
+ * wyłączone, a lokalny artisan serve jest jednowątkowy) — baner i grafiki stopki (MailFooter::IMAGE_PATHS) idą z plików
+ * w public/, zdjęcia produktów z
  * ProductImageThumbService::squareJpeg jako data URI; obrazek, którego nie da się tak podać, znika. Czcionka DejaVu Sans,
  * bo standardowe czcionki PDF (Arial/Helvetica) nie mają ą, ę, ś. Nie final — testy podmieniają zależności.
  */
@@ -230,8 +232,10 @@ class OfferPdf
             return null;
         }
         $path = substr($src, strlen($base));
-        if ($path === '/'.self::BANNER_PATH) {
-            $file = public_path(self::BANNER_PATH);
+        // baner i grafiki stopki maila (logo, ikony) — tylko pliki z listy, nigdy dowolna ścieżka z HTML
+        $name = substr($path, 1);
+        if (in_array($name, [self::BANNER_PATH, ...array_values(MailFooter::IMAGE_PATHS)], true)) {
+            $file = public_path($name);
             $bytes = is_file($file) ? file_get_contents($file) : false;
 
             return is_string($bytes) && $bytes !== '' ? 'data:image/png;base64,'.base64_encode($bytes) : null;

@@ -14,8 +14,10 @@ use Illuminate\Support\Collection;
 /**
  * Mail oferty — wygląd kampanii (CampaignRenderer::renderItems: baner, kafelki, układ produktów), ale do jednego
  * klienta: bez linii wypisu i notki o administratorze danych mailingu, bez linków mierzonych, „Zapytaj o ofertę” na adres
- * autora. Podgląd i kopia do Thunderbirda są bez podpisu (program pocztowy doda podpis handlowca), wysyłka z aplikacji —
- * z podpisem ze skrzynki „Moja poczta”. Forma „pdf” = krótki mail bez produktów (oferta w załączniku, OfferPdf).
+ * autora. Podgląd i kopia do Thunderbirda są bez podpisu (program pocztowy doda podpis handlowca), wysyłka z aplikacji,
+ * kopia dla nadawcy i PDF — z podpisem ze skrzynki „Moja poczta” albo ze stopką maila autora (Moje konto, MailFooter).
+ * Ceny netto albo brutto (Offer::price_mode); jednostka ceny i rozmiary z pozycji (OfferItemPresenter::campaignItems).
+ * Forma „pdf” = krótki mail bez produktów (oferta w załączniku, OfferPdf).
  * Oferta przeglądu (kind = inspection): zamiast produktów tabela terminów bez cen (InspectionOfferRenderer).
  * Nie final — testy podmieniają zależności.
  */
@@ -30,7 +32,7 @@ class OfferRenderer
      * @param  string|null  $notice  informacja na górze maila (kopia dla nadawcy) — klient jej nie dostaje
      * @param  bool  $withSignature  false = bez podpisu (podgląd i kopia do Thunderbirda)
      * @param  string|null  $delivery  forma (Offer::DELIVERIES); null = zapisana przy ofercie. 'pdf' = krótki mail
-     *                                 (wstęp albo „w załączeniu przesyłam ofertę…”) bez produktów i bez linii „Ceny netto…”
+     *                                 (wstęp albo „w załączeniu przesyłam ofertę…”) bez produktów i bez linii ważności
      *                                 — oferta jest w załączniku; 'body' i 'both' = pełny mail z produktami
      * @return array{subject: string, from: string, html: string, text: string}
      */
@@ -47,7 +49,7 @@ class OfferRenderer
         $blocks = [['type' => 'header', 'logo' => null]];
         $intro = trim((string) $offer->intro);
         // oferta przeglądu (bez cen): zamiast bloku produktów akapit ze znacznikiem, podmieniany niżej na tabelę
-        // „Co wymaga przeglądu” — bez linii „Ceny netto…” (jest w bloku produktów) i bez „Zapytaj o ofertę”
+        // „Co wymaga przeglądu” — bez linii ważności i cen (jest w bloku produktów) i bez „Zapytaj o ofertę”
         $tableToken = null;
         if ($offer->isInspection() && $delivery !== 'pdf') {
             $tableToken = $this->inspection->token();
@@ -56,7 +58,7 @@ class OfferRenderer
             }
             $blocks[] = ['type' => 'text', 'text' => $tableToken];
         } elseif ($delivery === 'pdf') {
-            // linia „Ceny netto…” jest w szablonie częścią bloku produktów — bez bloku nie ma i jej
+            // linia ważności i cen jest w szablonie częścią bloku produktów — bez bloku nie ma i jej
             $blocks[] = ['type' => 'text', 'text' => $intro !== '' ? $intro : "Dzień dobry,\n\nw załączeniu przesyłam ofertę ".$offer->code.'.'];
         } else {
             if ($intro !== '') {
@@ -66,9 +68,18 @@ class OfferRenderer
         }
         $blocks[] = ['type' => 'footer', 'text' => ''];
 
+        // ceny brutto (wybór przy ofercie): liczone z netto ze stałą stawką i jawnie opisane nad produktami; przy netto
+        // linia to tylko ważność oferty — „netto” stoi przy każdej cenie (uwaga handlowca 08.10.2026)
+        $gross = $offer->isGross();
+        $validUntil = $offer->valid_until !== null ? 'Oferta ważna do '.$offer->valid_until->format('d.m.Y') : '';
+        if ($gross) {
+            $vat = rtrim(rtrim(number_format(Offer::vatPercent(), 2, ',', ''), '0'), ',');
+            $validUntil = trim('Ceny brutto (z VAT '.$vat.'%). '.$validUntil);
+        }
+
         $rendered = $this->renderer->renderItems(
             // pozycje świeżo z bazy — załadowana relacja mogła się zestarzeć po zmianie ceny; krótki mail ich nie pokazuje
-            $delivery === 'pdf' || $tableToken !== null ? new Collection : OfferItemPresenter::campaignItems($offer->items()->get()),
+            $delivery === 'pdf' || $tableToken !== null ? new Collection : OfferItemPresenter::campaignItems($offer->items()->get(), $gross),
             $author,
             (string) $offer->code,
             false,
@@ -77,9 +88,8 @@ class OfferRenderer
             [
                 'subject' => (string) $offer->subject,
                 'preheader' => null,
-                'validUntil' => $offer->valid_until !== null
-                    ? 'Ceny netto. Oferta ważna do '.$offer->valid_until->format('d.m.Y')
-                    : 'Ceny netto.',
+                'validUntil' => $validUntil,
+                'priceLabel' => $gross ? 'brutto' : 'netto',
                 // oferta do jednego klienta — nie mailing, nie ma z czego się wypisywać
                 'unsubscribeUrl' => null,
                 'notice' => $notice,

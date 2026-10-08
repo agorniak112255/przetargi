@@ -105,6 +105,7 @@ use App\Http\Controllers\Api\TenderResultController;
 use App\Http\Controllers\Api\UnsubscribeController;
 use App\Http\Controllers\Api\UserDirectoryController;
 use App\Http\Controllers\Api\UserMailAccountController;
+use App\Http\Controllers\Api\UserMailFooterController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
@@ -636,6 +637,10 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/me/mail-account', [UserMailAccountController::class, 'show']);
         Route::put('/me/mail-account', [UserMailAccountController::class, 'update']);
         Route::post('/me/mail-account/test', [UserMailAccountController::class, 'test'])->middleware('throttle:10,1');
+        // stopka maila pracownika (zastępuje podpis pod ofertą i kampanią)
+        Route::get('/me/mail-footer', [UserMailFooterController::class, 'show']);
+        Route::put('/me/mail-footer', [UserMailFooterController::class, 'update']);
+        Route::delete('/me/mail-footer', [UserMailFooterController::class, 'destroy']);
     });
 
     // oferty dla klientów — tylko własne (cudza = 404, sprawdza kontroler); whereNumber: /offers/compose/* (zapytania

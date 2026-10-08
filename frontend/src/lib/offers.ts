@@ -17,6 +17,24 @@ export type OfferDelivery = 'body' | 'pdf' | 'both'
 
 export const OFFER_DELIVERIES: OfferDelivery[] = ['body', 'pdf', 'both']
 
+/** Jednostka ceny pozycji wybrana przez handlowca; null = jednostka towaru XL, a bez niej „szt”. */
+export type OfferPriceUnit = 'szt' | 'para' | 'opak' | 'karton'
+
+/** Kod jednostki → to, co idzie w mailu po „/” (OfferItem::PRICE_UNITS na serwerze). */
+export const OFFER_PRICE_UNIT_LABEL: Record<OfferPriceUnit, string> = {
+  szt: 'szt',
+  para: 'para',
+  opak: 'opak.',
+  karton: 'karton',
+}
+
+export const OFFER_PRICE_UNITS = Object.keys(OFFER_PRICE_UNIT_LABEL) as OfferPriceUnit[]
+
+/** Ceny w mailu oferty produktowej: netto albo brutto (netto × (1 + VAT)). */
+export type OfferPriceMode = 'net' | 'gross'
+
+export const OFFER_PRICE_MODES: OfferPriceMode[] = ['net', 'gross']
+
 export type OfferItem = {
   id: number
   position: number
@@ -33,6 +51,21 @@ export type OfferItem = {
   suggested_price: number | null
   /** Cena netto w ofercie; null = do uzupełnienia (wysyłka i Thunderbird wymagają ceny). */
   price_net: number | null
+  /** Cena brutto z serwera: price_net × (1 + vat_percent/100), zaokrąglona; null = brak ceny. Liczona zawsze. */
+  price_gross: number | null
+  /** Wybrana jednostka ceny; null = jednostka towaru XL (unit), a bez niej „szt”. */
+  price_unit: OfferPriceUnit | null
+  /** To, co idzie w mailu po „/” przy cenie (etykieta wyboru albo jednostka XL albo „szt”). */
+  price_unit_label: string
+  /**
+   * Jednostka ceny inna niż jednostka towaru XL — koszt zakupu i stan są w jednostce XL (albo za sztukę), więc
+   * porównanie ceny z kosztem nie ma sensu (warnings.below_cost jest wtedy false).
+   */
+  unit_mismatch: boolean
+  /** Rozmiary w mailu („Rozmiary: S, XXXL”); null = bez tej linii. Przy rozmiarach mail nie pokazuje stanu. */
+  sizes: string | null
+  /** Rozmiary karty pozycji do szybkiego wyboru (w kolejności z karty); [] = karta bez rozmiarów. */
+  size_choices: string[]
   note: string | null
   /** Opis wpisany przy pozycji; null = w mailu idzie card_excerpt. */
   description: string | null
@@ -120,6 +153,10 @@ export type Offer = {
   intro: string | null
   layout: CampaignLayout
   delivery: OfferDelivery
+  /** Ceny w mailu (tylko oferta produktowa): net — netto, gross — brutto z VAT vat_percent. */
+  price_mode: OfferPriceMode
+  /** Stawka VAT do cen brutto (stała z serwera, np. 23). */
+  vat_percent: number
   /** YYYY-MM-DD albo null. */
   valid_until: string | null
   last_sent_at: string | null
@@ -157,6 +194,8 @@ export type OfferPatch = {
   layout?: CampaignLayout
   valid_until?: string | null
   delivery?: OfferDelivery
+  /** Oferta przeglądu nie ma cen — serwer odrzuca (422). */
+  price_mode?: OfferPriceMode
 }
 
 export type OfferItemPatch = {
@@ -168,6 +207,9 @@ export type OfferItemPatch = {
   link_url?: string | null
   link_label?: string | null
   link_color?: string | null
+  price_unit?: OfferPriceUnit | null
+  /** Jedna linia, najwyżej 200 znaków; pusty / null = bez rozmiarów. */
+  sizes?: string | null
 }
 
 export type OfferPreview = {

@@ -22,8 +22,9 @@ use Illuminate\Support\Collection;
  * podmieniają zależności.
  *
  * Układ maila to bloki (CampaignBlocks) w zapisanej kolejności; puste i niekompletne bloki są pomijane (renderer nigdy
- * nie rzuca). Zawsze, niezależnie od bloków: „Ceny netto ważne…” nad produktami, podpis nadawcy po blokach i linia
- * wypisu na końcu (bez linii wypisu, gdy unsubscribeUrl = null — oferta do jednego klienta, renderItems).
+ * nie rzuca). Zawsze, niezależnie od bloków: „Ceny netto ważne…” nad produktami, podpis nadawcy po blokach (zapisana
+ * stopka maila nadawcy — MailFooter — zamiast zwykłego podpisu) i linia wypisu na końcu (bez linii wypisu, gdy
+ * unsubscribeUrl = null — oferta do jednego klienta, renderItems).
  */
 class CampaignRenderer
 {
@@ -104,12 +105,15 @@ class CampaignRenderer
 
     /**
      * Mail z podanych pozycji (zapisanych albo przejściowych CampaignItem z id i position) — wspólny dla kampanii i ofert.
-     * Temat i preheader trafiają do maila w jednej linii; unsubscribeUrl null = mail bez linii wypisu (oferta do klienta).
+     * Temat i preheader trafiają do maila w jednej linii; unsubscribeUrl null = mail bez linii wypisu (oferta do klienta);
+     * validUntil '' = bez linii nad produktami; priceLabel = słowo przy cenie i w nagłówku cennika (domyślnie „netto”).
+     * Przejściowe pozycje oferty niosą nietrwałe atrybuty offer_price_unit (jednostka ceny po „/”; stan zostaje
+     * w jednostce XL) i offer_sizes (linia „Rozmiary: …”, wtedy bez stanu).
      *
      * @param  Collection<int, CampaignItem>  $items
      * @param  bool  $useSnapshot  dane pozycji z migawek (kampania po starcie wysyłki), nie bieżący stan
      * @param  list<array<string, mixed>>  $blocks
-     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null, footerNote?: string, withSignature?: bool, askButton?: bool}  $mail
+     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null, footerNote?: string, withSignature?: bool, askButton?: bool, priceLabel?: string}  $mail
      * @param  User|null  $sender  skrzynka nadawcy (podpis, adres); null = autor
      * @param  string|null  $track  baza linków mierzonych odbiorcy; null = bez linku do strony produktu, drugi przycisk wprost
      * @param  string|null  $askAddress  adres do mailto „Zapytaj o ofertę”; null = adres skrzynki nadawcy, pusty = „#”
@@ -123,6 +127,9 @@ class CampaignRenderer
         $askTo = $askAddress ?? ($account !== null ? (string) $account->from_address : '');
 
         $snapUnits = $items->pluck('snap_unit', 'id')->all();
+        // oferta: jednostka ceny i rozmiary jako nietrwałe atrybuty przejściowych pozycji (OfferItemPresenter::campaignItems)
+        $priceUnits = $items->pluck('offer_price_unit', 'id')->all();
+        $sizesOf = $items->pluck('offer_sizes', 'id')->all();
         $products = [];
         foreach ($author !== null ? $this->presenter->presentMany($items, $author) : [] as $row) {
             $snap = $useSnapshot ? $row['snapshot'] : null;
@@ -136,7 +143,12 @@ class CampaignRenderer
             $before = $row['price_before_net'];
             $stock = $snap !== null ? $snap['stock'] : $row['stock'];
             $stockAt = $snap !== null ? $snap['stock_at'] : $row['stock_synced_at'];
+            // jednostka stanu (towaru XL); cena może być w innej jednostce wybranej przy pozycji oferty
             $unit = ($snap !== null ? ($snapUnits[$row['id']] ?? null) : null) ?? $row['unit'] ?? 'szt';
+            $priceUnit = is_string($priceUnits[$row['id']] ?? null) && $priceUnits[$row['id']] !== '' ? $priceUnits[$row['id']] : $unit;
+            $sizes = is_string($sizesOf[$row['id']] ?? null) && trim($sizesOf[$row['id']]) !== '' ? $this->line($sizesOf[$row['id']]) : null;
+            // stan XL dotyczy całego towaru, nie wybranych rozmiarów — przy rozmiarach bez stanu
+            $inStock = $sizes === null && $stock !== null && (float) $stock > 0;
 
             // cena „przed” tylko wpisana ręcznie i wyższa od ceny kampanii
             $hasBefore = $price !== null && $before !== null && (float) $before > (float) $price;
@@ -145,13 +157,14 @@ class CampaignRenderer
             $products[] = [
                 'name' => (string) $name,
                 'code' => $itemCode,
-                'unit' => $unit,
+                'unit' => $priceUnit,
+                'sizes' => $sizes,
                 'price' => $price !== null ? $this->money((float) $price) : null,
                 'price_before' => $hasBefore ? $this->money((float) $before) : null,
-                'stock' => $stock !== null && (float) $stock > 0
+                'stock' => $inStock
                     ? 'Na stanie: '.$this->quantity((float) $stock).' '.$unit.($stockAt !== null ? ' ('.Carbon::parse($stockAt)->format('d.m').')' : '')
                     : null,
-                'stock_qty' => $stock !== null && (float) $stock > 0 ? $this->quantity((float) $stock).' '.$unit : null,
+                'stock_qty' => $inStock ? $this->quantity((float) $stock).' '.$unit : null,
                 'image_url' => $snap !== null ? $snap['image_url'] : $row['image_url'],
                 'note' => $row['note'] !== null && trim((string) $row['note']) !== '' ? (string) $row['note'] : null,
                 'description' => is_string($description) && trim($description) !== '' ? trim($description) : null,
@@ -169,9 +182,10 @@ class CampaignRenderer
             'validUntil' => (string) $mail['validUntil'],
             'unsubscribeUrl' => $mail['unsubscribeUrl'] ?? null,
             'notice' => $mail['notice'] ?? null,
-            // opcje oferty — kampania ich nie podaje (notka z konfiguracji, podpis zawsze)
+            // opcje oferty — kampania ich nie podaje (notka z konfiguracji, podpis zawsze, ceny netto)
             ...(array_key_exists('footerNote', $mail) ? ['footerNote' => (string) $mail['footerNote']] : []),
             ...(array_key_exists('withSignature', $mail) ? ['withSignature' => (bool) $mail['withSignature']] : []),
+            ...(array_key_exists('priceLabel', $mail) ? ['priceLabel' => (string) $mail['priceLabel']] : []),
         ], $sender, $account);
     }
 
@@ -194,6 +208,7 @@ class CampaignRenderer
                 'name' => 'Przykładowy produkt '.$i,
                 'code' => 'PRZYKLAD'.$i,
                 'unit' => 'szt',
+                'sizes' => null,
                 'price' => $this->money(99),
                 'price_before' => $i === 1 ? $this->money(129) : null,
                 'stock' => 'Na stanie: '.(40 * $i).' szt',
@@ -222,13 +237,15 @@ class CampaignRenderer
     /**
      * @param  list<array<string, mixed>>  $blocks
      * @param  list<array<string, mixed>>  $products
-     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null, footerNote?: string, withSignature?: bool}  $mail
+     * @param  array{subject: string, preheader: string|null, validUntil: string, unsubscribeUrl: string|null, notice: string|null, footerNote?: string, withSignature?: bool, priceLabel?: string}  $mail
      * @return array{subject: string, html: string, text: string}
      */
     private function compose(array $blocks, ?string $brandColor, array $products, array $mail, ?User $sender, ?UserMailAccount $account): array
     {
+        $footer = MailFooter::of($sender);
         $data = [
             ...$mail,
+            'priceLabel' => (string) ($mail['priceLabel'] ?? 'netto'),
             'blocks' => $this->viewBlocks($blocks, $products),
             'products' => $products,
             'brand' => in_array($brandColor, CampaignBlocks::BRAND_COLORS, true) ? $brandColor : CampaignBlocks::DEFAULT_COLOR,
@@ -241,6 +258,8 @@ class CampaignRenderer
             'fromName' => $account !== null ? (string) $account->from_name : ($sender !== null ? (string) $sender->name : ''),
             'fromAddress' => $account !== null ? (string) $account->from_address : '',
             'signature' => $account?->signature !== null && trim((string) $account->signature) !== '' ? (string) $account->signature : null,
+            // zapisana stopka maila nadawcy („Moje konto → Stopka maila”) zastępuje podpis; null = zwykły podpis
+            'mailFooter' => $footer !== null ? MailFooter::viewData($footer) : null,
         ];
 
         return [

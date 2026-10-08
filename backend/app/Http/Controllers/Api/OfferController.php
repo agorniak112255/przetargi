@@ -145,6 +145,8 @@ class OfferController extends Controller
             'valid_until' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
             // forma: produkty w treści maila, krótki mail z PDF albo oba
             'delivery' => ['sometimes', 'required', 'string', Rule::in(Offer::DELIVERIES)],
+            // ceny w mailu netto albo brutto (handlowiec wpisuje netto)
+            'price_mode' => ['sometimes', 'required', 'string', Rule::in(Offer::PRICE_MODES)],
         ], [
             'subject.not_regex' => 'Temat musi być jedną linią.',
             'subject.max' => 'Temat może mieć najwyżej 200 znaków.',
@@ -153,7 +155,13 @@ class OfferController extends Controller
             'valid_until.date_format' => 'Data ważności musi mieć postać RRRR-MM-DD.',
             'delivery.in' => 'Wybierz formę oferty z listy.',
             'delivery.required' => 'Wybierz formę oferty z listy.',
+            'price_mode.in' => 'Wybierz ceny netto albo brutto.',
+            'price_mode.required' => 'Wybierz ceny netto albo brutto.',
+            'price_mode.string' => 'Wybierz ceny netto albo brutto.',
         ]);
+        if (array_key_exists('price_mode', $v) && $offer->isInspection()) {
+            throw ValidationException::withMessages(['price_mode' => ['Oferta przeglądu nie ma cen.']]);
+        }
 
         $data = [];
         if (array_key_exists('subject', $v)) {
@@ -170,6 +178,9 @@ class OfferController extends Controller
         }
         if (array_key_exists('delivery', $v)) {
             $data['delivery'] = $v['delivery'];
+        }
+        if (array_key_exists('price_mode', $v)) {
+            $data['price_mode'] = $v['price_mode'];
         }
         if ($data !== []) {
             $offer->update($data);
@@ -218,7 +229,16 @@ class OfferController extends Controller
             'link_url' => ['sometimes', 'nullable', 'string', 'max:500'],
             'link_label' => ['required_with:link_url', 'nullable', 'string', 'max:40', 'not_regex:'.self::NO_NEWLINE],
             'link_color' => ['required_with:link_url', 'nullable', 'string', Rule::in(CampaignBlocks::BRAND_COLORS)],
+            // jednostka ceny w mailu; null = jednostka towaru XL (bez niej „szt”)
+            'price_unit' => ['sometimes', 'nullable', 'string', Rule::in(array_keys(OfferItem::PRICE_UNITS))],
+            // rozmiary w mailu („Rozmiary: S, XXXL”); pusty = bez linii rozmiarów
+            'sizes' => ['sometimes', 'nullable', 'string', 'max:200', 'not_regex:'.self::NO_NEWLINE],
         ], [
+            'price_unit.in' => 'Wybierz jednostkę ceny z listy.',
+            'price_unit.string' => 'Wybierz jednostkę ceny z listy.',
+            'sizes.string' => 'Rozmiary wpisz jako tekst, np. S, XXXL.',
+            'sizes.max' => 'Rozmiary mogą mieć najwyżej 200 znaków.',
+            'sizes.not_regex' => 'Rozmiary wpisz w jednej linii.',
             'price_net.numeric' => 'Cena musi być liczbą.',
             'price_net.min' => 'Cena nie może być ujemna.',
             'note.max' => 'Uwaga może mieć najwyżej 300 znaków.',
@@ -233,11 +253,11 @@ class OfferController extends Controller
         $link = $this->itemLink($v);
 
         $this->locked($offer, function (Offer $locked) use ($item, $v, $link): void {
-            $data = array_intersect_key($v, array_flip(['price_net', 'note', 'description']));
+            $data = array_intersect_key($v, array_flip(['price_net', 'note', 'description', 'price_unit', 'sizes']));
             if (array_key_exists('price_net', $data) && $data['price_net'] !== null) {
                 $data['price_net'] = round((float) $data['price_net'], 2);
             }
-            foreach (['note', 'description'] as $field) {
+            foreach (['note', 'description', 'sizes'] as $field) {
                 if (array_key_exists($field, $data) && is_string($data[$field])) {
                     $data[$field] = trim($data[$field]) !== '' ? trim($data[$field]) : null;
                 }
@@ -771,6 +791,9 @@ class OfferController extends Controller
             'layout' => $offer->layout,
             'valid_until' => $offer->valid_until?->toDateString(),
             'delivery' => $this->delivery($offer),
+            // ceny w mailu: netto albo brutto ze stałą stawką VAT (pozycje mają zawsze price_net i price_gross)
+            'price_mode' => $offer->isGross() ? 'gross' : 'net',
+            'vat_percent' => Offer::vatPercent(),
             'last_sent_at' => $offer->last_sent_at?->toIso8601String(),
             'last_copied_at' => $offer->last_copied_at?->toIso8601String(),
             'items' => $this->presenter->presentMany($items, $viewer),

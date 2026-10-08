@@ -35,4 +35,19 @@ return [
     'company_tagline' => 'Odzież robocza i sprzęt BHP',
 
     'footer_note' => env('CAMPAIGNS_FOOTER_NOTE', 'Administratorem danych jest SUPON, Rzeszów.'),
+
+    /**
+     * Stała część stopki maila pracownika (emails/mail-footer, App\Services\Campaigns\MailFooter): firma i adres
+     * (supon.rzeszow.pl/kontakt, 08.10.2026), strona www i pasek „Sprawdź: …” (linki ze strony głównej sklepu).
+     */
+    'mail_footer' => [
+        'company' => 'PHT SUPON Sp. z o.o.',
+        'address' => 'ul. Miłocińska 17, 35-232 Rzeszów',
+        'website' => 'https://www.supon.rzeszow.pl',
+        'links' => [
+            ['label' => 'Promocje', 'url' => 'https://www.supon.rzeszow.pl/231-promocja'],
+            ['label' => 'Outlet', 'url' => 'https://www.supon.rzeszow.pl/259-outlet-bhp'],
+            ['label' => 'Blog', 'url' => 'https://www.supon.rzeszow.pl/nowosci'],
+        ],
+    ],
 ];

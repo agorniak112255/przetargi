@@ -28,8 +28,14 @@ class Offer extends Model
 
     public const KINDS = [self::KIND_PRODUCTS, self::KIND_INSPECTION];
 
-    /** @var array<string, mixed> jak domyślne kolumn — nowa oferta ma formę i rodzaj bez odczytu z bazy */
-    protected $attributes = ['delivery' => 'body', 'kind' => self::KIND_PRODUCTS];
+    /**
+     * Ceny w mailu: net — netto (jak wpisane przy pozycjach); gross — brutto ze stałą stawką offers.vat_percent (XL nie
+     * podaje stawki towaru). Handlowiec zawsze wpisuje netto.
+     */
+    public const PRICE_MODES = ['net', 'gross'];
+
+    /** @var array<string, mixed> jak domyślne kolumn — nowa oferta ma formę, rodzaj i ceny bez odczytu z bazy */
+    protected $attributes = ['delivery' => 'body', 'kind' => self::KIND_PRODUCTS, 'price_mode' => 'net'];
 
     protected $fillable = [
         'user_id',
@@ -41,6 +47,7 @@ class Offer extends Model
         'layout',
         'valid_until',
         'delivery',
+        'price_mode',
         'last_sent_at',
         'last_copied_at',
     ];
@@ -86,6 +93,24 @@ class Offer extends Model
     public function isInspection(): bool
     {
         return $this->kind === self::KIND_INSPECTION;
+    }
+
+    /** Ceny brutto w mailu; nieznana wartość = netto. */
+    public function isGross(): bool
+    {
+        return $this->price_mode === 'gross';
+    }
+
+    /** Stawka VAT cen brutto (config offers.vat_percent). */
+    public static function vatPercent(): float
+    {
+        return (float) config('offers.vat_percent', 23);
+    }
+
+    /** Cena brutto z netto: round(netto × (1 + VAT/100); 2). */
+    public static function gross(float $net): float
+    {
+        return round($net * (1 + self::vatPercent() / 100), 2);
     }
 
     /** @return HasMany<OfferSend, $this> najnowsza wysyłka pierwsza */

@@ -2,12 +2,17 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useAppearance } from '../appearanceContext'
 import { useAuth } from '../auth'
 import { NotificationPreferencesForm } from '../components/account/NotificationPreferencesForm'
-import { api, canAny, type User } from '../lib/api'
+import { api, ApiError, canAny, type User } from '../lib/api'
 import { TEMPLATES, type AppearanceMode, type AppearanceTemplate, type Scheme } from '../lib/appearance'
 import {
+  deleteMailFooter,
   getMailAccount,
+  getMailFooter,
   saveMailAccount,
+  saveMailFooter,
   testMailAccount,
+  type MailFooter,
+  type MailFooterResponse,
   type UserMailAccount,
   type UserMailAccountInput,
 } from '../lib/campaigns'
@@ -531,7 +536,7 @@ function MailAccountForm() {
           <MailField
             id="mail-signature"
             label="Podpis"
-            hint="zwykły tekst, pod każdą kampanią i ofertą — np. imię i nazwisko, stanowisko, telefon"
+            hint="zwykły tekst pod kampanią i ofertą, używany, gdy nie masz zapisanej stopki (karta „Stopka maila” niżej) — np. imię i nazwisko, stanowisko, telefon"
           >
             <textarea
               id="mail-signature"
@@ -687,6 +692,230 @@ function MailAccountForm() {
   )
 }
 
+type FooterForm = Record<keyof MailFooter, string>
+
+/** Pola stopki — limity jak walidacja serwera (PUT /me/mail-footer). */
+const FOOTER_FIELDS: {
+  key: keyof MailFooter
+  label: string
+  max: number
+  type?: 'email' | 'tel'
+  placeholder?: string
+}[] = [
+  { key: 'name', label: 'Imię i nazwisko', max: 100 },
+  { key: 'position', label: 'Stanowisko', max: 100, placeholder: 'np. Doradca handlowy' },
+  { key: 'mobile', label: 'Telefon komórkowy', max: 40, type: 'tel', placeholder: 'np. 600 903 483' },
+  { key: 'phone', label: 'Telefon stacjonarny', max: 40, type: 'tel', placeholder: 'np. (17) 860-28-49' },
+  { key: 'email', label: 'E-mail', max: 254, type: 'email' },
+]
+
+function footerFormFrom(f: MailFooter): FooterForm {
+  return { name: f.name ?? '', position: f.position ?? '', mobile: f.mobile ?? '', phone: f.phone ?? '', email: f.email ?? '' }
+}
+
+/**
+ * Stopka maila: imię, stanowisko, telefony i e-mail pracownika z logo i danymi firmy — pod ofertami i kampaniami
+ * wysyłanymi z aplikacji oraz w PDF oferty, zamiast zwykłego podpisu z „Moja poczta”. Bez zapisu (saved = false) pola
+ * mają podpowiedzi z konta, a podgląd pokazuje, jak stopka będzie wyglądać.
+ */
+function MailFooterForm() {
+  const [data, setData] = useState<MailFooterResponse | null>(null)
+  const [form, setForm] = useState<FooterForm | null>(null)
+  const [loadErr, setLoadErr] = useState('')
+  const [busy, setBusy] = useState<'save' | 'delete' | false>(false)
+  const [err, setErr] = useState('')
+  const [fieldErrs, setFieldErrs] = useState<Partial<Record<keyof MailFooter, string>>>({})
+  const [msg, setMsg] = useState('')
+
+  function apply(r: MailFooterResponse) {
+    setData(r)
+    setForm(footerFormFrom(r.footer))
+  }
+
+  async function load() {
+    setLoadErr('')
+    try {
+      apply(await getMailFooter())
+    } catch (ex) {
+      setLoadErr(ex instanceof Error ? ex.message : 'Błąd')
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    // Raz przy wejściu na stronę.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (loadErr) {
+    return (
+      <section id="stopka-maila" className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold">Stopka maila</h2>
+        <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+          Nie udało się wczytać stopki: {loadErr}{' '}
+          <button type="button" className="font-medium underline" onClick={() => void load()}>
+            Spróbuj ponownie
+          </button>
+        </p>
+      </section>
+    )
+  }
+  if (!data || !form) {
+    return (
+      <section id="stopka-maila" className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold">Stopka maila</h2>
+        <p className="text-xs text-slate-500">Ładowanie…</p>
+      </section>
+    )
+  }
+
+  const dirty = JSON.stringify(form) !== JSON.stringify(footerFormFrom(data.footer))
+
+  function set(key: keyof MailFooter, value: string) {
+    setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
+    setFieldErrs((prev) => ({ ...prev, [key]: undefined }))
+    setMsg('')
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!form) return
+    setBusy('save')
+    setErr('')
+    setMsg('')
+    setFieldErrs({})
+    const clean = (v: string) => (v.trim() === '' ? null : v.trim())
+    try {
+      const r = await saveMailFooter({
+        name: clean(form.name),
+        position: clean(form.position),
+        mobile: clean(form.mobile),
+        phone: clean(form.phone),
+        email: clean(form.email),
+      })
+      apply(r)
+      setMsg(
+        r.saved
+          ? 'Zapisano stopkę. Pójdzie pod następnymi ofertami i kampaniami wysyłanymi z aplikacji.'
+          : 'Wszystkie pola były puste — stopka jest wyłączona, pod mailami będzie podpis z „Moja poczta”.',
+      )
+    } catch (ex) {
+      // 422: komunikaty przy polach; inne błędy (i 422 bez pola z formularza) — nad formularzem
+      const errors =
+        ex instanceof ApiError && ex.status === 422 ? (ex.body.errors as Record<string, string[]> | undefined) : undefined
+      const perField: Partial<Record<keyof MailFooter, string>> = {}
+      for (const f of FOOTER_FIELDS) {
+        const m = errors?.[f.key]?.[0]
+        if (m) perField[f.key] = m
+      }
+      if (Object.keys(perField).length > 0) setFieldErrs(perField)
+      else setErr(ex instanceof Error ? ex.message : 'Błąd zapisu')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onDelete() {
+    setBusy('delete')
+    setErr('')
+    setMsg('')
+    setFieldErrs({})
+    try {
+      await deleteMailFooter()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania')
+      setBusy(false)
+      return
+    }
+    try {
+      apply(await getMailFooter())
+      setMsg('Usunięto stopkę. Pod mailami będzie znów podpis z „Moja poczta”.')
+    } catch (ex) {
+      setErr(`Usunięto stopkę, ale nie udało się odświeżyć karty: ${ex instanceof Error ? ex.message : 'błąd'}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section id="stopka-maila" className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+      <h2 className="mb-1 flex flex-wrap items-baseline gap-2 text-sm font-semibold">
+        Stopka maila
+        <span className={`text-xs font-normal ${data.saved ? 'text-emerald-700' : 'text-slate-500'}`}>
+          {data.saved ? 'włączona' : 'niezapisana — pola mają podpowiedzi z konta'}
+        </span>
+      </h2>
+      <p className="mb-3 text-xs text-slate-500">
+        Stopka z Twoimi danymi, logo i adresem firmy idzie pod ofertami i kampaniami wysyłanymi z aplikacji oraz w PDF
+        oferty. Zastępuje zwykły podpis z „Moja poczta”. W Thunderbirdzie zostaje podpis z programu pocztowego. Puste
+        pole nie pojawi się w stopce.
+      </p>
+      <form onSubmit={(e) => void onSubmit(e)} className="space-y-3" autoComplete="off">
+        {err && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+        {msg && <p className="rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{msg}</p>}
+        <div className="grid gap-3 sm:grid-cols-2">
+          {FOOTER_FIELDS.map((f) => {
+            const id = `footer-${f.key}`
+            const fieldErr = fieldErrs[f.key]
+            return (
+              <MailField key={f.key} id={id} label={f.label}>
+                <input
+                  id={id}
+                  type={f.type ?? 'text'}
+                  className={`${inputClass} ${fieldErr ? 'border-red-400' : ''}`}
+                  value={form[f.key]}
+                  maxLength={f.max}
+                  placeholder={f.placeholder}
+                  aria-invalid={fieldErr ? true : undefined}
+                  aria-describedby={fieldErr ? `${id}-error` : undefined}
+                  onChange={(e) => set(f.key, e.target.value)}
+                />
+                {fieldErr && (
+                  <span id={`${id}-error`} className="text-[11px] text-red-700">
+                    {fieldErr}
+                  </span>
+                )}
+              </MailField>
+            )
+          })}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="submit"
+            disabled={busy !== false}
+            className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {busy === 'save' ? 'Zapisuję…' : 'Zapisz stopkę'}
+          </button>
+          {data.saved && (
+            <button
+              type="button"
+              disabled={busy !== false}
+              onClick={() => void onDelete()}
+              className="rounded border border-slate-300 px-3 py-2 text-sm text-red-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {busy === 'delete' ? 'Usuwam…' : 'Usuń stopkę'}
+            </button>
+          )}
+        </div>
+      </form>
+      <div className="mt-4">
+        <p className="mb-1 text-xs text-slate-500">
+          {data.saved ? 'Podgląd zapisanej stopki' : 'Podgląd z podpowiedzi — tak będzie wyglądać po zapisie'}
+          {dirty && ' (zmiany w polach zobaczysz po zapisie)'}
+        </p>
+        {/* sandbox="" — bez skryptów i dostępu do strony; HTML stopki tylko do obejrzenia. */}
+        <iframe
+          title="Podgląd stopki maila"
+          sandbox=""
+          srcDoc={data.preview_html}
+          className="block h-[260px] w-full rounded border border-slate-200 bg-white"
+        />
+      </div>
+    </section>
+  )
+}
+
 export function Account() {
   const { user } = useAuth()
   const { choice, resolved, setChoice, saveState, saveError } = useAppearance()
@@ -713,7 +942,12 @@ export function Account() {
 
       <MarginForm />
 
-      {canAny(user, ['campaigns.use', 'offers.use', 'inspections.offer']) && <MailAccountForm />}
+      {canAny(user, ['campaigns.use', 'offers.use', 'inspections.offer']) && (
+        <>
+          <MailAccountForm />
+          <MailFooterForm />
+        </>
+      )}
 
       <PasswordForm />
 

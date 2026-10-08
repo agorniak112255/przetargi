@@ -840,6 +840,39 @@ export function testMailAccount() {
   return api<{ ok: boolean; message: string; imap?: { ok: boolean; message: string } | null }>('/me/mail-account/test', { method: 'POST' })
 }
 
+/** Stopka maila (Moje konto → Stopka maila): dane pracownika pod ofertami i kampaniami wysyłanymi z aplikacji. */
+export type MailFooter = {
+  name: string | null
+  position: string | null
+  /** Telefon komórkowy. */
+  mobile: string | null
+  /** Telefon stacjonarny. */
+  phone: string | null
+  email: string | null
+}
+
+export type MailFooterResponse = {
+  /** Zapisana stopka; przy saved = false — podpowiedzi (imię z konta, adres ze skrzynki albo konta). */
+  footer: MailFooter
+  saved: boolean
+  /** Sama stopka w minimalnym dokumencie HTML — do podglądu w iframe. */
+  preview_html: string
+}
+
+export function getMailFooter() {
+  return api<MailFooterResponse>('/me/mail-footer')
+}
+
+/** Wszystkie pola puste = stopka wyłączona (jak deleteMailFooter). 422: imię wymagane, gdy wpisano coś innego. */
+export function saveMailFooter(body: MailFooter) {
+  return api<MailFooterResponse>('/me/mail-footer', { method: 'PUT', ...json(body) })
+}
+
+/** Wyłącza stopkę; treść odpowiedzi nie jest używana — po usunięciu stan wczytuje się na nowo przez getMailFooter. */
+export function deleteMailFooter() {
+  return api<unknown>('/me/mail-footer', { method: 'DELETE' })
+}
+
 export type XlCustomerSort = 'documents' | 'last_sale' | 'acronym' | 'name' | 'city'
 
 export type XlCustomerRow = {

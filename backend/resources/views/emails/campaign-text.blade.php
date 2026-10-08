@@ -34,12 +34,17 @@
 
 @break
 @case('products')
+@if ($validUntil !== '')
 {!! $validUntil !!}
 
+@endif
 @foreach ($b['products'] as $p)
 * {!! $p['name'] !!}
 @if ($p['code'] !== '')
   Kod {!! $p['code'] !!}
+@endif
+@if (($p['sizes'] ?? null) !== null)
+  Rozmiary: {!! $p['sizes'] !!}
 @endif
 @if ($p['note'] !== null)
   {!! $p['note'] !!}
@@ -48,7 +53,7 @@
   {!! $p['description'] !!}
 @endif
 @if ($p['price'] !== null)
-  {!! $p['price'] !!} netto / {!! $p['unit'] !!}@if ($p['price_before'] !== null) (wcześniej {!! $p['price_before'] !!})@endif
+  {!! $p['price'] !!} {!! $priceLabel ?? 'netto' !!} / {!! $p['unit'] !!}@if ($p['price_before'] !== null) (wcześniej {!! $p['price_before'] !!})@endif
 
 @endif
 @if ($p['stock'] !== null)
@@ -70,7 +75,9 @@
 @endforeach
 @if ($withSignature)
 --
-@if ($signature !== null)
+@if (($mailFooter ?? null) !== null)
+@include('emails.mail-footer-text')
+@elseif ($signature !== null)
 {!! $signature !!}
 @else
 {!! $fromName !!}

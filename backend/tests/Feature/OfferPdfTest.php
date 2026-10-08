@@ -121,7 +121,9 @@ final class OfferPdfTest extends TestCase
         $both = $this->getJson("/api/offers/{$this->offer->id}/preview")->assertOk()->json();
         $this->assertSame('Oferta-OF-0001.pdf', $both['pdf_filename']);
         $this->assertStringContainsString('Rękawice nitrylowe', $both['html']);
-        $this->assertStringContainsString('Ceny netto. Oferta ważna do 31.10.2026', $both['html']);
+        // od 08.10.2026 nad produktami tylko ważność oferty — „netto” stoi przy każdej cenie
+        $this->assertStringContainsString('Oferta ważna do 31.10.2026', $both['html']);
+        $this->assertStringNotContainsString('Ceny netto.', $both['html']);
     }
 
     public function test_pdf_download_with_images_and_polish_font(): void
@@ -137,6 +139,20 @@ final class OfferPdfTest extends TestCase
         $this->assertStringNotContainsString('/Helvetica', $pdf);
         // baner z public/ i zdjęcie karty — dwa obrazki osadzone w pliku
         $this->assertSame(2, substr_count($pdf, '/Subtype /Image'));
+    }
+
+    public function test_pdf_embeds_mail_footer_images_from_public(): void
+    {
+        $this->author->forceFill(['mail_footer' => [
+            'name' => 'Anna Nowak', 'position' => 'Handlowiec', 'mobile' => '600 903 483', 'phone' => null, 'email' => 'anna@supon.example.pl',
+        ]])->save();
+
+        $pdf = (string) $this->get("/api/offers/{$this->offer->id}/pdf")->assertOk()->getContent();
+
+        // baner i zdjęcie karty (2) + logo stopki i trzy ikony (telefon, e-mail, www) z public/ jako data URI; grafiki
+        // stopki to PNG z kanałem alfa — dompdf dokłada do każdej maskę przezroczystości (też /Subtype /Image): 2 + 4×2
+        $this->assertSame(10, substr_count($pdf, '/Subtype /Image'));
+        $this->assertSame(4, substr_count($pdf, '/SMask'));
     }
 
     public function test_long_offer_spans_pages_without_losing_rows(): void

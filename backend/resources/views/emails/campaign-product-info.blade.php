@@ -7,6 +7,9 @@
 @if ($p['code'] !== '')
                           <div style="font-size:11px;color:{{ $muted }};margin-top:4px;">Kod {{ $p['code'] }}</div>
 @endif
+@if (($p['sizes'] ?? null) !== null)
+                          <div style="font-size:11px;color:{{ $muted }};margin-top:2px;">Rozmiary: {{ $p['sizes'] }}</div>
+@endif
 @if ($p['note'] !== null)
                           <div style="font-size:12px;color:{{ $text }};margin-top:4px;">{{ $p['note'] }}</div>
 @endif
@@ -26,7 +29,7 @@
                             <span style="font-size:12px;color:{{ $muted }};text-decoration:line-through;">{{ $p['price_before'] }}</span><br>
 @endif
                             <span style="font-size:17px;font-weight:700;color:{{ $brand }};">{{ $p['price'] }}</span>
-                            <span style="font-size:11px;color:{{ $muted }};">netto / {{ $p['unit'] }}</span>
+                            <span style="font-size:11px;color:{{ $muted }};">{{ $priceLabel ?? 'netto' }} / {{ $p['unit'] }}</span>
                           </div>
 @endif
 @if ($p['stock'] !== null)

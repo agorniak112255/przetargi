@@ -131,10 +131,11 @@ final class OfferApiTest extends TestCase
         $this->assertNull($items[2]['suggested_price']);
         $this->assertNull($items[2]['price_net']);
         $this->assertSame(['below_cost' => false, 'no_price' => true, 'no_image' => true], $items[2]['warnings']);
-        // dokładnie klucze kontraktu OfferItem (bez pól kampanii)
+        // dokładnie klucze kontraktu OfferItem (bez pól kampanii); od 08.10.2026 także brutto, jednostka ceny i rozmiary
         $this->assertSame([
             'id', 'position', 'erp_item_id', 'product_id', 'code', 'name', 'unit', 'stock', 'unit_cost', 'suggested_price',
-            'price_net', 'note', 'description', 'card_excerpt', 'card', 'image_url', 'link', 'warnings',
+            'price_net', 'price_gross', 'price_unit', 'price_unit_label', 'unit_mismatch', 'sizes', 'size_choices',
+            'note', 'description', 'card_excerpt', 'card', 'image_url', 'link', 'warnings',
         ], array_keys($items[0]));
 
         // duplikaty pomijane
@@ -267,8 +268,11 @@ final class OfferApiTest extends TestCase
         $this->assertFalse($preview['public_url_missing']);
         $this->assertStringContainsString('Kask ochronny', $preview['html']);
         $this->assertStringContainsString('Dzień dobry, przesyłam ofertę.', $preview['html']);
-        $this->assertStringContainsString('Ceny netto. Oferta ważna do 31.10.2026', $preview['html']);
-        $this->assertStringContainsString('Ceny netto. Oferta ważna do 31.10.2026', $preview['text']);
+        // nad produktami tylko ważność — „netto” stoi przy każdej cenie (uwaga handlowca 08.10.2026)
+        $this->assertStringContainsString('Oferta ważna do 31.10.2026', $preview['html']);
+        $this->assertStringContainsString('Oferta ważna do 31.10.2026', $preview['text']);
+        $this->assertStringNotContainsString('Ceny netto.', $preview['html']);
+        $this->assertStringNotContainsString('Ceny netto.', $preview['text']);
         // oferta do jednego klienta — bez linii wypisu i bez linków mierzonych
         foreach ([$preview['html'], $preview['text']] as $body) {
             // klient dostaje cenę — bez przycisku „Zapytaj o ofertę” (06.10.2026)

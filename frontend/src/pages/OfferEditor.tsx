@@ -26,6 +26,9 @@ import {
 } from '../lib/campaigns'
 import {
   OFFER_DELIVERIES,
+  OFFER_PRICE_MODES,
+  OFFER_PRICE_UNIT_LABEL,
+  OFFER_PRICE_UNITS,
   addOfferItems,
   deleteOffer,
   downloadOfferPdf,
@@ -48,6 +51,8 @@ import {
   type OfferItemPatch,
   type OfferPatch,
   type OfferPreview,
+  type OfferPriceMode,
+  type OfferPriceUnit,
   type OfferRecipientStatus,
   type OfferSend,
   type OfferSendResult,
@@ -323,6 +328,15 @@ function Editor({ initial }: { initial: Offer }) {
     setDeliveryDraft((d) => (d === next ? null : d))
   }
 
+  // Ceny w mailu (netto / brutto): jak forma oferty — zapis od razu, do odpowiedzi serwera wybór człowieka.
+  const [priceModeDraft, setPriceModeDraft] = useState<OfferPriceMode | null>(null)
+  async function changePriceMode(next: OfferPriceMode) {
+    setPriceModeDraft(next)
+    await mutate(() => updateOffer(offerId, { price_mode: next }), 'Nie udało się zapisać wyboru cen w mailu.')
+    setPriceModeDraft((m) => (m === next ? null : m))
+  }
+  const priceMode = priceModeDraft ?? offer.price_mode
+
   async function confirmDelete() {
     setDeleteBusy(true)
     setDeleteErr('')
@@ -403,7 +417,14 @@ function Editor({ initial }: { initial: Offer }) {
           <InspectionLinesSection offer={offer} readOnly={readOnly} mutate={mutate} onError={setErr} />
         </div>
       ) : (
-        <ItemsSection offer={offer} layout={content.layout} readOnly={readOnly} mutate={mutate} onError={setErr} />
+        <ItemsSection
+          offer={offer}
+          layout={content.layout}
+          priceMode={priceMode}
+          readOnly={readOnly}
+          mutate={mutate}
+          onError={setErr}
+        />
       )}
 
       <div className="mt-4 grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,700px)]">
@@ -412,6 +433,9 @@ function Editor({ initial }: { initial: Offer }) {
             content={content}
             inspection={isInspection}
             readOnly={readOnly}
+            priceMode={priceMode}
+            vatPercent={offer.vat_percent}
+            onPriceMode={(m) => void changePriceMode(m)}
             onEdit={editContent}
             onBlur={() => void flush()}
           />
@@ -495,12 +519,15 @@ function lacksPrice(item: OfferItem): boolean {
 function ItemsSection({
   offer,
   layout,
+  priceMode,
   readOnly,
   mutate,
   onError,
 }: {
   offer: Offer
   layout: CampaignLayout
+  /** Ceny w mailu — przy brutto pod polem ceny widać cenę brutto z serwera. */
+  priceMode: OfferPriceMode
   /** Cudza oferta — bez dodawania, zmian, kolejności i usuwania pozycji. */
   readOnly: boolean
   mutate: Mutate
@@ -613,6 +640,7 @@ function ItemsSection({
                 item={item}
                 readOnly={readOnly}
                 margin={margin}
+                gross={priceMode === 'gross'}
                 layoutShowsDescription={layoutShowsDescription}
                 onPatch={(p) => patchItem(item, p)}
                 onMove={
@@ -669,9 +697,11 @@ function ItemsSection({
         </table>
       </div>
       <p className="px-4 py-3 text-[11px] text-slate-500">
-        Koszt zakupu i cena sugerowana są widoczne tylko tutaj — klient widzi wyłącznie cenę netto w ofercie. Sugerowana =
-        koszt zakupu (towar z XL: średni koszt partii; karta: cena zakupu w zł) plus domyślna marża Twojego konta. Wysłać
-        ofertę można dopiero, gdy każda pozycja ma cenę. Najwyżej {max} pozycji.
+        Koszt zakupu i cena sugerowana są widoczne tylko tutaj — klient widzi wyłącznie cenę w ofercie (netto albo
+        brutto — wybór „Ceny w mailu” w sekcji „Treść maila”). Sugerowana = koszt zakupu (towar z XL: średni koszt partii;
+        karta: cena zakupu w zł) plus domyślna marża Twojego konta. Koszt i stan są w jednostce towaru z XL (bez towaru —
+        za sztukę); gdy cena jest za inną jednostkę (np. karton), porównaj je sam. Wysłać ofertę można dopiero, gdy
+        każda pozycja ma cenę. Najwyżej {max} pozycji.
         {full && <b className="font-medium text-amber-800"> Oferta ma już najwięcej pozycji.</b>}
       </p>
       {pickerOpen && (
@@ -726,6 +756,7 @@ function ItemRow({
   item,
   readOnly,
   margin,
+  gross,
   layoutShowsDescription,
   onPatch,
   onMove,
@@ -738,6 +769,8 @@ function ItemRow({
   /** Cudza oferta — wartości jako tekst, bez pól, kolejności i usuwania. */
   readOnly: boolean
   margin: number | undefined
+  /** Ceny w mailu brutto — pod polem ceny netto cena brutto z serwera. */
+  gross: boolean
   layoutShowsDescription: boolean
   onPatch: (patch: OfferItemPatch) => Promise<Offer | null>
   onMove: (dir: -1 | 1) => void
@@ -748,6 +781,9 @@ function ItemRow({
 }) {
   const w = item.warnings
   const gone = item.erp_item_id == null && item.product_id == null && item.card == null
+  // koszt i cena sugerowana są w jednostce towaru XL (bez towaru — za sztukę); przy cenie za inną jednostkę
+  // nie porównujemy ich z ceną (serwer nie daje wtedy below_cost) i nie proponujemy „wstaw sugerowaną”
+  const costUnit = item.unit?.trim() || 'szt'
   return (
     <tr className="border-b align-top">
       <td className="min-w-[20rem] p-2">
@@ -782,13 +818,20 @@ function ItemRow({
             </div>
             <ItemTextLine
               label="Uwaga w mailu"
-              hint="krótka linia pod nazwą, np. rozmiary albo termin dostawy"
+              hint="krótka linia pod nazwą, np. termin dostawy"
               value={item.note}
               fallback={null}
               emptyText="brak"
               ariaName={item.name}
               readOnly={readOnly}
               onCommit={(next) => onPatch({ note: next })}
+            />
+            <ItemSizesField
+              value={item.sizes}
+              choices={item.size_choices}
+              ariaName={item.name}
+              readOnly={readOnly}
+              onCommit={(next) => onPatch({ sizes: next })}
             />
             <ItemTextLine
               label="Opis w mailu"
@@ -828,26 +871,45 @@ function ItemRow({
       </td>
       <td className="whitespace-nowrap p-2 text-right tabular-nums text-slate-700">
         {item.unit_cost != null ? formatPln(item.unit_cost) : <span className="text-slate-400">—</span>}
+        {item.unit_mismatch && item.unit_cost != null && (
+          <div className="mt-0.5 text-[10px] text-slate-500">koszt za {costUnit}</div>
+        )}
       </td>
       <td className="whitespace-nowrap p-2 text-right">
         {readOnly ? (
           <span className="font-medium tabular-nums text-slate-800">
-            {item.price_net != null ? formatPln(item.price_net) : <span className="text-red-700">brak ceny</span>}
+            {item.price_net != null ? (
+              <>
+                {formatPln(item.price_net)}
+                <span className="font-normal text-slate-500"> / {item.price_unit_label}</span>
+              </>
+            ) : (
+              <span className="text-red-700">brak ceny</span>
+            )}
           </span>
         ) : (
-          <MoneyInput
-            value={item.price_net}
-            label={`Cena netto w ofercie: ${item.name}`}
-            onCommit={(v) => onPatch({ price_net: v }).then(Boolean)}
-            onInvalid={() => onInvalid('Cena netto: wpisz kwotę, np. 89,00.')}
-          />
+          <span className="inline-flex flex-wrap items-center justify-end gap-1">
+            <MoneyInput
+              value={item.price_net}
+              label={`Cena netto w ofercie: ${item.name}`}
+              onCommit={(v) => onPatch({ price_net: v }).then(Boolean)}
+              onInvalid={() => onInvalid('Cena netto: wpisz kwotę, np. 89,00.')}
+            />
+            <PriceUnitSelect item={item} onPatch={onPatch} />
+          </span>
+        )}
+        {gross && item.price_gross != null && (
+          <div className="mt-0.5 text-[11px] tabular-nums text-slate-700">
+            brutto: {formatPln(item.price_gross)} / {item.price_unit_label}
+          </div>
         )}
         {item.suggested_price != null ? (
           <div className="mt-0.5 text-[10px] text-slate-500">
             sugerowana {formatPln(item.suggested_price)}
+            {item.unit_mismatch ? ` za ${costUnit}` : ''}
             {/* marża z konta oglądającego — przy cudzej ofercie mogłaby być inna niż autora */}
             {!readOnly && margin != null ? ` (koszt + ${margin.toLocaleString('pl-PL')}%)` : ''}
-            {!readOnly && item.price_net !== item.suggested_price && (
+            {!readOnly && !item.unit_mismatch && item.price_net !== item.suggested_price && (
               <button
                 type="button"
                 className="ml-1 text-blue-600 hover:underline"
@@ -901,6 +963,227 @@ function ItemRow({
         </>
       )}
     </tr>
+  )
+}
+
+/** Zapisy jednostek z XL, które znaczą to samo co wybór (jak normalizacja unit_mismatch na serwerze). */
+const UNIT_SAME_AS: Record<OfferPriceUnit, string[]> = {
+  szt: ['szt', 'szt.'],
+  para: ['par', 'para', 'pary'],
+  opak: ['op', 'op.', 'opak', 'opak.', 'opakowanie'],
+  karton: ['kart', 'kart.', 'karton'],
+}
+
+/**
+ * „za:” przy cenie — jednostka ceny w mailu. Pierwsza opcja (null) = jednostka towaru XL, a bez towaru „szt”; dalej
+ * szt, para, opak., karton bez tej, która znaczy to samo co pierwsza opcja. Zapis od razu.
+ */
+function PriceUnitSelect({ item, onPatch }: { item: OfferItem; onPatch: (patch: OfferItemPatch) => Promise<Offer | null> }) {
+  const [draft, setDraft] = useState<OfferPriceUnit | '' | null>(null)
+  const baseLabel = item.unit?.trim() || 'szt'
+  const base = baseLabel.toLowerCase()
+  const choices = OFFER_PRICE_UNITS.filter((u) => u === item.price_unit || !UNIT_SAME_AS[u].includes(base))
+
+  async function change(next: OfferPriceUnit | '') {
+    setDraft(next)
+    await onPatch({ price_unit: next === '' ? null : next })
+    setDraft((d) => (d === next ? null : d))
+  }
+
+  return (
+    <label className="inline-flex items-center gap-1 text-slate-500">
+      za:
+      <select
+        className={INPUT}
+        aria-label={`Jednostka ceny: ${item.name}`}
+        title="Za jaką jednostkę jest cena — w mailu po „/” przy cenie"
+        value={draft ?? item.price_unit ?? ''}
+        onChange={(e) => void change(e.target.value as OfferPriceUnit | '')}
+      >
+        <option value="">{baseLabel}</option>
+        {choices.map((u) => (
+          <option key={u} value={u}>
+            {OFFER_PRICE_UNIT_LABEL[u]}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+const SIZES_MAX = 200
+
+/** Rozmiary wpisane w pole (oddzielone przecinkiem) — do zaznaczenia kafelków już dodanych. */
+function sizeTokens(text: string): string[] {
+  return text
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s !== '')
+}
+
+/**
+ * Rozmiary w mailu („Rozmiary: S, XXXL”), np. przy wyprzedaży tylko części rozmiarów. „+ Rozmiary” otwiera pole
+ * (jedna linia, najwyżej 200 znaków; zapis po wyjściu z pola albo Enter, Escape cofa) z kafelkami rozmiarów karty.
+ * Przy wpisanych rozmiarach mail nie pokazuje stanu magazynu — stan z XL dotyczy całego towaru, nie tych rozmiarów.
+ */
+function ItemSizesField({
+  value,
+  choices,
+  ariaName,
+  readOnly,
+  onCommit,
+}: {
+  value: string | null
+  /** Rozmiary karty pozycji; [] = karta bez listy rozmiarów. */
+  choices: string[]
+  ariaName: string
+  readOnly: boolean
+  onCommit: (next: string | null) => Promise<Offer | null>
+}) {
+  const [draft, setDraft] = useState(value ?? '')
+  const [open, setOpen] = useState(false)
+  const [lastValue, setLastValue] = useState(value)
+  // Escape: blur() woła onBlur od razu, a jego domknięcie ma jeszcze wpisany szkic — flaga każe tylko cofnąć
+  const cancelRef = useRef(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  if (value !== lastValue && !open) {
+    setLastValue(value)
+    setDraft(value ?? '')
+  }
+
+  if (value === null && readOnly) return null
+
+  function commit() {
+    if (!open) return
+    setOpen(false)
+    if (cancelRef.current) {
+      cancelRef.current = false
+      setDraft(value ?? '')
+      return
+    }
+    const trimmed = draft.trim()
+    const next = trimmed === '' ? null : trimmed
+    setDraft(next ?? '')
+    if (next === value) return
+    void onCommit(next).then((o) => {
+      if (o === null) setDraft(value ?? '')
+    })
+  }
+
+  function addSize(size: string) {
+    if (sizeTokens(draft).includes(size.trim().toLowerCase())) return
+    const base = draft.trim().replace(/,\s*$/, '')
+    const next = base === '' ? size : `${base}, ${size}`
+    if (next.length <= SIZES_MAX) setDraft(next)
+    inputRef.current?.focus()
+  }
+
+  if (!open) {
+    return (
+      <div className="mt-1.5 flex max-w-[34rem] flex-wrap items-baseline gap-x-1.5 gap-y-1 text-[11px] text-slate-600">
+        {value === null ? (
+          <button
+            type="button"
+            className={BTN_SM}
+            onClick={() => {
+              setDraft('')
+              setOpen(true)
+            }}
+          >
+            + Rozmiary
+          </button>
+        ) : (
+          <>
+            <span className="font-medium text-slate-700">Rozmiary w mailu:</span>
+            <span className="text-slate-700">{value}</span>
+            {!readOnly && (
+              <>
+                <button
+                  type="button"
+                  className="text-blue-600 hover:underline"
+                  onClick={() => {
+                    setDraft(value)
+                    setOpen(true)
+                  }}
+                >
+                  zmień
+                </button>
+                <button type="button" className="text-red-700 hover:underline" onClick={() => void onCommit(null)}>
+                  usuń rozmiary
+                </button>
+              </>
+            )}
+            <span className="basis-full text-slate-400">stan magazynu przy tej pozycji nie jest pokazany w mailu</span>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  const picked = sizeTokens(draft)
+  return (
+    <div
+      className="mt-1.5 max-w-[34rem] text-[11px]"
+      // wyjście z pola na kafelek nie zapisuje — zapis dopiero po wyjściu poza pole i kafelki
+      onBlur={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+        commit()
+      }}
+    >
+      <span className="font-medium text-slate-700">Rozmiary w mailu:</span>
+      <input
+        ref={inputRef}
+        type="text"
+        className={`${INPUT} mt-1 block w-full`}
+        maxLength={SIZES_MAX}
+        autoFocus
+        value={draft}
+        placeholder="np. S, XXXL"
+        aria-label={`Rozmiary w mailu: ${ariaName}`}
+        onChange={(e) => setDraft(e.target.value.replace(/[\r\n]+/g, ' '))}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            e.currentTarget.blur()
+          }
+          if (e.key === 'Escape') {
+            cancelRef.current = true
+            e.currentTarget.blur()
+          }
+        }}
+      />
+      {choices.length > 0 ? (
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <span className="text-slate-500">Rozmiary karty:</span>
+          {choices.map((size) => {
+            const on = picked.includes(size.trim().toLowerCase())
+            return (
+              <button
+                key={size}
+                type="button"
+                className={`rounded border px-2 py-0.5 text-[11px] ${
+                  on ? 'border-blue-400 bg-blue-50 text-blue-900' : 'border-slate-300 bg-white hover:bg-slate-50'
+                }`}
+                title={on ? 'Już w polu' : 'Dopisz do pola'}
+                // mousedown bez zabrania fokusu polu — kliknięcie kafelka nie zapisuje szkicu
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => addSize(size)}
+              >
+                {size}
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="mt-1 text-slate-500">Karta nie ma listy rozmiarów — wpisz je ręcznie, oddzielając przecinkiem.</p>
+      )}
+      <p className="mt-1 text-slate-500">
+        W mailu: „Rozmiary: {draft.trim() || '…'}” — stan magazynu przy tej pozycji nie będzie pokazany.
+      </p>
+      <p className="text-slate-400">
+        {draft.length}/{SIZES_MAX} · zapis po wyjściu z pola albo Enter · Escape cofa · puste pole = bez rozmiarów
+      </p>
+    </div>
   )
 }
 
@@ -1424,18 +1707,28 @@ function ContentSection({
   content,
   inspection,
   readOnly,
+  priceMode,
+  vatPercent,
+  onPriceMode,
   onEdit,
   onBlur,
 }: {
   content: Content
-  /** Oferta przeglądu: bez wyboru układu produktów i bez dopisku o cenach netto. */
+  /** Oferta przeglądu: bez wyboru układu produktów i bez wyboru cen netto / brutto (nie ma cen). */
   inspection: boolean
   /** Cudza oferta — pola wyłączone (fieldset disabled), więc autozapis nie ma czego zapisać. */
   readOnly: boolean
+  priceMode: OfferPriceMode
+  vatPercent: number
+  /** Zapis od razu (jak forma oferty). */
+  onPriceMode: (mode: OfferPriceMode) => void
   onEdit: (patch: Partial<Content>, immediate?: boolean) => void
   onBlur: () => void
 }) {
   const field = `${INPUT} mt-1 block w-full text-sm disabled:bg-slate-50 disabled:text-slate-800`
+  const vat = vatPercent.toLocaleString('pl-PL')
+  const validText = content.valid_until ? `Oferta ważna do ${fmtDate(content.valid_until)}` : ''
+  const priceModeLabel: Record<OfferPriceMode, string> = { net: 'netto', gross: `brutto (z VAT ${vat}%)` }
   return (
     <fieldset disabled={readOnly} className="m-0 min-w-0 space-y-3 rounded-xl border-0 bg-white p-4 text-xs shadow-sm">
       <h2 className="app-card-title text-sm font-semibold text-slate-900">Treść maila</h2>
@@ -1492,6 +1785,27 @@ function ContentSection({
             <span className="mt-0.5 block font-normal text-slate-500">{CAMPAIGN_LAYOUT_HINT[content.layout]}</span>
           </label>
         )}
+        {!inspection && (
+          <label className="block font-medium text-slate-700">
+            Ceny w mailu
+            <select
+              className={field}
+              value={priceMode}
+              onChange={(e) => onPriceMode(e.target.value as OfferPriceMode)}
+            >
+              {OFFER_PRICE_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {priceModeLabel[m]}
+                </option>
+              ))}
+            </select>
+            <span className="mt-0.5 block font-normal text-slate-500">
+              {priceMode === 'gross'
+                ? `W tabeli wpisujesz cenę netto — klient zobaczy cenę brutto = netto + ${vat}% VAT.`
+                : 'Klient zobaczy przy każdej cenie „netto”.'}
+            </span>
+          </label>
+        )}
         <label className="block font-medium text-slate-700">
           Oferta ważna do
           <input
@@ -1505,7 +1819,11 @@ function ContentSection({
               ? content.valid_until
                 ? `Oferta ważna do ${fmtDate(content.valid_until)}.`
                 : 'Puste = oferta bez daty ważności.'
-              : `W mailu: „Ceny netto.${content.valid_until ? ` Oferta ważna do ${fmtDate(content.valid_until)}` : ''}”`}
+              : priceMode === 'gross'
+                ? `W mailu: „Ceny brutto (z VAT ${vat}%).${validText ? ` ${validText}` : ''}”`
+                : validText
+                  ? `W mailu: „${validText}”`
+                  : 'Puste = oferta bez daty ważności.'}
           </span>
           {content.valid_until !== '' && content.valid_until < localToday() && (
             <span className="mt-0.5 block font-normal text-red-700">
@@ -1557,8 +1875,8 @@ function PreviewSection({
       {missingPrices}
       <p className="mb-2 text-slate-500">
         {readOnly
-          ? 'Podgląd jest bez podpisu — przy wysyłce pod treścią dojdzie podpis autora oferty.'
-          : 'Podgląd jest bez podpisu — tak trafi do Thunderbirda, który doda Twój podpis. Przy wysyłce z aplikacji pod treścią dojdzie podpis z Moje konto → Moja poczta.'}
+          ? 'Podgląd jest bez podpisu — przy wysyłce pod treścią dojdzie stopka albo podpis autora oferty.'
+          : 'Podgląd jest bez podpisu — tak trafi do Thunderbirda, który doda Twój podpis. Przy wysyłce z aplikacji pod treścią dojdzie stopka z Moje konto → Stopka maila (albo podpis z Moja poczta, gdy stopki nie ma).'}
       </p>
       {preview && !readOnly && (
         <div className="mb-2 space-y-1.5">
@@ -1650,7 +1968,8 @@ function MissingPrices({
                   {item.code && <span className="ml-1.5 font-mono text-[11px] text-slate-500">{item.code}</span>}
                 </span>
                 <span className="inline-flex items-center gap-2">
-                  {item.suggested_price != null && (
+                  {/* przy cenie za inną jednostkę niż XL sugerowana (za jednostkę XL) byłaby złą ceną */}
+                  {item.suggested_price != null && !item.unit_mismatch && (
                     <button
                       type="button"
                       className="text-[11px] text-blue-600 hover:underline"

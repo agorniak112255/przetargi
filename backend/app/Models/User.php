@@ -44,6 +44,8 @@ class User extends Authenticatable
         'remember_token',
         // skrót tajnego klucza adresu kalendarza (ICS) — nigdy w odpowiedzi API
         'calendar_token_hash',
+        // stopka maila (dane kontaktowe pracownika) — tylko przez GET /me/mail-footer
+        'mail_footer',
     ];
 
     protected function casts(): array
@@ -61,6 +63,8 @@ class User extends Authenticatable
             'erp_employee_gid' => 'integer',
             'calendar_created_at' => 'datetime',
             'calendar_used_at' => 'datetime',
+            // stopka maila: {name, position, mobile, phone, email}; null = zwykły podpis (App\Services\Campaigns\MailFooter)
+            'mail_footer' => 'array',
         ];
     }
 

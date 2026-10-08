@@ -93,10 +93,12 @@
           </tr>
 @break
 @case('products')
-          {{-- ważność cen zawsze nad pozycjami --}}
+          {{-- ważność cen zawsze nad pozycjami (oferta netto bez daty ważności: pusta — bez wiersza) --}}
+@if ($validUntil !== '')
           <tr>
             <td style="padding:12px 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:{{ $muted }};">{{ $validUntil }}</td>
           </tr>
+@endif
           {{-- pozycje --}}
           <tr>
             <td style="padding:8px 24px 16px;">
@@ -105,7 +107,7 @@
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid {{ $line }};border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;">
                 <tr>
                   <td style="padding:8px 10px;background:#f6f8f9;font-size:11px;font-weight:700;color:{{ $muted }};">Produkt</td>
-                  <td align="right" style="padding:8px 10px;background:#f6f8f9;font-size:11px;font-weight:700;color:{{ $muted }};white-space:nowrap;">Cena netto</td>
+                  <td align="right" style="padding:8px 10px;background:#f6f8f9;font-size:11px;font-weight:700;color:{{ $muted }};white-space:nowrap;">Cena {{ $priceLabel ?? 'netto' }}</td>
                   <td align="right" style="padding:8px 10px;background:#f6f8f9;font-size:11px;font-weight:700;color:{{ $muted }};white-space:nowrap;">Na stanie</td>
                   <td style="padding:8px 10px;background:#f6f8f9;"></td>
                 </tr>
@@ -119,6 +121,9 @@
 @endif
 @if ($p['code'] !== '')
                     <div style="font-size:11px;color:{{ $muted }};">Kod {{ $p['code'] }}</div>
+@endif
+@if (($p['sizes'] ?? null) !== null)
+                    <div style="font-size:11px;color:{{ $muted }};">Rozmiary: {{ $p['sizes'] }}</div>
 @endif
 @if ($p['note'] !== null)
                     <div style="font-size:12px;color:{{ $text }};">{{ $p['note'] }}</div>
@@ -179,11 +184,14 @@
 @break
 @endswitch
 @endforeach
-          {{-- podpis nadawcy (oferta kopiowana do Thunderbirda: bez podpisu — doda go program pocztowy) --}}
+          {{-- podpis nadawcy (oferta kopiowana do Thunderbirda: bez podpisu — doda go program pocztowy); zapisana stopka
+               maila („Moje konto → Stopka maila”) zastępuje zwykły podpis --}}
 @if ($withSignature)
           <tr>
             <td style="padding:6px 24px 18px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:{{ $text }};">
-@if ($signature !== null)
+@if (($mailFooter ?? null) !== null)
+@include('emails.mail-footer')
+@elseif ($signature !== null)
               {!! nl2br(e($signature), false) !!}
 @else
               <b>{{ $fromName }}</b>

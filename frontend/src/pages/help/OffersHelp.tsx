@@ -34,6 +34,8 @@ function ItemRow({
   cost,
   suggested,
   price,
+  unit,
+  sizes,
   warn,
   mark,
 }: {
@@ -43,6 +45,10 @@ function ItemRow({
   cost: string
   suggested: string
   price: string
+  /** Jednostka ceny w polu „za:”. */
+  unit: string
+  /** Rozmiary w mailu przy pozycji (opcjonalne). */
+  sizes?: string
   warn?: ReactNode
   mark?: boolean
 }) {
@@ -61,11 +67,21 @@ function ItemRow({
         <span className="font-medium">{name}</span>
         <span className="block font-mono text-[10px] text-slate-500">{code}</span>
         {warn && <span className="mt-0.5 block">{warn}</span>}
+        {sizes ? (
+          <span className="mt-0.5 block text-[10px] text-slate-600">
+            <b className="font-medium">Rozmiary w mailu:</b> {sizes}
+          </span>
+        ) : (
+          <span className="mt-0.5 inline-block rounded border border-slate-300 px-1.5 text-[10px]">+ Rozmiary</span>
+        )}
       </td>
       <td className="p-2 text-right tabular-nums">{stock}</td>
       <td className="p-2 text-right tabular-nums">{cost}</td>
-      <td className="p-2 text-right">
+      <td className="whitespace-nowrap p-2 text-right">
         {mark ? <Mark>{priceBox}</Mark> : priceBox}
+        <span className="ml-1 text-slate-500">
+          za: <span className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-slate-800">{unit} ▾</span>
+        </span>
         <span className="mt-0.5 block text-[10px] text-slate-500">
           {suggested ? `sugerowana ${suggested} (koszt + 18%)` : 'brak kosztu — bez ceny sugerowanej'}
         </span>
@@ -172,8 +188,8 @@ export function OffersHelp() {
         },
         {
           action: 'Ceny w ofercie',
-          does: 'Przy każdej pozycji widzisz stan magazynu, koszt zakupu (średni koszt partii towaru z ERP XL, a dla karty bez towaru w XL — cenę zakupu karty) i cenę sugerowaną = koszt zakupu + Twoja domyślna marża z Moje konto → Oferty → „Domyślna marża”. Cena sugerowana wpisuje się sama jako „Cena netto w ofercie” przy dodaniu pozycji — możesz ją zmienić, a „wstaw sugerowaną” przywraca ją jednym kliknięciem. Gdy kosztu brak, pole jest puste i trzeba wpisać cenę ręcznie: bez ceny przy każdej pozycji oferty nie da się wysłać. Cena niższa od kosztu zakupu dostaje ostrzeżenie, ale nie blokuje wysyłki. Kolejne produkty dodasz też przyciskiem „+ Dodaj produkt” w samej ofercie: otwiera duże okno z wyszukiwarką (każde słowo zawęża listę), podglądem karty ze zdjęciem i opisem — wybierz kartę i „Dodaj … do oferty”; okno zostaje otwarte, więc dodasz kilka produktów pod rząd (wymaga uprawnienia „Produkty — podgląd”); kolejność pozycji w mailu zmieniasz strzałkami w górę i w dół.',
-          click: 'Kliknij w pole „Cena netto w ofercie” i wpisz kwotę. Pozycje bez ceny mają też pole kwoty nad podglądem maila — tam uzupełnisz brakującą cenę bez przewijania do tabeli. Nowy produkt: „+ Dodaj produkt” nad tabelą — wpisz nazwę lub kod, kliknij kartę i „Dodaj … do oferty”.',
+          does: 'Przy każdej pozycji widzisz stan magazynu, koszt zakupu (średni koszt partii towaru z ERP XL, a dla karty bez towaru w XL — cenę zakupu karty) i cenę sugerowaną = koszt zakupu + Twoja domyślna marża z Moje konto → Oferty → „Domyślna marża”. Cena sugerowana wpisuje się sama jako „Cena netto w ofercie” przy dodaniu pozycji — możesz ją zmienić, a „wstaw sugerowaną” przywraca ją jednym kliknięciem. Gdy kosztu brak, pole jest puste i trzeba wpisać cenę ręcznie: bez ceny przy każdej pozycji oferty nie da się wysłać. Cena niższa od kosztu zakupu dostaje ostrzeżenie, ale nie blokuje wysyłki. Obok ceny w polu „za:” wybierasz, za jaką jednostkę jest cena: pierwsza opcja to jednostka towaru z ERP XL (np. par), a bez niej „szt”; dalej szt, para, opak. i karton. W mailu przy cenie pojawi się na przykład „netto / para”. Stan magazynu w mailu zostaje w jednostce z ERP XL. Koszt zakupu jest zawsze za jednostkę z ERP XL (bez towaru w XL — za sztukę), więc przy cenie za inną jednostkę (np. karton) program nie porównuje ceny z kosztem i nie proponuje „wstaw sugerowanej” — porównaj je sam. „+ Rozmiary” pod nazwą pozycji (opcjonalne, np. wyprzedaż tylko S i XXXL) dopisuje w mailu linię „Rozmiary: S, XXXL”; kafelki z rozmiarami karty dopisują rozmiar do pola. Przy wpisanych rozmiarach mail nie pokazuje stanu magazynu tej pozycji, bo stan z ERP XL dotyczy całego towaru, a nie wybranych rozmiarów. Kolejne produkty dodasz też przyciskiem „+ Dodaj produkt” w samej ofercie: otwiera duże okno z wyszukiwarką (każde słowo zawęża listę), podglądem karty ze zdjęciem i opisem — wybierz kartę i „Dodaj … do oferty”; okno zostaje otwarte, więc dodasz kilka produktów pod rząd (wymaga uprawnienia „Produkty — podgląd”); kolejność pozycji w mailu zmieniasz strzałkami w górę i w dół.',
+          click: 'Kliknij w pole „Cena netto w ofercie” i wpisz kwotę; obok w „za:” wybierz jednostkę (np. para). Rozmiary: „+ Rozmiary” pod nazwą pozycji. Pozycje bez ceny mają też pole kwoty nad podglądem maila — tam uzupełnisz brakującą cenę bez przewijania do tabeli. Nowy produkt: „+ Dodaj produkt” nad tabelą — wpisz nazwę lub kod, kliknij kartę i „Dodaj … do oferty”.',
           tone: 'amber',
           screen: (
             <AppFrame nav="Oferty">
@@ -201,6 +217,8 @@ export function OffersHelp() {
                       cost="112,40 zł"
                       suggested="132,63 zł"
                       price="129,00"
+                      unit="par"
+                      sizes="42, 43, 44"
                       mark
                     />
                     <ItemRow
@@ -210,6 +228,7 @@ export function OffersHelp() {
                       cost="—"
                       suggested=""
                       price=""
+                      unit="szt"
                       warn={<Chip tone="red">Brak kosztu zakupu — wpisz cenę</Chip>}
                     />
                     <ItemRow
@@ -219,6 +238,7 @@ export function OffersHelp() {
                       cost="64,80 zł"
                       suggested="76,46 zł"
                       price="59,00"
+                      unit="par"
                       warn={<Chip tone="amber">Cena niższa od kosztu zakupu</Chip>}
                     />
                   </tbody>
@@ -229,8 +249,8 @@ export function OffersHelp() {
         },
         {
           action: 'Treść maila i podgląd',
-          does: 'W sekcji „Treść maila” wpisujesz „Temat wiadomości” (bez niego oferty nie wyślesz) i krótki „Wstęp” (na przykład „Dzień dobry, zgodnie z rozmową przesyłam…”), wybierasz „Układ produktów” i opcjonalnie datę „Oferta ważna do” — gdy ta data minie, oferty nie da się wysłać, dopóki jej nie zmienisz albo nie wyczyścisz. „Podgląd maila” pokazuje mail dokładnie tak, jak go zobaczy klient: baner, wstęp i kafelki produktów z ceną netto. Przycisku „Zapytaj o ofertę” w ofercie nie ma — klient dostaje cenę; zamiast niego przy pozycji możesz dodać własny przycisk z linkiem, np. „Zobacz w sklepie” („+ Dodaj link” pod opisem pozycji: link https://, nazwa przycisku i kolor). W ofercie nie ma linku „Wypisz mnie” — to nie jest mailing. Wszystko zapisuje się samo.',
-          click: 'Sekcja „Treść maila”: pola „Temat wiadomości”, „Wstęp”, „Układ produktów” i „Oferta ważna do”. Podgląd odświeża się po zmianie.',
+          does: 'W sekcji „Treść maila” wpisujesz „Temat wiadomości” (bez niego oferty nie wyślesz) i krótki „Wstęp” (na przykład „Dzień dobry, zgodnie z rozmową przesyłam…”), wybierasz „Układ produktów”, „Ceny w mailu” i opcjonalnie datę „Oferta ważna do” — gdy ta data minie, oferty nie da się wysłać, dopóki jej nie zmienisz albo nie wyczyścisz. „Ceny w mailu”: netto (przy każdej cenie „netto”) albo brutto z VAT 23% — w tabeli zawsze wpisujesz cenę netto, a pod polem ceny widać wtedy cenę brutto, którą zobaczy klient; nad produktami pojawi się „Ceny brutto (z VAT 23%).”. Oferta przeglądu nie ma cen, więc nie ma też tego wyboru. „Podgląd maila” pokazuje mail dokładnie tak, jak go zobaczy klient: baner, wstęp i kafelki produktów z ceną. Przycisku „Zapytaj o ofertę” w ofercie nie ma — klient dostaje cenę; zamiast niego przy pozycji możesz dodać własny przycisk z linkiem, np. „Zobacz w sklepie” („+ Dodaj link” pod opisem pozycji: link https://, nazwa przycisku i kolor). W ofercie nie ma linku „Wypisz mnie” — to nie jest mailing. Wszystko zapisuje się samo.',
+          click: 'Sekcja „Treść maila”: pola „Temat wiadomości”, „Wstęp”, „Układ produktów”, „Ceny w mailu” i „Oferta ważna do”. Podgląd odświeża się po zmianie.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Oferty">
@@ -241,6 +261,7 @@ export function OffersHelp() {
                     <Field label="Wstęp" value="Dzień dobry, zgodnie z rozmową przesyłam ofertę na obuwie…" />
                     <div className="grid grid-cols-2 gap-2">
                       <Field label="Układ produktów" value="Siatka po 3" />
+                      <Field label="Ceny w mailu" value="netto" />
                       <Field label="Oferta ważna do" value="31.10.2026" />
                     </div>
                   </div>
@@ -253,7 +274,7 @@ export function OffersHelp() {
                           <div key={n} className="rounded border border-slate-200 p-1">
                             <div className="mb-1 h-8 rounded bg-slate-100" />
                             <p className="truncate font-medium text-slate-800">{n}</p>
-                            <p className="tabular-nums text-slate-700">{['129,00', '189,00', '59,00'][i]} zł netto</p>
+                            <p className="tabular-nums text-slate-700">{['129,00', '189,00', '59,00'][i]} zł netto / para</p>
                             {i === 0 && (
                               <span className="mt-0.5 inline-block rounded bg-emerald-700 px-1 text-[9px] text-white">
                                 Zobacz w sklepie
@@ -262,7 +283,7 @@ export function OffersHelp() {
                           </div>
                         ))}
                       </div>
-                      <p className="text-slate-500">Ceny netto. Oferta ważna do 31.10.2026</p>
+                      <p className="text-slate-500">Oferta ważna do 31.10.2026</p>
                     </div>
                   </div>
                 </div>
@@ -272,7 +293,7 @@ export function OffersHelp() {
         },
         {
           action: 'Wysyłka z Twojej skrzynki',
-          does: 'Wpisujesz jeden albo kilka adresów (oddzielone przecinkiem, średnikiem albo nową linią). Każdy adres dostaje osobny mail — klienci nie widzą siebie nawzajem. Mail wychodzi z Twojej skrzynki ustawionej w Moje konto → „Moja poczta”; bez niej wysyłka nie ruszy. Na Twoją skrzynkę przychodzi kopia z dopiskiem „[Kopia]” i listą adresów. Adresy z listy „Wypisani” w Kampaniach (wypisani z mailingu, adresy, na które maile nie dochodzą, i dopisani ręcznie) blokują wysyłkę — komunikat pokaże, który adres i dlaczego; usuń go z pola. Wysłać można dopiero, gdy każda pozycja ma cenę.',
+          does: 'Wpisujesz jeden albo kilka adresów (oddzielone przecinkiem, średnikiem albo nową linią). Każdy adres dostaje osobny mail — klienci nie widzą siebie nawzajem. Mail wychodzi z Twojej skrzynki ustawionej w Moje konto → „Moja poczta”; bez niej wysyłka nie ruszy. Pod ofertą (w mailu i w PDF) idzie Twoja stopka z Moje konto → „Stopka maila”: logo, imię i nazwisko, stanowisko, telefony, e-mail i dane firmy — wpisz ją raz; gdy stopki nie ma, idzie zwykły podpis z „Moja poczta”. Podgląd i „Otwórz w Thunderbirdzie” są bez stopki — Thunderbird dodaje własny podpis. Na Twoją skrzynkę przychodzi kopia z dopiskiem „[Kopia]” i listą adresów. Adresy z listy „Wypisani” w Kampaniach (wypisani z mailingu, adresy, na które maile nie dochodzą, i dopisani ręcznie) blokują wysyłkę — komunikat pokaże, który adres i dlaczego; usuń go z pola. Wysłać można dopiero, gdy każda pozycja ma cenę.',
           click: 'Sekcja „Wysyłka”: wpisz adresy w polu „Adresy e-mail klientów”, kliknij „Wyślij do 2 adresów” i potwierdź w oknie.',
           tone: 'green',
           screen: (
