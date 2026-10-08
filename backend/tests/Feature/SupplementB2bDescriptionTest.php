@@ -339,6 +339,105 @@ final class SupplementB2bDescriptionTest extends TestCase
         $this->assertSame('EN 388:2016 4131X', $result['norms']);
     }
 
+    public function test_bolle_page_of_another_card_of_the_brand_is_skipped_and_own_pages_stay(): void
+    {
+        // Audyt Bolle 08.10.2026, prawdziwe kody katalogu (cennik #21): filtr B9V opisany ze strony przyłbicy FLASHV,
+        // TRYON RX ze strony TRYONN20E, IRIDPSI2 ze strony IRIDPSI2.5. Strony własne zostają — także gdy wymieniają
+        // krótszy kod innej karty (IRIDPSI2.5 obok IRIDPSI2) albo katalog ma dłuższe kody (ELATPR obok ELATPR2/ELATPRS).
+        foreach (['B9V', 'FLASHV', 'TRYON', 'TRYONN20E', 'TRYONN10E', 'IRIDPSI2', 'IRIDPSI2.5', 'ELATPR', 'ELATPR2', 'ELATPRS', 'COBPSI', 'COBPSF'] as $sku) {
+            $this->bolleCard($sku);
+        }
+        $cases = [
+            'B9V' => [
+                'own' => ['https://www.konto-sklep.example/bolle-safety-filtr-samosciemniajacy-flash-b9v.html', 'Bolle Safety filtr samościemniający FLASH B9V'],
+                'foreign' => ['https://www.konto-sklep.example/bolle-safety-helm-spawalniczy-flash-flashv.html', 'Bolle Safety hełm spawalniczy FLASH FLASHV'],
+            ],
+            'TRYON' => [
+                'own' => ['https://www.konto-sklep.example/bolle-safety-okulary-korekcyjne-tryon-rx-tryon.html', 'Bolle Safety okulary korekcyjne TRYON RX TRYON'],
+                'foreign' => ['https://www.konto-sklep.example/Bolle-Safety-Okulary-ochronne-Eco-Tryon-EN-166-FT-KN-Platinum-Smoke-TRYONN20E.html', 'Bolle Safety okulary ochronne Eco Tryon TRYONN20E'],
+            ],
+            'IRIDPSI2' => [
+                'own' => ['https://www.konto-sklep.example/bolle-safety-iri-s-iridpsi2.html', 'Bolle Safety IRI-s +2,0 IRIDPSI2'],
+                'foreign' => ['https://www.konto-sklep.example/bolle-safety-iri-s-iridpsi2.5.html', 'Bolle Safety IRI-s +2,5 IRIDPSI2.5'],
+            ],
+        ];
+        foreach ($cases as $sku => $pages) {
+            $this->prompts = [];
+            $card = Product::query()->where('sku', $sku)->sole();
+            foreach ($pages as [$url, $title]) {
+                $this->pagesHtml[$url] = $this->bolleHtml($title, 'Okulary i osłony '.$title.'. Soczewka z poliwęglanu, powłoka PLATINUM.');
+            }
+            $this->search(fn (MockInterface $search) => $search->shouldReceive('searchOnHosts')->once()->andReturn([
+                ['url' => $pages['foreign'][0], 'title' => $pages['foreign'][1], 'snippet' => ''],
+                ['url' => $pages['own'][0], 'title' => $pages['own'][1], 'snippet' => ''],
+            ]));
+            $this->answer = $this->answerWith(self::LONG_DESCRIPTION);
+
+            $result = $this->supplement($card);
+
+            $this->assertSame([$pages['own'][0]], $result['web_source_urls'], $sku);
+        }
+
+        // strony własne przy dłuższych i krótszych kodach innych kart marki zostają
+        $kept = [
+            'IRIDPSI2.5' => ['https://www.konto-sklep.example/bolle-safety-iri-s-iridpsi2.5-zamiast-iridpsi2.html', 'Bolle Safety IRI-s +2,5 IRIDPSI2.5 (wersja +2,0: IRIDPSI2)'],
+            'ELATPR' => ['https://www.konto-sklep.example/bolle-safety-gogle-elite-elatpr.html', 'Bolle Safety gogle ELITE ELATPR'],
+            'COBPSI' => ['https://www.konto-sklep.example/bolle-safety-okulary-cobra-cobpsi.html', 'Bolle Safety okulary COBRA COBPSI'],
+        ];
+        foreach ($kept as $sku => [$url, $title]) {
+            $this->pagesHtml[$url] = $this->bolleHtml($title, 'Okulary i gogle '.$title.'. Soczewka z poliwęglanu, powłoka PLATINUM.');
+            $this->search(fn (MockInterface $search) => $search->shouldReceive('searchOnHosts')->once()
+                ->andReturn([['url' => $url, 'title' => $title, 'snippet' => '']]));
+            $this->answer = $this->answerWith(self::LONG_DESCRIPTION);
+
+            $result = $this->supplement(Product::query()->where('sku', $sku)->sole());
+
+            $this->assertSame([$url], $result['web_source_urls'], $sku);
+        }
+    }
+
+    public function test_template_lens_marking_field_does_not_support_en_166_and_empty_attribute_name_is_no_norm(): void
+    {
+        // Audyt Bolle 08.10.2026: okulary ekranowe ProBlu — chipdip.ru ma pole szablonu „EN166 Lens Marking: PrB420”
+        // (bez symboli oznaczenia EN 166), z którego model brał EN 166; OSLO — nazwa pustego pola „ATEX HAZARDOUS AREA /
+        // ATMOSPHERE GROUP” w polu norm
+        $card = $this->bolleCard('PRBLOND200', 'LONDON – Unisex okulary z filtrem światła niebieskiego');
+        $url = 'https://www.konto-sklep.example/prblond200-london-blue-light-glasses-clear-pc-lens-bolle';
+        $this->pagesHtml[$url] = $this->bolleHtml(
+            'Bolle LONDON PRBLOND200 blue light glasses',
+            'Okulary LONDON PRBLOND200 Bolle z technologią ProBlu 420, oprawka z octanu celulozy, waga 25 g.</p>'
+                .'<table><tr><td>EN166 Lens Marking</td><td>PrB420</td></tr><tr><td>EN166 Frame Marking</td><td>Crown CE UKCA</td></tr>'
+                .'<tr><td>ATEX HAZARDOUS AREA / ATMOSPHERE GROUP</td><td></td></tr></table><p>',
+        );
+        $this->search(fn (MockInterface $search) => $search->shouldReceive('searchOnHosts')->andReturn([
+            ['url' => $url, 'title' => 'Bolle LONDON PRBLOND200 blue light glasses', 'snippet' => ''],
+        ]));
+
+        // opis z EN 166 — kod normy bez pokrycia w źródłach po wycięciu szablonu
+        $this->answer = $this->answerWith(self::LONG_DESCRIPTION.' Okulary spełniają normę EN 166.', norms: ['EN 166']);
+        try {
+            $this->supplement($card);
+            $this->fail('oczekiwano odrzucenia');
+        } catch (B2bSourcesDescriptionRejected $e) {
+            $this->assertNotInstanceOf(B2bSupplementNoPages::class, $e);
+            $this->assertStringContainsString('spoza źródeł w opisie: EN166', $e->getMessage());
+        }
+        // model nie widzi szablonu
+        $this->assertStringNotContainsString('PrB420', $this->prompts[0]);
+
+        // opis bez normy, a pole norm z dopiskami szablonu i nazwą pustego pola — nic z tego nie zostaje
+        $this->answer = $this->answerWith(self::LONG_DESCRIPTION, norms: [
+            'EN 166 (oznaczenie PrB420 na soczewkach)',
+            'ATEX HAZARDOUS AREA / ATMOSPHERE GROUP',
+        ]);
+        $result = $this->supplement($card);
+
+        $this->assertSame([], $result['payload']['norms']);
+        $this->assertNull($result['norms']);
+        $this->assertNotEmpty(array_filter($result['dropped'], static fn (string $d): bool => str_starts_with($d, 'pole norm: ')
+            && str_contains($d, 'ATEX')));
+    }
+
     public function test_unsupported_claim_is_dropped_from_description_and_lists(): void
     {
         $product = $this->product();
@@ -496,6 +595,28 @@ final class SupplementB2bDescriptionTest extends TestCase
         );
 
         return app(ProductEnrichmentService::class)->supplementB2bDescription($product, $context);
+    }
+
+    /** Karta konta Bolle (profil `bolle`: najdłuższy kod z katalogu marki decyduje). */
+    private function bolleCard(string $sku, ?string $name = null): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => $name ?? 'Okulary ochronne Bolle '.$sku,
+            'manufacturer' => 'Bolle',
+            'description' => self::B2B_TEXT,
+            'shop_source_url' => 'https://b2b.bolle-safety.com/'.$sku,
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'currency' => 'PLN',
+        ]);
+    }
+
+    private function bolleHtml(string $title, string $facts): string
+    {
+        return '<html><head><title>'.$title.'</title></head><body><h1>'.$title.'</h1>'
+            .'<div class="product-description"><p>'.$facts.'</p><p>'
+            .str_repeat('Okulary ochronne Bolle Safety z soczewką z poliwęglanu. ', 20).'</p></div></body></html>';
     }
 
     private function cardHtml(string $facts): string

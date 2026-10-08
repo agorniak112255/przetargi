@@ -9336,6 +9336,8 @@ SYS,
             return $this->supplementB2bDescriptionInner($product, $context);
         } finally {
             $this->supplementProgress = null;
+            // katalog kodów marki arbitra (bramka stron) — jak po enrichProduct, worker nie trzyma go między kartami
+            app(CardCodeArbiter::class)->forget();
         }
     }
 
@@ -9367,6 +9369,14 @@ SYS,
         if ($webPages === []) {
             throw new B2bSupplementNoPages('brak potwierdzonej strony wyrobu w internecie');
         }
+        // Szablonowe pole sklepu „EN166 Lens Marking PrB420” (chipdip.ru przy okularach ekranowych ProBlu, audyt Bolle
+        // 08.10.2026) wypada z tekstu stron, zanim zobaczy go filtr stron i model — filtr potrafi przepisać je prozą,
+        // a z tego samego tekstu biorą się potem normy z wyrażeń (enrichStructuredFieldsFromPages) i pokrycie kodów norm.
+        $webPages = array_map(static function (array $page): array {
+            $page['text'] = NormListSanity::withoutTemplateAttributeRows((string) ($page['text'] ?? ''));
+
+            return $page;
+        }, $webPages);
         $this->supplementStage('filtr treści stron ('.count($webPages).')');
         $webPages = $this->sanitizePagesWithLlm($product, $webPages);
         $webPages = $this->fitPagesToBudget($webPages, self::SUPPLEMENT_WEB_PAGES, 4000, 12000);
@@ -9453,6 +9463,15 @@ SYS,
         }
         $this->supplementStage('sprawdzanie norm i twierdzeń ze źródłami');
 
+        // Etap 3 (W7) jak w enrichProduct: zdania powtarzające polecenie i ze sprzecznym oznaczeniem normy wypadają —
+        // przed kontrolą długości, żeby opis po wycięciu nie był krótszy od tekstu z B2B.
+        try {
+            $textCheck = $this->withoutPromptEchoAndNormProblems($description);
+        } catch (RuntimeException $e) {
+            throw new B2bSourcesDescriptionRejected($e->getMessage(), 0, $e);
+        }
+        $description = $textCheck['description'];
+
         // kody norm i poziomów: w tekście, który model dostał — przy normach producenta tylko w źródłach dostawcy
         $webText = implode("\n", array_map(static fn (array $page): string => (string) ($page['text'] ?? ''), $webPages));
         $supplierKey = self::claimKey($supplierText);
@@ -9478,8 +9497,16 @@ SYS,
                 .($droppedClaims !== [] ? ' po usunięciu twierdzeń spoza źródeł: '.mb_substr(implode(' | ', $droppedClaims), 0, 400) : ''));
         }
 
+        // pola norm i listy (W7): „ATEX HAZARDOUS AREA / ATMOSPHERE GROUP” (nazwa pustego pola sklepu, Bolle 23053),
+        // „EN 166 (oznaczenie PrB420…)” — przed sprawdzeniem źródeł, żeby przeniesione do certyfikatów też przez nie przeszły
+        $listCheck = $this->withSaneNormLists($extracted);
+        $extracted = $listCheck['extracted'];
+        $droppedClaims = [
+            ...$droppedClaims,
+            ...array_map(static fn (string $s): string => self::PROMPT_ECHO_REASON.': '.$s, [...$textCheck['dropped_meta_sentences'], ...$listCheck['dropped_meta_sentences']]),
+        ];
         $fields = $this->payloadFromExtraction($product, $extracted, $description, $pages);
-        $dropped = [];
+        $dropped = [...$textCheck['dropped_norm_claims'], ...$listCheck['dropped_norm_claims']];
         $supported = static function (string $text) use ($claimKeys, $guard, &$dropped, &$droppedClaims): bool {
             foreach (self::sourceClaims($text) as $code) {
                 if (! str_contains($claimKeys, $code)) {
@@ -9639,7 +9666,9 @@ SYS,
         $this->attemptLog()->add('fetch', count($fetched['pages']).' stron HTML', urls: array_column($fetched['pages'], 'url'));
 
         $kept = [];
-        foreach ($this->keepConfirmedCardPages($product, $fetched['pages']) as $page) {
+        // Etap 3 (W1) jak w enrichProduct: strona innego wyrobu marki (najdłuższy kod — profile z longest_code_wins, np.
+        // Bolle: FLASHV przy filtrze B9V, TRYONN20E przy TRYON) albo ze sprzeczną cechą bezpieczeństwa odpada
+        foreach ($this->withoutForeignOrConflictingPages($product, $this->keepConfirmedCardPages($product, $fetched['pages'])) as $page) {
             $url = (string) ($page['url'] ?? '');
             if ($supplierUrl($url)) {
                 continue;
