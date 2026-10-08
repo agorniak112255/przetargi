@@ -1,7 +1,8 @@
 {{-- Stopka maila pracownika (Moje konto → Stopka maila; dane z App\Services\Campaigns\MailFooter::viewData): logo SUPON,
-     żółta pionowa kreska, imię i nazwisko, stanowisko, telefony, e-mail i strona; pod spodem firma z adresem i pasek
-     „Sprawdź: …”. Tylko tabele i style inline (klienci poczty nie czytają <style>), wszystkie treści escapowane. Bez
-     publicznego adresu aplikacji (obrazki by nie doszły): bez logo, zamiast ikon tekst „tel.”, „e-mail”, „www”.
+     żółta pionowa kreska, imię i nazwisko, stanowisko, telefony, e-mail i strona; pod spodem firma z adresem. Tylko
+     tabele i style inline (klienci poczty nie czytają <style>), wszystkie treści escapowane. Bez publicznego adresu
+     aplikacji (obrazki by nie doszły): bez logo, zamiast ikon tekst „tel.”, „e-mail”, „www”. Otoczka z
+     page-break-inside:avoid: w PDF oferty (dompdf) stopka nie rozcina się między stronami.
      $mailFooter = MailFooter::viewData. --}}
 @php
     $mf = $mailFooter;
@@ -21,6 +22,7 @@
         $mfRows[] = ['icon' => $mf['icon_web'], 'label' => 'www', 'items' => [['text' => $mf['website_text'], 'href' => $mf['website_url']]]];
     }
 @endphp
+<div style="page-break-inside:avoid;">
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;{{ $mfFont }}">
   <tr>
 @if ($mf['logo_url'] !== null)
@@ -62,23 +64,11 @@
     </td>
   </tr>
 </table>
-@if ($mf['company'] !== '' || $mf['address'] !== '' || $mf['links'] !== [])
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;margin-top:10px;{{ $mfFont }}">
 @if ($mf['company'] !== '' || $mf['address'] !== '')
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;margin-top:10px;{{ $mfFont }}">
   <tr>
-    <td style="padding:0 0 4px;font-size:11px;line-height:1.4;color:{{ $mfMuted }};{{ $mfFont }}">{{ implode(' · ', array_filter([$mf['company'], $mf['address']], static fn (string $part): bool => $part !== '')) }}</td>
+    <td style="padding:0;font-size:11px;line-height:1.4;color:{{ $mfMuted }};{{ $mfFont }}">{{ implode(' · ', array_filter([$mf['company'], $mf['address']], static fn (string $part): bool => $part !== '')) }}</td>
   </tr>
-@endif
-@if ($mf['links'] !== [])
-  <tr>
-    <td style="padding:4px 0 0;border-top:2px solid {{ $mfYellow }};font-size:12px;line-height:1.4;color:{{ $mfMuted }};{{ $mfFont }}">
-      Sprawdź:
-@foreach ($mf['links'] as $i => $link)
-@if ($i > 0) | @endif
-<a href="{{ $link['url'] }}" style="color:{{ $mfBlue }};font-weight:700;text-decoration:none;">{{ $link['label'] }}</a>
-@endforeach
-    </td>
-  </tr>
-@endif
 </table>
 @endif
+</div>

@@ -8,8 +8,8 @@ use App\Models\User;
 
 /**
  * Stopka maila pracownika („Moje konto → Stopka maila”, users.mail_footer): imię i nazwisko, stanowisko, telefony
- * komórkowy i stacjonarny, e-mail — plus stała część z config campaigns.mail_footer (firma, adres, strona www, pasek
- * „Sprawdź: …”). Zastępuje zwykły podpis pod ofertą i kampanią wysyłaną z aplikacji (CampaignRenderer::compose);
+ * komórkowy i stacjonarny, e-mail — plus stała część z config campaigns.mail_footer (firma, adres, strona www).
+ * Zastępuje zwykły podpis pod ofertą i kampanią wysyłaną z aplikacji (CampaignRenderer::compose);
  * czytana na bieżąco jak podpis. Szablony: emails/mail-footer (HTML) i emails/mail-footer-text.
  */
 final class MailFooter
@@ -78,12 +78,6 @@ final class MailFooter
         }
         $email = trim((string) ($footer['email'] ?? ''));
         $website = trim((string) ($config['website'] ?? ''));
-        $links = [];
-        foreach ((array) ($config['links'] ?? []) as $link) {
-            if (is_array($link) && is_string($link['label'] ?? null) && is_string($link['url'] ?? null) && $link['label'] !== '' && $link['url'] !== '') {
-                $links[] = ['label' => $link['label'], 'url' => $link['url']];
-            }
-        }
 
         return [
             'name' => trim((string) ($footer['name'] ?? '')),
@@ -95,7 +89,6 @@ final class MailFooter
             'website_text' => $website !== '' ? (string) preg_replace('#^https?://#i', '', rtrim($website, '/')) : null,
             'company' => trim((string) ($config['company'] ?? '')),
             'address' => trim((string) ($config['address'] ?? '')),
-            'links' => $links,
             'logo_url' => $image('logo'),
             'icon_phone' => $image('phone'),
             'icon_mail' => $image('mail'),

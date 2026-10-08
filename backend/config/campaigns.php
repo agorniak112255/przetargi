@@ -38,13 +38,12 @@ return [
 
     /**
      * Stała część stopki maila pracownika (emails/mail-footer, App\Services\Campaigns\MailFooter): firma i adres
-     * (supon.rzeszow.pl/kontakt, 08.10.2026) i strona www. Pasek „Sprawdź: Promocje | Outlet | Blog” usunięty na prośbę
-     * właściciela (08.10.2026) — pusta lista `links` = szablony stopki nie pokazują tej linii.
+     * (supon.rzeszow.pl/kontakt, 08.10.2026) i strona www. Bez paska „Sprawdź: Promocje | Outlet | Blog” — właściciel
+     * kazał go usunąć (08.10.2026).
      */
     'mail_footer' => [
         'company' => 'PHT SUPON Sp. z o.o.',
         'address' => 'ul. Miłocińska 17, 35-232 Rzeszów',
         'website' => 'https://www.supon.rzeszow.pl',
-        'links' => [],
     ],
 ];

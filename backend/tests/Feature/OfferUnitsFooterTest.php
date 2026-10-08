@@ -277,9 +277,9 @@ final class OfferUnitsFooterTest extends TestCase
         $this->assertStringContainsString('>www.supon.rzeszow.pl<', str_replace(["\n", ' '], '', $html));
         $this->assertStringContainsString('https://przetargi.example.pl/campaign/footer-logo.png', $html);
         $this->assertStringContainsString('PHT SUPON Sp. z o.o. · ul. Miłocińska 17, 35-232 Rzeszów', $html);
-        // pasek „Sprawdź: Promocje | Outlet | Blog” usunięty ze stopki (prośba właściciela 08.10.2026)
+        // bez paska „Sprawdź: Promocje | Outlet | Blog” (decyzja właściciela 08.10.2026)
+        $this->assertStringNotContainsString('Sprawdź', $html);
         $this->assertStringNotContainsString('259-outlet-bhp', $html);
-        $this->assertStringNotContainsString('Sprawdź:', $html);
         $this->assertSame(self::FOOTER, $this->getJson('/api/me/mail-footer')->json('footer'));
         // dane stopki nie wychodzą w danych konta
         $this->assertArrayNotHasKey('mail_footer', $user->fresh()->toArray());
@@ -350,9 +350,14 @@ final class OfferUnitsFooterTest extends TestCase
             $this->assertStringContainsString('src="https://przetargi.example.pl/campaign/footer-phone.png"', $html);
             $this->assertStringNotContainsString('tel. 600 000 000', $html);
             $this->assertStringContainsString("Anna Nowak\nSpecjalista ds. sprzedaży\ntel. 600 903 483 / (17) 860-28-49\ne-mail: anna@supon.example.pl\nwww: www.supon.rzeszow.pl\nPHT SUPON Sp. z o.o. · ul. Miłocińska 17, 35-232 Rzeszów", $text);
-            $this->assertStringNotContainsString('Sprawdź:', $text);
-            $this->assertStringNotContainsString('Sprawdź:', $html);
             $this->assertStringNotContainsString('tel. 600 000 000', $text);
+            // stopka bez paska „Sprawdź: Promocje | Outlet | Blog” (decyzja właściciela 08.10.2026)
+            foreach ([$html, $text] as $body) {
+                $this->assertStringNotContainsString('Sprawdź', $body);
+                $this->assertStringNotContainsString('231-promocja', $body);
+            }
+            // w PDF stopka nie rozcina się między stronami
+            $this->assertStringContainsString('<div style="page-break-inside:avoid;">', $html);
         }
     }
 

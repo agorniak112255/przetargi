@@ -16,6 +16,3 @@ www: {!! $mailFooter['website_text'] !!}
 @if ($mailFooter['company'] !== '' || $mailFooter['address'] !== '')
 {!! implode(' · ', array_filter([$mailFooter['company'], $mailFooter['address']], static fn (string $part): bool => $part !== '')) !!}
 @endif
-@if ($mailFooter['links'] !== [])
-Sprawdź: {!! implode(' | ', array_map(static fn (array $l): string => $l['label'].' '.$l['url'], $mailFooter['links'])) !!}
-@endif
