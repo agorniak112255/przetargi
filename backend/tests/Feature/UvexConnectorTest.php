@@ -53,6 +53,17 @@ final class UvexConnectorTest extends TestCase
     /** Strona startowa atrapy bez odnośnika do cennika bazowego — podsumowanie przebiegu to zgłasza. */
     private const NO_PRICE_LIST_LINE = 'Cennik bazowy UVEX nie wczytany (brak odnośnika „Cennik do pobrania” do sklepu na stronie startowej konta) — ceny bazowe kart bez zmian z poprzedniego przebiegu';
 
+    /**
+     * Opis szyby P1D01 w sklepie dosłownie (skrócony o środkowe wiersze, strona z 08.10.2026): wiersze tabeli
+     * rozdzielone <br>, kolumny tabulatorem, górne granice zakresów zapisane gołym „<”.
+     */
+    private const P1D01_TABLE = "<p>T: 6 ±0,3 | W x H: 915 x 610<br>\n\nwavelength (nm) \tOD \tOperating mode  / Tested protection level<br>\n"
+        ."180 - 315 \t(OD10+) \tD LB10 + IR LB4 + M LB6Y<br>\n"
+        ."3950 - <4700 \t(OD4+) \tDIM LB4 + R LB3Y<br>\n"
+        ."4700 - <4765 \t(OD5+) \tDIM LB5 + R LB3Y<br>\n"
+        ."4765 - <5200 \t(OD8+) \tDI LB5 + R LB3Y + M LB6Y<br>\n"
+        ."5200 - 14500 \t(OD10+) \tDI LB5 + R LB3Y + M LB6Y<br>\n</p>";
+
     private const IMG_9970 = 'https://izam.system-b2b.pl/public/get-preview/product_images/40/408ACDA208BDCAB5C69A726ED5D5F989AECA8874FF618C9D87E81DE857F63480.jpg';
 
     /** @var list<array{id: string, code: string, name: string, price: string|null, avail: string, unit: string, img: string}> */
@@ -755,6 +766,60 @@ final class UvexConnectorTest extends TestCase
         $this->assertSame(1, $this->detailHits);
     }
 
+    public function test_datasheet_of_another_model_is_kept_as_another_document(): void
+    {
+        // audyt 08.10.2026: hełm elektroizolacyjny pronamic E-WR 9730.xxx miał w sklepie tylko kartę wentylowanego
+        // B-WR 9731.030 — bez EN 50365; plik zostaje przy karcie, ale nie jako jej karta techniczna
+        $this->details['4713'] = str_replace('SST stacja czyszcząca mini 9970.005', 'SST uvex pronamic B-WR 9731.030', $this->details['4713']);
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+
+        $documents = $connector->documents($this->productsByCode($connector)['9970.005']);
+
+        $this->assertSame(['other', 'other'], array_map(static fn ($d): string => $d->kind, $documents));
+        $this->assertContains(
+            'Plik PDF innego modelu przy karcie — zapisany jako inny dokument, nie karta techniczna: 1 (9970.005 → SST uvex pronamic B-WR 9731.030.pdf (model 9731, karta 9970))',
+            $connector->runSummary(),
+        );
+    }
+
+    public function test_stored_datasheet_of_another_model_becomes_another_document_at_the_next_sync(): void
+    {
+        // wiersz z produkcji: plik innego modelu zapisany jako karta techniczna, z tekstem w embeddingu
+        Storage::fake('public');
+        $this->details['4713'] = str_replace('SST stacja czyszcząca mini 9970.005', 'SST uvex 2 trend 6936.8', $this->details['4713']);
+        $this->fakeSite();
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+        $cleaner = Product::query()->where('sku', '9970.005')->sole();
+        $document = ProductDocument::query()->where('product_id', $cleaner->id)->orderBy('sort_order')->firstOrFail();
+        $document->forceFill(['kind' => ProductDocument::KIND_DATASHEET, 'text' => 'EN ISO 20345:2011 S3 SRC 6936.8'])->save();
+        $this->assertStringContainsString('6936.8', app(ProductEmbeddingIndexer::class)->documentText($cleaner->fresh()));
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(ProductDocument::KIND_OTHER, $document->fresh()?->kind);
+        $this->assertSame('EN ISO 20345:2011 S3 SRC 6936.8', $document->fresh()?->text, 'plik i jego tekst zostają do wglądu');
+        // tekst karty innego modelu wypada z dokumentu wyszukiwania (zmiana rodzaju zleca przeliczenie wektora)
+        $this->assertStringNotContainsString('6936.8', app(ProductEmbeddingIndexer::class)->documentText($cleaner->fresh()));
+    }
+
+    public function test_file_of_another_model_is_recognised_by_the_model_number_only(): void
+    {
+        $this->assertSame('model 9731, karta 9730', UvexB2bConnector::foreignModelFile('SST uvex pronamic B-WR 9731.030.pdf', ['9730.330', '9730.330']));
+        $this->assertSame('model 6936, karta 6937', UvexB2bConnector::foreignModelFile('SST uvex 2 trend 6936.8', ['6937/8', '6937/8/40']));
+        // ten sam model w innym wariancie, zakres wariantów, lista wariantów — to nadal plik tego modelu
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST pronamic E-WR 9730.030', ['9730.330']));
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST uvex i-3 2124.017-20', ['2124.021']));
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST uvex hi-com 2112.100/101/120/106', ['2112.103']));
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST 8534.pdf', ['8534/8/52']), 'nazwa bez wariantu nic nie rozstrzyga');
+        // nie kody modeli: rozporządzenie, normy, kody rękawic i laserów; karta bez numeru modelu UVEX
+        $this->assertNull(UvexB2bConnector::foreignModelFile('Deklaracja UE 2016/425 EN 1149-5 ISO 20345:2011', ['6937/8']));
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST C300 dry 60549.pdf', ['60549']));
+        $this->assertNull(UvexB2bConnector::foreignModelFile('lv details F22.P1M02.1001.pdf', ['F22P1M031001']));
+        $this->assertNull(UvexB2bConnector::foreignModelFile('SST uvex 2 trend 6936.8', ['HECKEL6273/3/36', 'HA2023(L)']));
+    }
+
     public function test_file_address_outside_the_shop_is_rejected(): void
     {
         $this->assertNull(UvexB2bConnector::fileUrl('https://izam.system-b2b.pl/public/', 'https://example.test/karta.pdf'));
@@ -1103,6 +1168,149 @@ final class UvexConnectorTest extends TestCase
         $connector->description($product);
     }
 
+    public function test_less_than_sign_in_the_shop_text_stays_text_and_does_not_swallow_the_rest(): void
+    {
+        // audyt 08.10.2026, karta 8534/8: libxml 2.9 z produkcji brał „<35” za znacznik i ucinał opis na
+        // „rezystancja skrośna” — tekst do najbliższego „>” znikał (lokalny libxml 2.10 tego nie robi)
+        $this->details['4713'] = str_replace(
+            '<p>Stacja czyszcząca do okularów i gogli. Zawiera: 2x chusteczki czyszczące (700 szt. w opakowaniu) 9971.000, 1x płyn czyszczący 9972.103, 1x pompkę dozującą 9973.101</p>',
+            '<p>Niezwykle lekki, uniwersalny półbut ochronny S2 wykonany z materiałów syntetycznych. Zgodność z wymaganiami względem ESD, rezystancja skrośna <35 megaomów, praktycznie bezszwowa budowa z użyciem zaawansowanego mikroweluru pozwala wyeliminować punkty ucisku.</p>',
+            $this->details['4713'],
+        );
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+
+        $this->assertSame(
+            'Niezwykle lekki, uniwersalny półbut ochronny S2 wykonany z materiałów syntetycznych. Zgodność z wymaganiami względem ESD, rezystancja skrośna <35 megaomów, praktycznie bezszwowa budowa z użyciem zaawansowanego mikroweluru pozwala wyeliminować punkty ucisku.',
+            $connector->description($this->productsByCode($connector)['9970.005']),
+        );
+    }
+
+    public function test_laser_table_keeps_every_wavelength_range_with_its_own_protection_level(): void
+    {
+        // szyba P1D01 (audyt 08.10.2026): cztery zakresy „3950 - <4700 … OD4+” sklejały się w jeden wiersz
+        // „3950 - 4700 - 4765 - 5200 - 14500 (OD10+)” — zawyżony stopień ochrony
+        $this->manufacturerOrderNumber = '000P1D011001';
+        $this->laserCardText(self::P1D01_TABLE, 'https://www.uvex-laservision.de/en/laser-safety-windows/plastic-laser-safety-windows/laser-safety-window-p1d01/');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+
+        $this->assertSame(
+            "T: 6 ±0,3 | W x H: 915 x 610\n"
+            ."wavelength (nm) OD Operating mode / Tested protection level\n"
+            ."180 - 315 (OD10+) D LB10 + IR LB4 + M LB6Y\n"
+            ."3950 - <4700 (OD4+) DIM LB4 + R LB3Y\n"
+            ."4700 - <4765 (OD5+) DIM LB5 + R LB3Y\n"
+            ."4765 - <5200 (OD8+) DI LB5 + R LB3Y + M LB6Y\n"
+            .'5200 - 14500 (OD10+) DI LB5 + R LB3Y + M LB6Y',
+            $connector->description($this->productsByCode($connector)['000P1D011003']),
+        );
+        // odnośnik prowadzi do strony tego samego filtra — tekst sklepu zostaje, nikt nie szuka po numerze
+        $this->assertSame([], $this->searchHits);
+        $this->assertSame([self::NO_PRICE_LIST_LINE], $connector->runSummary());
+    }
+
+    public function test_shop_text_linking_to_the_page_of_another_filter_is_not_taken_for_the_card(): void
+    {
+        // szyba P1H09 (audyt 08.10.2026) miała w sklepie tabelę P1D01 i odnośnik do strony P1D01 — strona
+        // producenta sama podaje numer innego wyrobu, więc tekst obok odnośnika też jest cudzy
+        $this->manufacturerOrderNumber = '000P1H091001';
+        $this->laserCardText(self::P1D01_TABLE, 'https://www.uvex-laservision.de/en/laser-safety-windows/plastic-laser-safety-windows/laser-safety-window-p1h09/');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['000P1D011003'];
+
+        $this->assertSame('', $connector->description($product), 'karta czeka na opis zamiast nosić tabelę innego filtra');
+        $this->assertSame(['000P1D011003'], $this->searchHits, 'właściwej strony szukamy po numerze karty');
+        $this->assertContains(
+            'Opis w sklepie opisuje inny wyrób — pominięty dla 1 kart (000P1D011003 (odnośnik do strony innego wyrobu: laser-safety-window-p1h09))',
+            $connector->runSummary(),
+        );
+    }
+
+    public function test_shop_text_stays_when_the_linked_page_does_not_say_whose_it_is(): void
+    {
+        // strona bez numeru katalogowego, adres-skrót nazwy: nic nie mówi, że to inny wyrób — tekst sklepu zostaje
+        $this->manufacturerOrderNumber = null;
+        $this->laserCardText(self::P1D01_TABLE, 'https://www.uvex-laservision.de/en/laser-safety-windows/plastic-laser-safety-windows/laser-safety-window-p1d01/');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+
+        $description = $connector->description($this->productsByCode($connector)['000P1D011003']);
+
+        $this->assertStringContainsString('3950 - <4700 (OD4+) DIM LB4 + R LB3Y', $description);
+        $this->assertSame([], array_values(array_filter(
+            $connector->runSummary(),
+            static fn (string $line): bool => str_starts_with($line, 'Opis w sklepie opisuje inny wyrób'),
+        )));
+    }
+
+    public function test_shop_text_naming_only_another_filter_is_not_taken_for_the_card(): void
+    {
+        // okulary F22.P1M03 (audyt 08.10.2026) miały w sklepie opis „F22.P1M02.1001” — zakresy fal innego filtra
+        $this->laserCardText('<p>Okulary chroniące przed promieniowaniem laserowym F22.P1M02.1001 z standardowymi zausznikami nadają się do pracy z laserami CO2. Filtr P1M02 jest uważany za filtr wąskopasmowy.</p>');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+
+        $this->assertSame('', $connector->description($this->productsByCode($connector)['000P1D011003']));
+        $this->assertSame([], $this->manufacturerHits, 'karta nie odsyła do producenta — nie ma czego pobierać');
+        $this->assertContains(
+            'Opis w sklepie opisuje inny wyrób — pominięty dla 1 kart (000P1D011003 (tekst podaje filtr P1M02, karta P1D01))',
+            $connector->runSummary(),
+        );
+    }
+
+    public function test_shop_text_naming_its_own_filter_next_to_another_one_stays(): void
+    {
+        $text = 'Szyba z filtrem P1D01 do laserów CO2; do laserów zielonych producent poleca filtr P1P10.';
+        $this->laserCardText('<p>'.$text.'</p>');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+
+        $this->assertSame($text, $connector->description($this->productsByCode($connector)['000P1D011003']));
+    }
+
+    public function test_filter_designations_are_read_also_inside_catalogue_numbers(): void
+    {
+        $this->assertSame(['P1D01'], UvexB2bConnector::filterCodes('000P1D011003'));
+        $this->assertSame(['P1P23'], UvexB2bConnector::filterCodes('FS1P1P231003'));
+        $this->assertSame(['P1M02', 'P6P21'], UvexB2bConnector::filterCodes('F22.P1M02.1001, filtr p1m02 i P6P21'));
+        $this->assertSame([], UvexB2bConnector::filterCodes('9192.225 HA2023(L) HECKEL6273/3/36 SP1D01'));
+    }
+
+    public function test_synced_text_of_another_filter_is_removed_at_the_next_sync_and_kept_in_the_payload(): void
+    {
+        // wiersz z produkcji sprzed poprawki: synchronizacja zapisała tekst innego filtra i jego odcisk
+        Storage::fake('public');
+        $this->laserCardText('<p>Szyba z filtrem P1D01 do laserów CO2.</p>');
+        $this->fakeSite();
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+        $card = Product::query()->where('sku', '000P1D011003')->sole();
+        $this->assertSame('Szyba z filtrem P1D01 do laserów CO2.', $card->description);
+
+        $foreign = 'Okulary chroniące przed promieniowaniem laserowym F22.P1M02.1001 do laserów CO2.';
+        $card->forceFill(['description' => $foreign])->save();
+        B2bProductLink::query()->where('product_id', $card->id)->update(['description_hash' => sha1($foreign)]);
+        $this->laserCardText('<p>'.$foreign.'</p>');
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $card->refresh();
+        $this->assertFalse($card->hasDescriptionText(), 'cudza tabela laserowa znika z karty');
+        $this->assertSame($foreign, $card->enrichment_payload['replaced_description'] ?? null, 'skasowany tekst zostaje do wglądu');
+        $log = array_column((array) B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text');
+        $this->assertContains(
+            'Opis w sklepie opisuje inny wyrób — pominięty dla 1 kart (000P1D011003 (tekst podaje filtr P1M02, karta P1D01))',
+            $log,
+        );
+    }
+
     public function test_shop_card_joins_the_list_row_with_the_manufacturer_tables_already_downloaded(): void
     {
         $this->manufacturerOrderNumber = '9970.005';
@@ -1263,6 +1471,22 @@ final class UvexConnectorTest extends TestCase
     }
 
     /** Karta bez opisu w panelu: zamiast treści odnośnik „Kliknij i przejdź do pełnego opisu”. */
+    /**
+     * Strona produktu szyby 000P1D011003 (pozycja 7677) z podanym opisem sklepu i — gdy jest — odnośnikiem
+     * „Kliknij i przejdź do pełnego opisu” na końcu opisu, jak na prawdziwych kartach laserowych.
+     */
+    private function laserCardText(string $html, ?string $link = null): void
+    {
+        if ($link !== null) {
+            $html = (string) preg_replace('#</p>\s*$#', '<br><a href="'.$link.'" target="_blank">Kliknij i przejdź do pełnego opisu</a></p>', $html);
+        }
+        $this->details['7677'] = str_replace(
+            ['<td class="codeViewProductDane">9970.005</td>', '<p>Stacja czyszcząca do okularów i gogli. Zawiera: 2x chusteczki czyszczące (700 szt. w opakowaniu) 9971.000, 1x płyn czyszczący 9972.103, 1x pompkę dozującą 9973.101</p>'],
+            ['<td class="codeViewProductDane">000P1D011003</td>', $html],
+            $this->fixture('product_9970005.html'),
+        );
+    }
+
     private function linkInsteadOfDescription(string $url): void
     {
         $this->details['4713'] = str_replace(

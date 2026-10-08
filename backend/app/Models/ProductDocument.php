@@ -54,7 +54,8 @@ class ProductDocument extends Model
     protected static function booted(): void
     {
         static::saved(function (self $document): void {
-            if ($document->wasChanged('text') || ($document->wasRecentlyCreated && $document->text !== null)) {
+            // rodzaj też: tekst wchodzi do embeddingu według rodzaju pliku (karta techniczna innego modelu → inny dokument)
+            if ($document->wasChanged(['text', 'kind']) || ($document->wasRecentlyCreated && $document->text !== null)) {
                 ReindexProductEmbeddingJob::dispatch((int) $document->product_id);
             }
         });

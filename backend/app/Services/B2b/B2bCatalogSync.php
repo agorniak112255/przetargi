@@ -3365,8 +3365,10 @@ final class B2bCatalogSync
                 // Cudzy tekst musi zniknąć z karty; do 20.09.2026 znikał ubocznie, bo opis trzymał się
                 // doklejonego tekstu karty technicznej, a ten do opisu już nie wchodzi.
                 $payload['description'] = null;
+                // skasowany tekst zostaje w payloadzie, jak przy nadpisaniu — kasowanie ma być odwracalne
+                $payload['enrichment_payload'] = $this->withReplacedDescription($existing, '');
                 if ($warnings !== null) {
-                    $warnings[] = 'opis producenta zniknął ze strony — karta została bez opisu';
+                    $warnings[] = 'opis producenta zniknął ze strony — karta została bez opisu (poprzedni w enrichment_payload.replaced_description)';
                 }
 
                 return [null, false];

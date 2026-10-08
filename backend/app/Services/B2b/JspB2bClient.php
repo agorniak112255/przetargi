@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\B2b;
 
+use App\Support\HtmlBareLessThan;
 use Closure;
 use DOMDocument;
 use DOMXPath;
@@ -246,6 +247,8 @@ final class JspB2bClient
     public static function dom(string $html): DOMXPath
     {
         $clean = preg_replace('#<(script|style|noscript)\b[^>]*>.*?</\1\s*>#is', '', $html) ?? $html;
+        // „<4700”, „<35 megaomów” to tekst — libxml 2.9 z produkcji połyka go do najbliższego „>” (HtmlBareLessThan)
+        $clean = HtmlBareLessThan::escape($clean);
         $doc = new DOMDocument;
         $previous = libxml_use_internal_errors(true);
         $doc->loadHTML('<?xml encoding="utf-8"?>'.$clean, LIBXML_NONET | LIBXML_COMPACT);

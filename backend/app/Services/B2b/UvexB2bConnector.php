@@ -174,7 +174,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      * (page === null: karta nigdzie nie odsyła albo odnośnik prowadzi do innego wyrobu), żeby nie szukać jej
      * drugi raz. Dokument jednej karty naraz — kasowany razem ze stroną sklepu.
      *
-     * @var array{remote_id: string, url: string|null, page: DOMXPath|null, fields: list<B2bRemoteShopField>}|null
+     * @var array{remote_id: string, url: string|null, page: DOMXPath|null, fields: list<B2bRemoteShopField>, link_is_other: bool}|null
      */
     private ?array $manufacturer = null;
 
@@ -187,6 +187,20 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
 
     /** Ile razy właściwa strona producenta znalazła się po numerze katalogowym, mimo błędnego odnośnika. */
     private int $foundByCode = 0;
+
+    /**
+     * Karty, których opis w sklepie okazał się tekstem innego wyrobu (foreignShopText) — kod i powód.
+     *
+     * @var list<string>
+     */
+    private array $foreignShopTexts = [];
+
+    /**
+     * Pliki PDF innego modelu przypięte w sklepie do karty (foreignModelFile) — kod karty, nazwa pliku i powód.
+     *
+     * @var list<string>
+     */
+    private array $foreignFiles = [];
 
     /** @var (callable(string): void)|null */
     private $listProgress = null;
@@ -534,7 +548,9 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      * linie), a gdy panel opisu nie ma — tekst ze strony producenta, do której odsyła. Danych z tabelek
      * (jednostka sprzedaży, „Specifications”, zakresy i poziomy ochrony) opis nie powtarza — te są na karcie
      * wyrobu u dostawcy (shopFields()). Strona z innym kodem niż lista = wyjątek (opis innego produktu nie może
-     * trafić na kartę). Pusty wynik = karta czeka na opis; synchronizacja pustym opisem niczego nie nadpisuje.
+     * trafić na kartę). Tekst sklepu, który opisuje inny wyrób (foreignShopText), traktujemy jak brak opisu
+     * w sklepie. Pusty wynik = karta czeka na opis; synchronizacja pustym opisem niczego nie nadpisuje (opis,
+     * który ta synchronizacja sama wpisała, kasuje — B2bCatalogSync::ownDescriptionIsGone).
      */
     public function description(B2bRemoteProduct $product): string
     {
@@ -549,7 +565,15 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             static fn (string $line): bool => ! in_array(mb_strtolower($line), self::DESCRIPTION_PLACEHOLDERS, true),
         ));
         if ($lines !== []) {
-            return mb_substr(implode("\n", $lines), 0, 10000);
+            $text = implode("\n", $lines);
+            $foreign = $this->foreignShopText($product, $xpath, $text);
+            if ($foreign === null) {
+                return mb_substr($text, 0, 10000);
+            }
+            $this->foreignShopTexts[] = (string) ($product->raw['code'] ?? $product->sku).' ('.$foreign.')';
+
+            // tekst sklepu opisuje inny wyrób — jak przy karcie bez opisu: strona producenta tego wyrobu albo nic
+            return mb_substr($this->manufacturerDescription($product, $xpath), 0, 10000);
         }
         if ($node === null) {
             return '';
@@ -632,6 +656,22 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             $lines[] = 'Odnośnik ze sklepu prowadził do strony innego wyrobu, właściwą znaleziono po numerze katalogowym: '
                 .$this->foundByCode.' kart';
         }
+        if ($this->foreignShopTexts !== []) {
+            $lines[] = sprintf(
+                'Opis w sklepie opisuje inny wyrób — pominięty dla %d kart (%s%s)',
+                count($this->foreignShopTexts),
+                implode('; ', array_slice($this->foreignShopTexts, 0, 3)),
+                count($this->foreignShopTexts) > 3 ? '; …' : '',
+            );
+        }
+        if ($this->foreignFiles !== []) {
+            $lines[] = sprintf(
+                'Plik PDF innego modelu przy karcie — zapisany jako inny dokument, nie karta techniczna: %d (%s%s)',
+                count($this->foreignFiles),
+                implode('; ', array_slice($this->foreignFiles, 0, 3)),
+                count($this->foreignFiles) > 3 ? '; …' : '',
+            );
+        }
         if ($this->wrongLinks === []) {
             return $lines;
         }
@@ -689,6 +729,100 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         return $lines;
     }
 
+    /**
+     * Czy tekst opisu ze sklepu należy do innego wyrobu; null = nic na to nie wskazuje, inaczej powód. Sklep
+     * kopiuje opisy filtrów laserowych między kartami (audyt 08.10.2026): F22.P1M03 z tekstem „F22.P1M02.1001”,
+     * szyba P1H09 z tabelą P1D01 i odnośnikiem do strony P1D01 — a zakresy fal i stopnie ochrony cudzego filtra
+     * na karcie to błąd bezpieczeństwa. Rozstrzyga tylko to, co tekst albo strona mówią same:
+     *  - oznaczenie filtra w tekście (P1M02), a własnego filtra karty brak (filterCodes);
+     *  - odnośnik „pełny opis” prowadzi do strony producenta z numerem innego wyrobu (link_is_other).
+     * Tekst bez oznaczenia i bez odnośnika zostaje — kopii bez kodu (P1P22/P1P23 z jednym opisem) automat nie
+     * odróżni od opisu wspólnego dla rodziny.
+     */
+    private function foreignShopText(B2bRemoteProduct $product, DOMXPath $xpath, string $text): ?string
+    {
+        $code = (string) ($product->raw['code'] ?? $product->sku);
+        $own = self::filterCodes($code)[0] ?? null;
+        if ($own !== null) {
+            $named = self::filterCodes($text);
+            if ($named !== [] && ! in_array($own, $named, true)) {
+                return 'tekst podaje filtr '.implode(', ', $named).', karta '.$own;
+            }
+        }
+
+        $node = $xpath->query('//*[@id="description"]')->item(0);
+        $link = $node !== null ? $xpath->query('.//a[@href]', $node)->item(0) : null;
+        $url = $link instanceof DOMElement ? trim(html_entity_decode($link->getAttribute('href'), ENT_QUOTES | ENT_HTML5)) : '';
+        if ($url === '' || ! UvexB2bClient::isManufacturerUrl($url)) {
+            return null;
+        }
+
+        return $this->manufacturerFor($product, $xpath)['link_is_other']
+            ? 'odnośnik do strony innego wyrobu: '.basename((string) parse_url($url, PHP_URL_PATH))
+            : null;
+    }
+
+    /**
+     * Oznaczenia filtrów laserowych uvex laservision („P1D01”, „P1M02”, „P6P21”) w kolejności wystąpienia, bez
+     * powtórzeń, wielkimi literami — także wewnątrz numeru katalogowego (000P1D011003, F22.P1M02.1001,
+     * FS1P1P231003). Przed oznaczeniem nie może stać litera, żeby nie łapać fragmentów słów.
+     *
+     * @return list<string>
+     */
+    public static function filterCodes(string $text): array
+    {
+        preg_match_all('/(?<![A-Za-z])P\d[A-Za-z]\d{2}/', $text, $m);
+
+        return array_values(array_unique(array_map('strtoupper', $m[0])));
+    }
+
+    /**
+     * Czy plik należy do innego modelu: nazwa podaje kody modeli UVEX (czterocyfrowy numer modelu z wariantem
+     * po kropce — „9731.030”, „6936.8” — albo z jedną cyfrą po ukośniku — „6937/8”), a żaden z nich nie jest
+     * modelem karty. Sklep przypina karty innych modeli (audyt 08.10.2026): hełmy elektroizolacyjne pronamic
+     * E-WR 9730.xxx mają kartę „SST uvex pronamic B-WR 9731.030” wentylowanego modelu bez EN 50365, trzewik 6937/8
+     * — kartę „uvex 2 trend 6936.8”. null = plik pasuje albo nie wiadomo (bez kodu w nazwie, karta bez numeru
+     * modelu UVEX, np. HexArmor, HECKEL, rękawice 60xxx). Porównujemy tylko model: warianty i zakresy jednego
+     * modelu („2124.017-20”, „2112.100/101/120”) przechodzą. „2016/425” (rozporządzenie) nie jest kodem — po
+     * ukośniku jedna cyfra.
+     *
+     * @param  list<string>  $cardCodes
+     */
+    public static function foreignModelFile(string $fileName, array $cardCodes): ?string
+    {
+        $models = static function (string $text): array {
+            preg_match_all('#(?<![\d.,/])(\d{4})(?:\.\d{1,3}|/\d)(?!\d)#', $text, $m);
+
+            return array_values(array_unique($m[1]));
+        };
+        $card = [];
+        foreach ($cardCodes as $code) {
+            if (preg_match('#^(\d{4})[./]#', trim($code), $m) === 1) {
+                $card[] = $m[1];
+            }
+        }
+        $named = $models($fileName);
+        if ($card === [] || $named === [] || array_intersect($named, $card) !== []) {
+            return null;
+        }
+
+        return 'model '.implode(', ', $named).', karta '.implode(', ', array_unique($card));
+    }
+
+    /**
+     * Kody pozycji karty z listy (raw rows) i kod karty.
+     *
+     * @return list<string>
+     */
+    private static function cardCodes(B2bRemoteProduct $product): array
+    {
+        $codes = array_map(static fn (array $row): string => (string) ($row['code'] ?? ''), $product->raw['rows'] ?? []);
+        $codes[] = (string) ($product->raw['code'] ?? '');
+        $codes[] = $product->sku;
+
+        return array_values(array_unique(array_filter($codes, static fn (string $code): bool => $code !== '')));
+    }
+
     public function hasForeignDescription(B2bRemoteProduct $product): bool
     {
         return $this->foreignDescriptionFor !== null && $this->foreignDescriptionFor === $product->remoteId;
@@ -743,9 +877,11 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      * Strona producenta karty: pobrana raz, niezależnie od tego, czy poprosił o nią opis, czy karta wyrobu
      * u dostawcy. Wiersze tabelek liczymy od razu — przy jednym przebiegu strona idzie po sieci tylko raz.
      * Brak strony (karta nigdzie nie odsyła, odnośnik prowadzi poza domeny producenta albo do innego wyrobu)
-     * też zapamiętujemy, żeby druga metoda nie szukała jej ponownie.
+     * też zapamiętujemy, żeby druga metoda nie szukała jej ponownie. link_is_other = odnośnik sklepu prowadził
+     * do strony, która sama podaje numer innego wyrobu (foreignShopText) — niezależnie od tego, czy właściwą
+     * stronę znaleziono potem po numerze.
      *
-     * @return array{remote_id: string, url: string|null, page: DOMXPath|null, fields: list<B2bRemoteShopField>}
+     * @return array{remote_id: string, url: string|null, page: DOMXPath|null, fields: list<B2bRemoteShopField>, link_is_other: bool}
      */
     private function manufacturerFor(B2bRemoteProduct $product, ?DOMXPath $xpath = null): array
     {
@@ -753,13 +889,15 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             return $this->manufacturer;
         }
 
-        $found = $this->manufacturerPageOf($product, $xpath);
+        $linkIsOther = false;
+        $found = $this->manufacturerPageOf($product, $xpath, $linkIsOther);
         $page = $found !== null ? JspB2bClient::dom($found['html']) : null;
         $this->manufacturer = [
             'remote_id' => $product->remoteId,
             'url' => $found['url'] ?? null,
             'page' => $page,
             'fields' => $page !== null ? self::manufacturerShopFields($page, $found['html']) : [],
+            'link_is_other' => $linkIsOther,
         ];
 
         return $this->manufacturer;
@@ -769,9 +907,10 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      * Strona producenta spod odnośnika, który panel pokazuje zamiast opisu; null = karta nigdzie nie odsyła,
      * odnośnik prowadzi poza domeny producenta albo do innego wyrobu (wtedy powód idzie do runSummary()).
      *
+     * @param  bool  $linkIsOther  wynik: odnośnik prowadził do strony innego wyrobu (manufacturerPageFor)
      * @return array{url: string, html: string}|null
      */
-    private function manufacturerPageOf(B2bRemoteProduct $product, ?DOMXPath $xpath): ?array
+    private function manufacturerPageOf(B2bRemoteProduct $product, ?DOMXPath $xpath, bool &$linkIsOther = false): ?array
     {
         $xpath ??= $this->productXpath($product);
         $node = $xpath?->query('//*[@id="description"]')->item(0);
@@ -786,7 +925,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         $code = (string) ($product->raw['code'] ?? $product->sku);
-        $found = $this->manufacturerPageFor($url, $code);
+        $found = $this->manufacturerPageFor($url, $code, $linkIsOther);
         if ($found === null) {
             // Sam pomijamy stronę, zamiast przerywać wyjątkiem: karta zapisze opis bez treści producenta,
             // więc cudzy opis z wcześniejszego przebiegu zniknie z katalogu sam.
@@ -799,7 +938,8 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     /**
      * Pliki z zakładki „Pliki do pobrania” strony produktu pierwszej pozycji karty (rozmiary tego samego wyrobu
      * mają te same pliki). Nazwa dosłownie z tabeli; adres względny rozwijany po <base href> strony i sprawdzany,
-     * czy prowadzi do sklepu. PDF traktujemy jako kartę techniczną, resztę (np. skan instrukcji) jako inny plik.
+     * czy prowadzi do sklepu. PDF traktujemy jako kartę techniczną, resztę (np. skan instrukcji) jako inny plik —
+     * także PDF, którego nazwa podaje tylko kod innego modelu (foreignModelFile).
      *
      * @return list<B2bRemoteDocument>
      */
@@ -825,10 +965,17 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             if ($title === '') {
                 $title = rawurldecode(basename((string) parse_url($url, PHP_URL_PATH)));
             }
+            $foreign = self::isPdfUrl($url)
+                ? self::foreignModelFile($title.' '.rawurldecode(basename((string) parse_url($url, PHP_URL_PATH))), self::cardCodes($product))
+                : null;
+            if ($foreign !== null) {
+                $this->foreignFiles[] = (string) ($product->raw['code'] ?? $product->sku).' → '.$title.' ('.$foreign.')';
+            }
             $documents[$url] = new B2bRemoteDocument(
                 title: mb_substr($title, 0, 255),
                 sourceUrl: $url,
-                kind: self::isPdfUrl($url) ? ProductDocument::KIND_DATASHEET : ProductDocument::KIND_OTHER,
+                // plik innego modelu zostaje przy karcie do wglądu, ale nie jako jej karta techniczna
+                kind: self::isPdfUrl($url) && $foreign === null ? ProductDocument::KIND_DATASHEET : ProductDocument::KIND_OTHER,
             );
             if (count($documents) >= self::DOCUMENTS_LIMIT) {
                 break;
@@ -1455,11 +1602,13 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      *
      * @return array{url: string, html: string}|null null = nie znaleziono karty tego wyrobu
      */
-    private function manufacturerPageFor(string $url, string $code): ?array
+    private function manufacturerPageFor(string $url, string $code, bool &$linkIsOther = false): ?array
     {
         $slug = basename((string) parse_url($url, PHP_URL_PATH));
         if (self::looksLikeCode($slug) && ! self::sameProduct($slug, $code) && ! self::sameProduct(self::numberParam($url), $code)) {
             // adres jest numerem katalogowym innego wyrobu — strony nie pobieramy, od razu szukamy po numerze karty
+            $linkIsOther = true;
+
             return $this->manufacturerPageByCode($url, $code);
         }
 
@@ -1467,6 +1616,8 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         if (self::pageBelongsTo($html, $url, $code)) {
             return ['url' => $url, 'html' => $html];
         }
+        // strona sama podaje numer innego wyrobu; bez numeru (adres-skrót nazwy) nie wiadomo, czyja jest
+        $linkIsOther = self::orderNumber($html) !== null;
 
         return $this->manufacturerPageByCode($url, $code);
     }
