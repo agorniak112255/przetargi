@@ -79,9 +79,10 @@ type Connector = {
   uses_discount_rules: boolean
   /**
    * price = ceny ze strony są katalogowe, cena zakupu powstaje z rabatów konta (protekt.pl);
-   * standard = rabat standardowy od cennika bazowego, do wykrycia ceny specjalnej B2B (UVEX).
+   * standard = rabat standardowy od cennika bazowego, do wykrycia ceny specjalnej B2B (UVEX);
+   * catalog = rabat od ceny katalogowej, z którego liczymy katalogową z ceny zakupu (VM Footwear).
    */
-  discount_rules_mode?: 'price' | 'standard' | null
+  discount_rules_mode?: 'price' | 'standard' | 'catalog' | null
   /** Logowanie wymaga kodu z e-maila (3M) — harmonogram nocny się nie uda. */
   requires_login_code: boolean
 }
@@ -747,7 +748,9 @@ export function PriceListsB2b() {
                           title={
                             usesStandardDiscounts(row.connector)
                               ? 'Rabaty standardowe na arkusze cennika bazowego — do wykrywania ceny specjalnej B2B'
-                              : 'Rabaty od ceny katalogowej ze strony — dają cenę zakupu'
+                              : connectors.some((c) => c.key === row.connector && c.discount_rules_mode === 'catalog')
+                                ? 'Rabat od ceny katalogowej — z naszej ceny zakupu liczy cenę katalogową'
+                                : 'Rabaty od ceny katalogowej ze strony — dają cenę zakupu'
                           }
                         >
                           Rabaty

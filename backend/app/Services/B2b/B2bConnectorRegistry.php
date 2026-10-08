@@ -67,7 +67,13 @@ class B2bConnectorRegistry
     public const DISCOUNT_RULES_STANDARD = 'standard';
 
     /**
-     * @return list<array{key: string, label: string, host: string, requires_password: bool, uses_discount_rules: bool, discount_rules_mode: 'price'|'standard'|null, requires_login_code: bool}>
+     * Reguły rabatu konta liczą cenę katalogową z ceny zakupu (B2bCatalogFromPurchaseSite, VM Footwear): sklep
+     * podaje tylko cenę konta, katalogowa = zakup ÷ (1 − rabat).
+     */
+    public const DISCOUNT_RULES_CATALOG = 'catalog';
+
+    /**
+     * @return list<array{key: string, label: string, host: string, requires_password: bool, uses_discount_rules: bool, discount_rules_mode: 'price'|'standard'|'catalog'|null, requires_login_code: bool}>
      */
     public function options(): array
     {
@@ -96,10 +102,10 @@ class B2bConnectorRegistry
     }
 
     /**
-     * Znaczenie reguł rabatu konta dla łącznika: DISCOUNT_RULES_PRICE, DISCOUNT_RULES_STANDARD albo null
-     * (łącznik reguł nie używa, także nieznany klucz).
+     * Znaczenie reguł rabatu konta dla łącznika: DISCOUNT_RULES_PRICE, DISCOUNT_RULES_STANDARD,
+     * DISCOUNT_RULES_CATALOG albo null (łącznik reguł nie używa, także nieznany klucz).
      *
-     * @return 'price'|'standard'|null
+     * @return 'price'|'standard'|'catalog'|null
      */
     public function discountRulesMode(?string $key): ?string
     {
@@ -273,7 +279,7 @@ class B2bConnectorRegistry
 
     /**
      * @param  class-string<B2bConnector>  $class
-     * @return 'price'|'standard'|null
+     * @return 'price'|'standard'|'catalog'|null
      */
     /**
      * Czy adres leży na witrynie któregoś łącznika (host łącznika albo jego subdomena: web.rawpol.com, www.ardon.pl).
@@ -299,6 +305,9 @@ class B2bConnectorRegistry
     {
         if (is_a($class, B2bStandardDiscountSite::class, true)) {
             return self::DISCOUNT_RULES_STANDARD;
+        }
+        if (is_a($class, B2bCatalogFromPurchaseSite::class, true)) {
+            return self::DISCOUNT_RULES_CATALOG;
         }
         if (is_a($class, B2bPublicSite::class, true) && ! is_a($class, B2bContentOnlySite::class, true)) {
             return self::DISCOUNT_RULES_PRICE;

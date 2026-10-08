@@ -46,8 +46,13 @@ use RuntimeException;
  * (VmFootwearSharePoint) z PNG bez tła. Ujęcia PNG kodu karty idą w galerii przed zdjęciem ze sklepu; gdy kodu karty
  * nie ma, a są PNG innej wersji tego modelu (karta 6655-O6, zdjęcie 6655-O2) — też je bierzemy (decyzja właściciela
  * 08.10.2026), z listą takich kart w podsumowaniu przebiegu. Zdjęcie ze sklepu zostaje na karcie, na końcu galerii.
+ *
+ * Cena katalogowa (od 08.10.2026, B2bCatalogFromPurchaseSite): sklep jej nie podaje — liczymy ją z reguł rabatu konta
+ * („Rabaty” przy cenniku): katalogowa = cena konta ÷ (1 − rabat), np. 289,80 zł przy 43% → 508,42 zł. Reguły jak
+ * u innych kont: kod produktu, kategoria (okruszki „Obuwie > Obuwie robocze > Półbuty”) albo nazwa, pierwsza pasująca
+ * wygrywa. Karta bez reguły — katalogowa = cena konta, jak dotąd; liczba takich kart w podsumowaniu.
  */
-final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource
+final class VmFootwearB2bConnector implements B2bCatalogFromPurchaseSite, B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource
 {
     public const BRAND = 'VM Footwear';
 
@@ -129,9 +134,13 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
      */
     private bool $galleryFrozen = false;
 
+    /** @var list<string> karty bez pasującej reguły rabatu (katalogowa = cena konta) */
+    private array $withoutDiscountRule = [];
+
     public function __construct(
         private readonly VmFootwearB2bClient $client,
         private readonly ?VmFootwearSharePoint $sharePoint = null,
+        private readonly ?B2bDiscountRuleResolver $discounts = null,
     ) {}
 
     public static function key(): string
@@ -164,6 +173,7 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
         return new self(
             new VmFootwearB2bClient((string) $account->username, (string) $account->password, $delayMs),
             new VmFootwearSharePoint($delayMs),
+            new B2bDiscountRuleResolver((int) $account->id),
         );
     }
 
@@ -191,6 +201,7 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
         $this->pngExact = 0;
         $this->pngMissing = 0;
         $this->galleryFrozen = false;
+        $this->withoutDiscountRule = [];
 
         if (! $this->client->isLoggedIn()) {
             $this->client->login();
@@ -233,6 +244,17 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
         }
         if ($this->codeMismatch !== []) {
             $lines[] = 'Kod na liście inny niż na stronie wyrobu (wzięty ze strony wyrobu): '.self::listing($this->codeMismatch);
+        }
+        if ($this->discounts !== null) {
+            $this->discounts->flushCounters();
+            if ($this->discounts->hasRules()) {
+                $lines[] = 'Cena katalogowa z rabatu konta: '.$this->discounts->matchedCount().' kart';
+                if ($this->withoutDiscountRule !== []) {
+                    $lines[] = 'Bez pasującej reguły rabatu (katalogowa = cena zakupu): '.self::listing($this->withoutDiscountRule);
+                }
+            } else {
+                $lines[] = 'Konto bez reguł rabatu — cena katalogowa = cena zakupu. Rabat od katalogowej ustawisz przyciskiem „Rabaty” przy cenniku.';
+            }
         }
         if ($this->pngIndex !== null) {
             $lines[] = 'Zdjęcia bez tła (SharePoint VM): z kodem karty '.$this->pngExact.', bez PNG '.$this->pngMissing;
@@ -565,16 +587,17 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
 
         $sizes = array_values(array_filter(array_column($page['sizes'], 'label'), static fn (string $label): bool => $label !== ''));
         $images = $this->galleryFrozen ? [] : [...$this->pngUrls($code), ...$page['images']];
+        $category = $page['categories'] !== [] ? implode(' > ', $page['categories']) : null;
 
         return new B2bRemoteProduct(
             remoteId: $code,
             sku: $code,
             name: $name,
-            category: $page['categories'] !== [] ? implode(' > ', $page['categories']) : null,
+            category: $category,
             sourceUrl: VmFootwearB2bClient::BASE.$path,
             raw: [
                 'status' => 'ok',
-                'price' => new B2bRemotePrice(net: $page['price']['net'], currency: $page['price']['currency']),
+                'price' => $this->accountPrice($page['price']['net'], $page['price']['currency'], $code, $category, $name),
                 'code' => $code,
                 'sizes' => $sizes,
                 'badges' => $page['badges'],
@@ -588,6 +611,34 @@ final class VmFootwearB2bConnector implements B2bConnector, B2bDocumentSource, B
             availability: self::availabilityText($page['sizes'], $page['availability']),
             variantSummary: $sizes !== [] ? 'Rozmiary: '.implode(', ', $sizes) : null,
             identifiers: [new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MANUFACTURER_CODE, value: $code, field: 'Kod produktu')],
+        );
+    }
+
+    /**
+     * Cena konta i katalogowa z reguły rabatu konta: katalogowa = cena konta ÷ (1 − rabat), zaokrąglona do grosza.
+     * Bez reguły (albo rabat 0%) — bez ceny katalogowej, synchronizacja przyjmuje cenę konta, jak przed regułami.
+     */
+    private function accountPrice(float $net, string $currency, string $code, ?string $category, string $name): B2bRemotePrice
+    {
+        $match = $this->discounts?->hasRules() ? $this->discounts->resolve($code, $category, $name) : null;
+        if ($match === null) {
+            if ($this->discounts?->hasRules()) {
+                $this->withoutDiscountRule[] = $code;
+            }
+
+            return new B2bRemotePrice(net: $net, currency: $currency);
+        }
+        $discount = $match->discountPercent;
+        // 100% nie przejdzie zapisu reguł; ujemnego i 0% nie liczymy — katalogowa = cena konta
+        if ($discount <= 0 || $discount >= 100) {
+            return new B2bRemotePrice(net: $net, currency: $currency);
+        }
+
+        return new B2bRemotePrice(
+            net: $net,
+            base: round($net / (1 - $discount / 100), 2),
+            discountPercent: $discount,
+            currency: $currency,
         );
     }
 

@@ -107,6 +107,36 @@ final class B2bDiscountRulesApiTest extends TestCase
         ])->assertStatus(422)->assertJsonValidationErrors('rules.0.discount_percent');
     }
 
+    public function test_konto_vm_footwear_ma_rabat_od_ceny_katalogowej_ponizej_100_procent(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $vm = B2bAccount::query()->create([
+            'username' => 'handel@example.test',
+            'password' => 'sekret',
+            'sites' => ['https://pl.b2b.vmfootwear.cz'],
+            'connector' => 'vmfootwear',
+        ]);
+
+        $this->getJson('/api/b2b-connectors')
+            ->assertOk()
+            ->assertJsonFragment(['key' => 'vmfootwear', 'uses_discount_rules' => true, 'discount_rules_mode' => 'catalog']);
+        $this->getJson("/api/b2b-accounts/{$vm->id}/discount-rules")->assertOk()->assertJsonPath('mode', 'catalog');
+
+        // katalogowa = zakup ÷ (1 − rabat): przy 100% nie ma ceny katalogowej
+        $this->putJson("/api/b2b-accounts/{$vm->id}/discount-rules", [
+            'rules' => [['name' => 'Wszystkie produkty', 'match_field' => 'catalog_no', 'match_type' => 'any', 'pattern' => '', 'discount_percent' => 100]],
+        ])->assertStatus(422)->assertJsonValidationErrors('rules.0.discount_percent');
+
+        $this->putJson("/api/b2b-accounts/{$vm->id}/discount-rules", [
+            'rules' => [['name' => 'Wszystkie produkty', 'match_field' => 'catalog_no', 'match_type' => 'any', 'pattern' => '', 'discount_percent' => 43]],
+        ])->assertOk()->assertJsonPath('rules.0.discount_percent', 43)->assertJsonPath('mode', 'catalog');
+
+        // Protekt (cena zakupu z katalogowej) nadal przyjmuje 100%
+        $this->putJson("/api/b2b-accounts/{$this->account->id}/discount-rules", [
+            'rules' => [['name' => 'Gratis', 'match_field' => 'catalog_no', 'match_type' => 'any', 'pattern' => '', 'discount_percent' => 100]],
+        ])->assertOk();
+    }
+
     public function test_licznik_trafien_przezywa_zmiane_nazwy_i_kolejnosci(): void
     {
         // Po zmianie nazwy reguły panel ma dalej pokazywać, ile kart ona łapie — inaczej wyglądałoby to

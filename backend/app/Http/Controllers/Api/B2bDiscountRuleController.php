@@ -22,7 +22,8 @@ use Throwable;
 /**
  * Rabaty konta B2B. Dla witryn z samą ceną katalogową (protekt.pl) reguły dają cenę zakupu; dla łączników
  * z cennikiem bazowym (UVEX, B2bStandardDiscountSite) to rabat standardowy, od którego zależy wykrycie ceny
- * specjalnej. Cała lista zapisywana jednym żądaniem — kolejność reguł jest ich znaczeniem, więc zapis
+ * specjalnej; dla sklepów z samą ceną konta (VM Footwear, B2bCatalogFromPurchaseSite) — rabat od ceny katalogowej,
+ * z którego synchronizacja liczy katalogową. Cała lista zapisywana jednym żądaniem — kolejność reguł jest ich znaczeniem, więc zapis
  * pojedynczego wiersza wymagałby i tak przenumerowania reszty.
  */
 class B2bDiscountRuleController extends Controller
@@ -61,6 +62,18 @@ class B2bDiscountRuleController extends Controller
                         .'wpisz wzorzec albo wybierz dopasowanie „wszystko”.',
                     'errors' => ['rules.'.$index.'.pattern' => ['Podaj wzorzec.']],
                 ], 422);
+            }
+        }
+
+        // Rabat od ceny katalogowej (VM Footwear): katalogowa = zakup ÷ (1 − rabat) — przy 100% dzielenie przez zero
+        if ($this->connectors->discountRulesMode($this->connectors->keyForAccount($b2bAccount)) === B2bConnectorRegistry::DISCOUNT_RULES_CATALOG) {
+            foreach ($rules as $index => $rule) {
+                if ((float) $rule['discount_percent'] >= 100) {
+                    return response()->json([
+                        'message' => 'Reguła „'.$rule['name'].'”: rabat od ceny katalogowej musi być mniejszy niż 100%.',
+                        'errors' => ['rules.'.$index.'.discount_percent' => ['Podaj rabat mniejszy niż 100%.']],
+                    ], 422);
+                }
             }
         }
 

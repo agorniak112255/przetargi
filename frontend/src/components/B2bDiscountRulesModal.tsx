@@ -16,8 +16,11 @@ type Rule = {
   last_matched_at: string | null
 }
 
-/** price = reguły dają cenę zakupu (protekt.pl); standard = rabat standardowy do wykrywania ceny specjalnej B2B (UVEX). */
-type RulesMode = 'price' | 'standard'
+/**
+ * price = reguły dają cenę zakupu (protekt.pl); standard = rabat standardowy do wykrywania ceny specjalnej B2B (UVEX);
+ * catalog = rabat od ceny katalogowej, z którego liczymy katalogową ze swojej ceny zakupu (VM Footwear).
+ */
+type RulesMode = 'price' | 'standard' | 'catalog'
 
 /** Arkusz cennika bazowego widziany na kartach konta — podpowiedź wzorca, żeby nie zgadywać nazwy. */
 type BaseCategory = { name: string; product_count: number }
@@ -86,6 +89,7 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
   const [sheetsState, setSheetsState] = useState<'idle' | 'loading' | 'done'>('idle')
   const [sheetsNote, setSheetsNote] = useState('')
   const standard = mode === 'standard'
+  const catalog = mode === 'catalog'
   const datalistId = `b2b-base-categories-${account.id}`
 
   const fillDefaults = (list: DefaultRule[]) => {
@@ -221,7 +225,12 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-slate-900">
-              {standard ? 'Rabaty standardowe dostawcy' : 'Rabaty na grupy asortymentowe'} —{' '}
+              {standard
+                ? 'Rabaty standardowe dostawcy'
+                : catalog
+                  ? 'Rabat od ceny katalogowej'
+                  : 'Rabaty na grupy asortymentowe'}{' '}
+              —{' '}
               {account.connector_label ?? 'importer B2B'}
             </p>
             <p className="truncate text-xs text-slate-500">
@@ -258,6 +267,19 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                     <b className="text-emerald-800">cena specjalna B2B</b>. To wniosek z porównania — potwierdzenie
                     ceny specjalnej dostawca wysyła mailem. Cena zakupu karty zostaje ceną konta, reguły jej nie
                     zmieniają. Karta bez pasującej reguły jest zapisywana, tylko bez oceny ceny.
+                  </p>
+                </div>
+              ) : catalog ? (
+                <div className="mb-3 space-y-1 rounded bg-slate-50 px-3 py-2 text-slate-600">
+                  <p>
+                    Sklep podaje tylko <b>naszą cenę zakupu</b>. Cenę katalogową liczymy z rabatu z tej listy:{' '}
+                    <b>cena katalogowa = cena zakupu ÷ (1 − rabat)</b>. Przykład: zakup 289,80 zł przy rabacie 43% →
+                    katalogowa 508,42 zł (508,42 zł − 43% = 289,80 zł).
+                  </p>
+                  <p>
+                    Cena zakupu się nie zmienia. Karta bez pasującej reguły ma katalogową równą cenie zakupu, jak
+                    dotąd. Jeden rabat dla całego cennika = jedna reguła „wszystko”. Nowe ceny katalogowe pojawią się
+                    po następnym pobraniu cennika.
                   </p>
                 </div>
               ) : (
@@ -351,9 +373,15 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                     <th className="w-40 px-2">Wzorzec</th>
                     <th
                       className={`${standard ? 'w-24' : 'w-20'} px-2 text-right`}
-                      title={standard ? 'Rabat standardowy od ceny z cennika bazowego' : undefined}
+                      title={
+                        standard
+                          ? 'Rabat standardowy od ceny z cennika bazowego'
+                          : catalog
+                            ? 'Rabat od ceny katalogowej — z niego liczymy katalogową'
+                            : undefined
+                      }
                     >
-                      {standard ? 'Rabat std. %' : 'Upust %'}
+                      {standard ? 'Rabat std. %' : catalog ? 'Rabat %' : 'Upust %'}
                     </th>
                     <th className="w-24 px-2 text-right">Kart</th>
                     <th className="w-16" />
@@ -422,7 +450,7 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                         <input
                           type="number"
                           min={0}
-                          max={100}
+                          max={catalog ? 99.99 : 100}
                           step="0.01"
                           className="w-full rounded border border-slate-300 px-2 py-1 text-right"
                           value={rule.discount_percent}
@@ -488,7 +516,9 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                       <td colSpan={8} className="px-2 py-3 text-slate-500">
                         {standard
                           ? 'Brak reguł. Dopóki ich nie dodasz, karty tego konta nie mają oceny ceny specjalnej B2B.'
-                          : 'Brak reguł. Dopóki ich nie dodasz, pobieranie cennika pominie wszystkie karty.'}
+                          : catalog
+                            ? 'Brak reguł — cena katalogowa = cena zakupu. Kliknij „Dodaj regułę”, aby ustawić rabat dla całego cennika.'
+                            : 'Brak reguł. Dopóki ich nie dodasz, pobieranie cennika pominie wszystkie karty.'}
                       </td>
                     </tr>
                   )}
@@ -506,7 +536,12 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
               onClick={() => {
                 setRules([
                   ...rules,
-                  standard ? { ...EMPTY_RULE, match_field: 'category', match_type: 'equals' } : { ...EMPTY_RULE },
+                  standard
+                    ? { ...EMPTY_RULE, match_field: 'category', match_type: 'equals' }
+                    : catalog && rules.length === 0
+                      ? // jeden rabat na cały cennik to najczęstszy przypadek — reguła „wszystko” od razu
+                        { ...EMPTY_RULE, name: 'Wszystkie produkty', match_type: 'any' }
+                      : { ...EMPTY_RULE },
                 ])
                 setMsg('')
               }}

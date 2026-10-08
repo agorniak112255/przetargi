@@ -14,6 +14,7 @@ use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
+use App\Services\B2b\B2bDiscountRuleResolver;
 use App\Services\B2b\B2bDocumentSource;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bImageGallery;
@@ -346,6 +347,7 @@ final class VmFootwearConnectorTest extends TestCase
         $this->assertSame('VM Footwear', $registry->label('vmfootwear'));
         $this->assertTrue($registry->requiresPassword('vmfootwear'));
         $this->assertTrue($registry->isManufacturerSite('vmfootwear'));
+        $this->assertSame('catalog', $registry->discountRulesMode('vmfootwear'));
         $this->assertSame(['brand' => 'VM Footwear', 'names' => ['Normą']], $registry->shopFieldNormSource('vmfootwear'));
 
         $account = B2bAccount::query()->create([
@@ -539,6 +541,71 @@ final class VmFootwearConnectorTest extends TestCase
 
         $this->assertSame([], $pauses, 'za duży plik nie jest ponawiany');
         $this->assertCount(2, $this->shareDownloads);
+    }
+
+    public function test_catalog_price_comes_from_the_account_discount_and_a_second_run_changes_nothing(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addShoe();
+        $this->fakeSite();
+        // właściciel 08.10.2026: „Cena katalogowa − 43% = nasza cena zakupu”
+        $this->account()->discountRules()->create([
+            'position' => 0, 'name' => 'Wszystkie produkty', 'match_field' => 'catalog_no', 'match_type' => 'any', 'pattern' => '', 'discount_percent' => 43,
+        ]);
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(1, $result['created'], implode(' | ', $result['errors']));
+        $card = Product::query()->where('sku', '9100-O6')->sole();
+        $slot = ProductSourcePrice::query()->where('product_id', $card->id)->sole();
+        $this->assertSame('207.92', (string) $slot->purchase_price, 'cena zakupu zostaje ceną konta');
+        // 207,92 ÷ 0,57 = 364,77 (364,77 − 43% = 207,92)
+        $this->assertSame('364.77', (string) $slot->catalog_price_net);
+        $this->assertEquals(43, (float) $slot->discount_percent);
+        $this->assertSame(1, (int) $this->account()->discountRules()->value('last_matched_count'));
+
+        $before = $this->snapshot();
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(1, $second['unchanged'], implode(' | ', $second['errors']));
+        $this->assertSame($before, $this->snapshot());
+    }
+
+    public function test_card_without_a_matching_rule_keeps_the_account_price_as_catalog_and_is_listed(): void
+    {
+        $this->addShoe();
+        $this->addSocks();
+        $this->fakeSite();
+        $account = $this->account();
+        $account->discountRules()->create([
+            'position' => 0, 'name' => 'Obuwie 9100', 'match_field' => 'catalog_no', 'match_type' => 'prefix', 'pattern' => '9100', 'discount_percent' => 43,
+        ]);
+        $connector = new VmFootwearB2bConnector($this->client(), null, new B2bDiscountRuleResolver((int) $account->id));
+        $connector->login();
+
+        $products = collect(iterator_to_array($connector->products(), false))->keyBy('sku');
+
+        $shoe = $connector->price($products['9100-O6']);
+        $this->assertSame([207.92, 364.77, 43.0], [$shoe->net, $shoe->base, $shoe->discountPercent]);
+        $socks = $connector->price($products['8800']);
+        $this->assertSame([17.67, null, 0.0], [$socks->net, $socks->base, $socks->discountPercent]);
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringContainsString('Cena katalogowa z rabatu konta: 1 kart', $summary);
+        $this->assertStringContainsString('Bez pasującej reguły rabatu (katalogowa = cena zakupu): 1, np. 8800', $summary);
+    }
+
+    public function test_account_without_rules_keeps_catalog_equal_to_the_account_price(): void
+    {
+        $this->addShoe();
+        $this->fakeSite();
+        $connector = new VmFootwearB2bConnector($this->client(), null, new B2bDiscountRuleResolver((int) $this->account()->id));
+        $connector->login();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertNull($connector->price($products[0])->base);
+        $this->assertStringContainsString('Konto bez reguł rabatu — cena katalogowa = cena zakupu', implode("\n", $connector->runSummary()));
     }
 
     // ---- pomocnicze ----
