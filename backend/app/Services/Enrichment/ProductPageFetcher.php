@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use App\Support\ImageUrlBlocklist;
 use App\Support\NormCode;
 use App\Support\ProductAccessoryExtractor;
 use App\Support\ProductDescriptionText;
@@ -31,6 +32,9 @@ final class ProductPageFetcher
     private bool $bypassCache = false;
 
     private ?Product $matchingProduct = null;
+
+    /** Profil producenta karty z fetch() — wzorce grafik reklamowych witryny (ImageUrlBlocklist); null bez karty. */
+    private ?ManufacturerProfile $matchingProfile = null;
 
     /** @var list<array{url: string, reason: string}> */
     private array $rejections = [];
@@ -92,9 +96,12 @@ final class ProductPageFetcher
         ?Product $product = null,
     ): array {
         $previous = $this->matchingProduct;
+        $previousProfile = $this->matchingProfile;
         $previousRejections = $this->rejections;
         $previousLabels = $this->documentLabels;
         $this->matchingProduct = $product;
+        // jak ProductEnrichmentService::profiles() — przez kontener, konstruktor bez zmian
+        $this->matchingProfile = $product !== null ? app(ManufacturerProfiles::class)->for($product) : null;
         $this->rejections = [];
         $this->documentLabels = [];
         try {
@@ -109,6 +116,7 @@ final class ProductPageFetcher
             return $out;
         } finally {
             $this->matchingProduct = $previous;
+            $this->matchingProfile = $previousProfile;
             $this->rejections = $previousRejections;
             $this->documentLabels = $previousLabels;
         }
@@ -567,7 +575,9 @@ final class ProductPageFetcher
         foreach ($ranked as $row) {
             $u = (string) ($row['url'] ?? '');
             if (ProductImageDownloader::looksLikeImageUrl($u)) {
-                $images[] = $u;
+                if (ImageUrlBlocklist::blocked($u, $this->matchingProfile) === null) {
+                    $images[] = $u;
+                }
 
                 continue;
             }
@@ -811,7 +821,8 @@ final class ProductPageFetcher
             }
         }
         foreach ($confirmed === false ? [] : $viaReader['image_urls'] as $img) {
-            if (! is_string($img) || $img === '' || ! $this->imageAllowedForProduct($img)) {
+            if (! is_string($img) || $img === '' || ! $this->imageAllowedForProduct($img)
+                || ImageUrlBlocklist::blocked($img, $this->matchingProfile) !== null) {
                 continue;
             }
             $img = ProductImageDownloader::preferFullSizeUrl($img);
@@ -2635,6 +2646,10 @@ final class ProductPageFetcher
     private function isJunkImageUrl(string $url): bool
     {
         if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url) || ProductImageDownloader::isSiteIdentityGraphicUrl($url)) {
+            return true;
+        }
+        // zaślepki sklepów po członach nazwy i grafiki reklamowe z profilu producenta (coba: StandUpforHealth)
+        if (ImageUrlBlocklist::blocked($url, $this->matchingProfile) !== null) {
             return true;
         }
         $u = mb_strtolower($url);

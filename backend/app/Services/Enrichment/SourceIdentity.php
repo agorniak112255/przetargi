@@ -327,7 +327,10 @@ final class SourceIdentity
     /**
      * SKU i jego zapisy na stronie producenta według profilu marki (Coba): końcówka „-5” = „05” doklejone do kodu
      * („FF0100-5” → „FF010005”, dash_suffix_pad) i litera postaci sprzedaży („CD010610C” na metry → rolka
-     * „CD010610”, variant_suffixes) — tylko po cyfrze, więc „ALURAMP-YE” zostaje sobą.
+     * „CD010610”, variant_suffixes) — tylko po cyfrze, więc „ALURAMP-YE” zostaje sobą. Postaci bez separatorów
+     * („CCLIP-38” → „CCLIP38” ze strony uchwytu coba.com) nie trzeba dokładać: klucz kodu (ProductCodeMatch::key)
+     * i wszystkie porównania w judgePage (adres, tytuł, mikrodane, tekst, nazwy zdjęć) są bez separatorów — taka
+     * postać miałaby ten sam klucz i collectKeys by ją pominęło (produkcja 07.10.2026: „SKU CCLIP-38 w mikrodanych”).
      *
      * @return list<string>
      */

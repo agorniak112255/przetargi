@@ -7,6 +7,7 @@ namespace App\Services\Enrichment;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\ProductImageRejection;
+use App\Support\ImageUrlBlocklist;
 use GuzzleHttp\Exception\TooManyRedirectsException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
@@ -27,15 +28,24 @@ final class ProductImageDownloader
         'image/gif' => 'gif',
     ];
 
-    /**
-     * Odrzuca URL karty produktu (HTML) — wcześniej SKU w ścieżce dawało fałszywy „hit”.
-     */
     /** Najkrótszy bok: pasek 1000x60 to baner, nie zdjęcie. */
     private const MIN_SIDE = 100;
 
-    /** Pole: 150x150 (22 500) to miniatura, 190x417 (79 230) już zdjęcie. */
+    /**
+     * Pole: 150x150 (22 500) to miniatura, 190x417 (79 230) już zdjęcie, a schemat 172x111 (19 092) — miniatura.
+     * Bez progu boku 180 px: kadry wąskich wyrobów (taśmy, listwy, odboje 600x160) to pełne zdjęcia.
+     */
     private const MIN_AREA = 40_000;
 
+    /**
+     * Strona zapory pod nagłówkiem obrazka (Cloudflare, Incapsula) — odmowa chwilowa jak przy text/html, nie trwała.
+     * Szukane małymi literami w początku treści.
+     */
+    private const FIREWALL_MARKERS = ['cf-chl', 'just a moment', 'attention required', '_incapsula_resource', 'challenge-platform'];
+
+    /**
+     * Odrzuca URL karty produktu (HTML) — wcześniej SKU w ścieżce dawało fałszywy „hit”.
+     */
     public static function looksLikeImageUrl(string $url): bool
     {
         if (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://')) {
@@ -139,6 +149,7 @@ final class ProductImageDownloader
         $sort = (int) (ProductImage::query()->where('product_id', $product->id)->max('sort_order') ?? -1) + 1;
         $this->failures = [];
         $this->retryLater = [];
+        $profile = $urls !== [] ? $this->profileFor($product) : null;
 
         foreach (array_values(array_unique($urls)) as $url) {
             if (count($saved) >= $max) {
@@ -149,6 +160,18 @@ final class ProductImageDownloader
             }
             if (ProductImageRejection::blocksUrl((int) $product->id, $url)) {
                 $this->failures[$url] = 'Zdjęcie usunięte wcześniej z tej karty';
+
+                continue;
+            }
+            // grafika witryny (logo, baner, zaślepka) albo reklama producenta z profilu — bez pobierania
+            $blocked = ImageUrlBlocklist::blocked($url, $profile);
+            if ($blocked !== null) {
+                $this->failures[$url] = $blocked;
+                Log::info('Product image download skipped', [
+                    'product_id' => $product->id,
+                    'url' => $url,
+                    'error' => $blocked,
+                ]);
 
                 continue;
             }
@@ -399,6 +422,7 @@ final class ProductImageDownloader
         if ($bytes === '' || $size > self::MAX_BYTES) {
             throw new \RuntimeException('Pusty lub zbyt duży plik');
         }
+        $headerMime = $mime;
         if ($mime === '' || ! isset(self::ALLOWED_MIME[$mime])) {
             $finfo = new \finfo(FILEINFO_MIME_TYPE);
             $mime = strtolower((string) $finfo->buffer($bytes));
@@ -411,7 +435,23 @@ final class ProductImageDownloader
             throw new \RuntimeException('Pominięto mały GIF (loader/spinner)');
         }
         $dim = @getimagesizefromstring($bytes);
-        if (is_array($dim)) {
+        if (! is_array($dim)) {
+            // Nagłówek image/jpeg, a w środku strona „404 Not Found nginx” albo ekran weryfikacji Cloudflare: GD nie
+            // czytał wymiarów i zapis szedł dalej — strona lądowała na karcie jako .jpg (HR Matting 10799/10801/10806,
+            // checkrego 11089; audyt Coby 08.10.2026). Bajty, które wyglądają na obraz, a GD ich nie czyta, zostają
+            // jak dotąd — bez pomiaru. Strona zapory wraca do ponowienia jak przy nagłówku text/html; inna strona
+            // (404 nginx) to trwałe odrzucenie.
+            $reason = self::nonImageContentReason($bytes, $headerMime);
+            if ($reason !== null) {
+                $head = strtolower(substr($bytes, 0, 65_536));
+                foreach (self::FIREWALL_MARKERS as $marker) {
+                    if (str_contains($head, $marker)) {
+                        throw new \RuntimeException('Strona zapory zamiast obrazu ('.$marker.')', self::RETRY_LATER);
+                    }
+                }
+                throw new \RuntimeException($reason);
+            }
+        } else {
             $w = (int) ($dim[0] ?? 0);
             $h = (int) ($dim[1] ?? 0);
             // miniatury WP (-80x80) i placeholdery — za małe na kartę produktu.
@@ -423,6 +463,41 @@ final class ProductImageDownloader
         }
 
         return $this->storeBytes($product, $bytes, $mime, $url, $sortOrder);
+    }
+
+    /**
+     * Treść, która nie jest obrazem mimo nagłówka obrazka: strona HTML („<!DOCTYPE”, „<html”), grafika SVG albo
+     * dokument XML (SVG nie jest przyjmowanym formatem — ALLOWED_MIME), a dalej wszystko, co libmagic rozpoznaje
+     * jako inny typ (JSON, zwykły tekst). Null, gdy bajty wyglądają na obraz.
+     */
+    private static function nonImageContentReason(string $bytes, string $headerMime): ?string
+    {
+        $head = substr($bytes, 0, 512);
+        if (str_starts_with($head, "\xEF\xBB\xBF")) {
+            $head = substr($head, 3);
+        }
+        $head = strtolower(ltrim($head));
+        $header = $headerMime !== '' ? ' (nagłówek '.$headerMime.')' : '';
+        foreach (['<!doctype', '<html', '<head', '<body'] as $tag) {
+            if (str_starts_with($head, $tag)) {
+                return 'To strona HTML, nie obraz'.$header;
+            }
+        }
+        if (str_starts_with($head, '<?xml') || str_starts_with($head, '<svg')) {
+            return (str_contains($head, '<svg') ? 'To grafika SVG, nie zdjęcie' : 'To dokument XML, nie obraz').$header;
+        }
+        $sniffed = strtolower((string) (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes));
+        if (isset(self::ALLOWED_MIME[$sniffed])) {
+            return null;
+        }
+
+        return 'Odpowiedź nie jest obrazem ('.$sniffed.')'.$header;
+    }
+
+    /** Profil producenta karty — jak ProductEnrichmentService::profiles(), przez kontener (konstruktor bez zmian). */
+    private function profileFor(Product $product): ?ManufacturerProfile
+    {
+        return app(ManufacturerProfiles::class)->for($product);
     }
 
     /**

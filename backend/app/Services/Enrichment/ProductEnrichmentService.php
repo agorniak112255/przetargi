@@ -839,7 +839,7 @@ final class ProductEnrichmentService
         // druga pula tego samego przebiegu lidera — nota modelu i sito na rdzeniu nazwy jak w pierwszej
         $extracted = $this->extractWithLlm($product, $cardSources, array_slice($clean, 0, 5), modelContext: $this->modelContext);
         $description = ProductDescriptionText::plain($this->modelDescription($extracted));
-        if (! $this->isUsableProductDescription($description, $this->modelIdentityCard($product), array_column($clean, 'url'))) {
+        if (! $this->isUsableModelDescription($description, $product, array_column($clean, 'url'))) {
             $description = '';
         }
 
@@ -1269,7 +1269,7 @@ final class ProductEnrichmentService
             // Opis wyłącznie od modelu — tekstu strony jako opisu zapasowego nie bierzemy
             // (audyt 22.09.2026: CAPTCHA, cenniki i banery cookies zapisane jako opis).
             $description = ProductDescriptionText::plain($this->modelDescription($extracted));
-            if (! $this->isUsableProductDescription($description, $this->modelIdentityCard($product), array_column($pageSnippets, 'url'))) {
+            if (! $this->isUsableModelDescription($description, $product, array_column($pageSnippets, 'url'))) {
                 $description = '';
             }
 
@@ -1533,6 +1533,25 @@ final class ProductEnrichmentService
                 $descPages,
                 $product
             );
+            // Etap 2b: marka z opisem wspólnym dla modelu i karta z kolorem — zdjęcie lidera dobierane jak u członków:
+            // picker na całej galerii stron opisu (zaufane pierwsze — ta sama lista, co page_image_urls wersji), PRZED
+            // weryfikatorem (pilotaż #499: weryfikator zostawiał tylko og:image w innym kolorze, a reguła koloru je cięła —
+            // lider bez zdjęcia, gdy członkowie dostawali plik w swoim kolorze). Adres w kolorze karty idzie jako pierwszy
+            // kandydat bez weryfikatora; galeria tylko w innych kolorach — bez nowego zdjęcia i bez szukania na kartach
+            // sklepów (cudzy sklep nie da zdjęcia w kolorze karty); galeria bez kolorów w nazwach — ścieżka jak dotąd.
+            $cardColours = $sharedModel ? $this->cardColours($product) : [];
+            $modelPickUrl = null;
+            $modelOtherColour = false;
+            if ($cardColours !== []) {
+                $pick = $this->imagePicker()->pickFor($product, $cardColours, $this->galleryFromCards($fromCards), [], $this->modelKeys()->for($product)?->stem);
+                if ($pick['url'] !== null) {
+                    $modelPickUrl = $pick['url'];
+                    $this->attemptLog()->add('image', $pick['reason'].' — pierwszy kandydat', urls: [$pick['url']]);
+                } elseif ($pick['reason'] === ModelImagePicker::REASON_PAGE_OTHER_COLOUR) {
+                    $modelOtherColour = true;
+                    $this->attemptLog()->add('image', 'zdjęcia strony w innym kolorze — bez nowego');
+                }
+            }
             // Zdjęcie bez kodu/modelu w adresie nie jest niczym potwierdzone — „og:image”
             // sklepu bywa logo, budynkiem firmy albo zupełnie innym wyrobem (kurtka przy
             // płatku zaworu). Takie kandydatury ogląda model; przechodzą bez oglądania
@@ -1550,6 +1569,10 @@ final class ProductEnrichmentService
                 );
             }
             $imageUrls = array_values(array_unique($imageUrls));
+            if ($modelPickUrl !== null) {
+                // adres w kolorze karty bez weryfikatora — jak u członków modelu
+                $imageUrls = array_values(array_unique([$modelPickUrl, ...$imageUrls]));
+            }
 
             // Wartości, które ten przebieg zapisał na karcie przed decyzją o wersji — propozycja cofa tylko je
             // (i tylko gdy nikt ich w międzyczasie nie zmienił: synchronizacja B2B, handlowiec).
@@ -1608,6 +1631,12 @@ final class ProductEnrichmentService
                 (string) $product->name,
                 $product,
             );
+            if ($modelPickUrl !== null) {
+                // adres w kolorze karty pierwszy bez względu na punktację (jak u członków)
+                $primaryImageUrls = array_values(array_unique([$modelPickUrl, ...$primaryImageUrls]));
+            } elseif ($modelOtherColour) {
+                $primaryImageUrls = [];
+            }
             Log::info('Product image candidates prepared', [
                 'product_id' => $product->id,
                 'sku' => $product->sku,
@@ -1621,9 +1650,13 @@ final class ProductEnrichmentService
             // zdjęcie z innej karty (tryImagesFromOtherCards) nie pochodzi z żadnej strony opisu — rola „image” w źródłach
             $imagesFromOtherCards = false;
             $imageFailure = $this->imageFailureSummary($primaryImageUrls);
+            if ($imageFailure === '' && $modelOtherColour) {
+                $imageFailure = 'zdjęcia strony w innym kolorze';
+            }
             // przed tryImagesFromOtherCards — kolejne downloadMany czyści listę
             $imageRetryUrls = $this->images->lastRetryLaterUrls();
-            if ($savedImages === []) {
+            // galeria strony tylko w innych kolorach: karty sklepów nie dadzą zdjęcia w kolorze karty — bez szukania
+            if ($savedImages === [] && ! $modelOtherColour) {
                 // Świadomie także przy marce „tylko producent”: zdjęcie z potwierdzonej karty sklepu (bez outletu —
                 // blocked_source_hosts) jest lepsze niż karta bez zdjęcia; opis i listy zostają z producenta.
                 if ($manufacturerOnly) {
@@ -1746,8 +1779,18 @@ final class ProductEnrichmentService
             // Tylko na karcie: pamięć SKU (storeSkuCache) dostaje $payload bez tego klucza.
             // bez nowego zdjęcia poprzednie zostaje (dropPreviousWebFiles) — komunikat nie może mówić o karcie bez zdjęcia,
             // a ponawianie (products:retry-images bierze tylko karty bez zdjęć) nie ma czego ponawiać
-            $keptPreviousImages = $savedImages === [] && $previousWebFiles !== null && $previousWebFiles['images'] !== [];
+            // Etap 2b (decyzja właściciela 08.10.2026): przy pełnym pobraniu (force) bez nowego zdjęcia stare zdjęcia
+            // z internetu o kolorach rozłącznych z kolorami karty (nazwa pliku) są usuwane — po zapisie opisu, tu tylko
+            // lista, żeby ślad i komunikat karty mówiły prawdę; zdjęcia bez koloru w nazwie zostają (nie wiemy, jakie są)
+            $staleColourImages = $savedImages === [] && $previousWebFiles !== null
+                ? $this->imagesInOtherColour($product, $cardColours, $previousWebFiles['images'])
+                : [];
+            $keptPreviousImages = $savedImages === [] && $previousWebFiles !== null
+                && array_diff($previousWebFiles['images'], array_keys($staleColourImages)) !== [];
             $retryImages = $cachedImageUrls === [] && $imageRetryUrls !== [] && ! $keptPreviousImages;
+            if ($staleColourImages !== []) {
+                $this->attemptLog()->add('image', self::staleColourNote($staleColourImages), urls: array_values($staleColourImages));
+            }
             if ($keptPreviousImages) {
                 $this->attemptLog()->add('image', 'nowego zdjęcia brak — zostaje poprzednie zdjęcie karty');
             }
@@ -1806,7 +1849,9 @@ final class ProductEnrichmentService
                 'enrichment_status' => Product::ENRICHMENT_DONE,
                 'enriched_at' => now(),
                 'enrichment_error' => $cachedImageUrls === []
-                    ? ($keptPreviousImages ? 'Opis OK, nowego zdjęcia nie udało się pobrać — zostaje poprzednie' : 'Opis OK, nie udało się pobrać zdjęcia')
+                    ? ($staleColourImages !== []
+                        ? 'Opis OK, zdjęcie w innym kolorze usunięte, nowego brak'
+                        : ($keptPreviousImages ? 'Opis OK, nowego zdjęcia nie udało się pobrać — zostaje poprzednie' : 'Opis OK, nie udało się pobrać zdjęcia'))
                         .($imageFailure !== '' ? ' ('.$imageFailure.')' : ' (karty nie miały zdjęcia produktu)').'.'
                         .($retryImages ? ProductImageRetry::ERROR_NOTE : '')
                     : null,
@@ -1822,6 +1867,8 @@ final class ProductEnrichmentService
             // odrzuconej) zostaje propozycją, a karta wraca do stanu sprzed przebiegu.
             $version = $this->publishDescription($product, ProductDescriptionVersion::ORIGIN_ENRICHMENT, $candidate, $versionData, $saved, $before, runWrites: $runWrites);
             if ($version === null) {
+                // nic nie znika przy propozycji — ślad wersji nie może mówić o usuniętym zdjęciu
+                $versionData['enrichment_trace'] = self::traceWithStaleColourKept($versionData['enrichment_trace'], $staleColourImages);
                 $this->keepAsProposal($product, $before, $batchId, $versionData, $this->lastRunDecision, $runWrites, $identity, $sourcePages, $primarySourceUrl, $primarySourceKind);
                 $timing['docs_ms'] = $this->elapsedMs($t);
                 $this->logEnrichmentTiming($timing, $started, extra: ['proposal' => true]);
@@ -1831,6 +1878,9 @@ final class ProductEnrichmentService
             // Nowy opis zapisany — stare zdjęcia i dokumenty z internetu ustępują; te, które przebieg pobrał ponownie
             // (ten sam plik — downloader oddaje istniejący wiersz), zostają.
             $this->dropPreviousWebFiles($product, $previousWebFiles, $savedImages, $savedDocs);
+            if ($staleColourImages !== []) {
+                $this->clearProductImages($product, array_keys($staleColourImages));
+            }
             // od tej chwili pliki należą do nowego opisu — błąd dalszych kroków nie może ich cofać (catch)
             $previousWebFiles = null;
             $this->refineCategoryFromDescription($product, $description);
@@ -1947,6 +1997,24 @@ final class ProductEnrichmentService
      * niesie wymiary („Rib Mat Czarny 0.9m x 15.3m (12.5mm)”), których opis modelu celowo nie powtarza. Bez noty
      * modelu — karta bez zmian.
      */
+    /**
+     * Sito opisu w przebiegu lidera modelu: wystarczy, że opis przejdzie na rdzeniu nazwy ALBO na pełnej nazwie karty.
+     * Sam rdzeń gubi wymiar, który rozstrzyga typ wyrobu — pilotaż 08.10.2026 (partia #499): „CCLIP-38” z rdzeniem
+     * „Akcesoria Krata GRP Uchwyt typu C” (bez „38mm”) czytany jako rozmiar buta 38 → wymagany typ „obuwie” → poprawny
+     * opis uchwytu odrzucony, karta „ręcznie”; sama pełna nazwa odrzucała z kolei opisy mat Coby przez wymiary.
+     *
+     * @param  list<string>  $sourceUrls
+     */
+    private function isUsableModelDescription(string $description, Product $product, array $sourceUrls): bool
+    {
+        $card = $this->modelIdentityCard($product);
+        if ($this->isUsableProductDescription($description, $card, $sourceUrls)) {
+            return true;
+        }
+
+        return $card !== $product && $this->isUsableProductDescription($description, $product, $sourceUrls);
+    }
+
     private function modelIdentityCard(Product $product): Product
     {
         $stem = trim((string) ($this->modelContext['stem'] ?? ''));
@@ -2018,23 +2086,137 @@ final class ProductEnrichmentService
      */
     private function pageImageUrls(array $descPages): array
     {
-        $out = [];
+        $urls = [];
         foreach (['trusted_image_urls', 'image_urls'] as $field) {
             foreach ($descPages as $page) {
                 foreach ((array) ($page[$field] ?? []) as $url) {
-                    if (! is_string($url) || ! str_starts_with($url, 'http') || isset($out[$url])
-                        || $this->isJunkImageUrl($url) || ! ProductImageDownloader::looksLikeImageUrl($url)) {
-                        continue;
-                    }
-                    $out[$url] = true;
-                    if (count($out) >= DescriptionVersionStore::PAGE_IMAGE_URLS_MAX) {
-                        return array_keys($out);
-                    }
+                    $urls[] = $url;
                 }
             }
         }
 
+        return $this->cleanImageUrls($urls);
+    }
+
+    /**
+     * Galeria stron opisu dla pickera zdjęcia lidera (etap 2b): zaufane adresy pierwsze, potem reszta — ta sama
+     * kolejność i ten sam filtr, co page_image_urls wersji.
+     *
+     * @param  array{all?: list<mixed>, trusted?: list<mixed>}  $fromCards
+     * @return list<string>
+     */
+    private function galleryFromCards(array $fromCards): array
+    {
+        return $this->cleanImageUrls([...(array) ($fromCards['trusted'] ?? []), ...(array) ($fromCards['all'] ?? [])]);
+    }
+
+    /**
+     * Adresy zdjęć bez powtórzeń, śmieci (isJunkImageUrl) i adresów niebędących plikiem obrazka, w podanej kolejności,
+     * najwyżej PAGE_IMAGE_URLS_MAX.
+     *
+     * @param  list<mixed>  $urls
+     * @return list<string>
+     */
+    private function cleanImageUrls(array $urls): array
+    {
+        $out = [];
+        foreach ($urls as $url) {
+            if (! is_string($url) || ! str_starts_with($url, 'http') || isset($out[$url])
+                || $this->isJunkImageUrl($url) || ! ProductImageDownloader::looksLikeImageUrl($url)) {
+                continue;
+            }
+            $out[$url] = true;
+            if (count($out) >= DescriptionVersionStore::PAGE_IMAGE_URLS_MAX) {
+                break;
+            }
+        }
+
         return array_keys($out);
+    }
+
+    /**
+     * Kolory karty (zbiór kanoniczny, np. „grey”) dla marki z opisem wspólnym dla modelu: z faktów z cennika
+     * (PriceListCardFacts — kolumna „kolor” albo nazwa), zapasowo wprost z nazwy; [] = karta bez koloru.
+     *
+     * @return list<string>
+     */
+    private function cardColours(Product $product): array
+    {
+        $facts = $this->cardFacts()->for($product);
+        $colours = is_array($facts['colours'] ?? null) ? array_values(array_filter($facts['colours'], 'is_string')) : [];
+
+        return $colours !== [] ? $colours : ColourWords::allInName((string) $product->name);
+    }
+
+    /**
+     * Zdjęcia z internetu karty (bez plików z panelu B2B, z adresem źródła) spośród podanych, których nazwa pliku mówi
+     * o kolorach rozłącznych z kolorami karty — id => adres (etap 2b, decyzja właściciela 08.10.2026: takie zdjęcie przy
+     * pełnym pobraniu bez zamiennika jest usuwane). Zdjęcie bez koloru w nazwie pliku zostaje — nie wiemy, co
+     * przedstawia; zdjęcia ręczne (bez adresu) i z B2B nietknięte.
+     *
+     * @param  list<string>  $colours  kolory karty; [] = bez reguły
+     * @param  list<int>  $onlyIds  zdjęcia sprzed przebiegu (webFileIds)
+     * @return array<int, string>
+     */
+    private function imagesInOtherColour(Product $product, array $colours, array $onlyIds): array
+    {
+        if ($colours === [] || $onlyIds === []) {
+            return [];
+        }
+        $out = [];
+        $images = ProductImage::query()
+            ->where('product_id', $product->id)
+            ->whereNull('b2b_account_id')
+            ->whereNotNull('source_url')
+            ->whereIntegerInRaw('id', $onlyIds)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'source_url']);
+        foreach ($images as $image) {
+            $fileColours = ColourWords::allInUrl((string) $image->source_url);
+            if ($fileColours !== [] && array_intersect($fileColours, $colours) === []) {
+                $out[(int) $image->id] = (string) $image->source_url;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Krok śladu o usunięciu zdjęć w innym kolorze — nazwy plików.
+     *
+     * @param  array<int, string>  $staleColourImages  id => adres
+     */
+    private static function staleColourNote(array $staleColourImages): string
+    {
+        $names = array_map(
+            static fn (string $url): string => rawurldecode(basename((string) (parse_url($url, PHP_URL_PATH) ?? $url))),
+            array_values($staleColourImages),
+        );
+
+        return 'zdjęcie w innym kolorze usunięte: '.implode(', ', $names).' — nowego brak';
+    }
+
+    /**
+     * Ślad przebiegu dla propozycji: krok o usunięciu zdjęcia w innym kolorze (staleColourNote) zastąpiony informacją,
+     * że zdjęcie zostaje — przy propozycji karta wraca do stanu sprzed przebiegu i nic nie jest usuwane.
+     *
+     * @param  mixed  $trace  EnrichmentAttemptLog::snapshot
+     * @param  array<int, string>  $staleColourImages  id => adres
+     */
+    private static function traceWithStaleColourKept(mixed $trace, array $staleColourImages): mixed
+    {
+        if ($staleColourImages === [] || ! is_array($trace) || ! is_array($trace['steps'] ?? null)) {
+            return $trace;
+        }
+        $note = self::staleColourNote($staleColourImages);
+        foreach ($trace['steps'] as $i => $step) {
+            if (is_array($step) && ($step['m'] ?? null) === $note) {
+                $trace['steps'][$i]['m'] = 'zdjęcie w innym kolorze zostaje — opis czeka w przeglądzie';
+            }
+        }
+
+        return $trace;
     }
 
     /** Ranga werdyktu tożsamości (hard > soft > none > brak) — zapasowy werdykt karty członka modelu. */
@@ -2311,6 +2493,11 @@ final class ProductEnrichmentService
                 $runWrites['norms'] = $member->norms;
             }
 
+            // kolory karty jako zbiór (karta dwubarwna to inny kolor niż jednobarwna) — do doboru zdjęcia i do usuwania
+            // zdjęć w sprzecznym kolorze
+            $memberColours = is_array($facts['colours'] ?? null)
+                ? array_values(array_filter($facts['colours'], 'is_string'))
+                : (($facts['colour'] ?? null) !== null ? [(string) $facts['colour']] : []);
             // zdjęcie w kolorze karty: adres z galerii stron lidera do pobrania albo kopia pliku lidera bez sieci
             if ($leaderProposal) {
                 $pick = ['url' => null, 'copy_of' => null, 'reason' => 'lider skończył propozycją — bez plików z jego karty'];
@@ -2324,10 +2511,7 @@ final class ProductEnrichmentService
                     ->orderBy('id')
                     ->get()
                     ->all();
-                // kolory karty jako zbiór (karta dwubarwna to inny kolor niż jednobarwna); rdzeń modelu do nazwy pliku
-                $memberColours = is_array($facts['colours'] ?? null)
-                    ? array_values(array_filter($facts['colours'], 'is_string'))
-                    : (($facts['colour'] ?? null) !== null ? [(string) $facts['colour']] : []);
+                // rdzeń modelu do nazwy pliku galerii
                 $pick = $this->imagePicker()->pickFor($member, $memberColours, $pageImageUrls, $leaderImages, $memberKey?->stem);
             }
             $savedImages = [];
@@ -2337,6 +2521,16 @@ final class ProductEnrichmentService
                 if ($savedImages === []) {
                     $failure = $this->imageFailureSummary([$pick['url']]);
                     $imageNote .= ' — nie pobrano'.($failure !== '' ? ' ('.$failure.')' : '');
+                    // adres z galerii nie pobrał się — kopia zdjęcia lidera z tą samą regułą kolorów (pickFor bez galerii:
+                    // lider bez koloru albo z tym samym zbiorem kolorów; inaczej nic)
+                    $fallback = $this->imagePicker()->pickFor($member, $memberColours, [], $leaderImages ?? [], $memberKey?->stem);
+                    if ($fallback['copy_of'] !== null) {
+                        $copy = $this->copier()->copyImage($leader, $fallback['copy_of'], $member);
+                        if ($copy !== null) {
+                            $savedImages = [$copy];
+                            $imageNote = 'adres z galerii nie pobrał się — kopia zdjęcia lidera';
+                        }
+                    }
                 }
             } elseif ($pick['copy_of'] !== null) {
                 $copy = $this->copier()->copyImage($leader, $pick['copy_of'], $member);
@@ -2398,7 +2592,16 @@ final class ProductEnrichmentService
                 }
             }
 
-            $keptPreviousImages = $savedImages === [] && $previousWebFiles !== null && $previousWebFiles['images'] !== [];
+            // Etap 2b: przy partii z force bez nowego zdjęcia stare zdjęcia z internetu w kolorach rozłącznych z kolorami
+            // karty są usuwane po zapisie opisu (lista teraz — ślad i komunikat mówią prawdę; przy propozycji nic nie znika)
+            $staleColourImages = $savedImages === [] && $previousWebFiles !== null
+                ? $this->imagesInOtherColour($member, $memberColours, $previousWebFiles['images'])
+                : [];
+            $keptPreviousImages = $savedImages === [] && $previousWebFiles !== null
+                && array_diff($previousWebFiles['images'], array_keys($staleColourImages)) !== [];
+            if ($staleColourImages !== []) {
+                $this->attemptLog()->add('image', self::staleColourNote($staleColourImages), urls: array_values($staleColourImages));
+            }
             if ($keptPreviousImages) {
                 $this->attemptLog()->add('image', 'nowego zdjęcia brak — zostaje poprzednie zdjęcie karty');
             }
@@ -2423,7 +2626,9 @@ final class ProductEnrichmentService
                 'enrichment_status' => Product::ENRICHMENT_DONE,
                 'enriched_at' => now(),
                 'enrichment_error' => $savedImages === []
-                    ? ($keptPreviousImages ? 'Opis OK, nowego zdjęcia nie udało się pobrać — zostaje poprzednie' : 'Opis OK, nie udało się pobrać zdjęcia')
+                    ? ($staleColourImages !== []
+                        ? 'Opis OK, zdjęcie w innym kolorze usunięte, nowego brak'
+                        : ($keptPreviousImages ? 'Opis OK, nowego zdjęcia nie udało się pobrać — zostaje poprzednie' : 'Opis OK, nie udało się pobrać zdjęcia'))
                         .' ('.$imageNote.').'
                     : null,
                 'enrichment_trace' => $trace,
@@ -2435,12 +2640,17 @@ final class ProductEnrichmentService
             // sprzed przebiegu; inaczej zapis z pochodzeniem model_shared
             $version = $this->publishDescription($member, ProductDescriptionVersion::ORIGIN_MODEL_SHARED, $candidate, $versionData, $saved, $before, runWrites: $runWrites);
             if ($version === null) {
+                // nic nie znika przy propozycji — ślad wersji nie może mówić o usuniętym zdjęciu
+                $versionData['enrichment_trace'] = self::traceWithStaleColourKept($versionData['enrichment_trace'], $staleColourImages);
                 $this->keepAsProposal($member, $before, $batchId, $versionData, $this->lastRunDecision, $runWrites, $identity, $pages, $primaryUrl, $primaryKind, ProductDescriptionVersion::ORIGIN_MODEL_SHARED);
 
                 return ApplyModelDescriptionJob::RESULT_PROPOSED;
             }
             $published = true;
             $this->dropPreviousWebFiles($member, $previousWebFiles, $savedImages, $savedDocs);
+            if ($staleColourImages !== []) {
+                $this->clearProductImages($member, array_keys($staleColourImages));
+            }
             ReindexProductEmbeddingJob::dispatch($member->id, true);
             // te same teksty (sha256) co u lidera, wiersze per karta z werdyktem członka
             $this->recordSourceDocuments($member, $pages, $identity, $primaryUrl, $primaryKind, [], (int) $version->id);
@@ -3855,7 +4065,8 @@ final class ProductEnrichmentService
         // czarny, a nazwy plików galerii niosą kolor). U innych marek nazwa pliku bywa „glove-on-white-background”,
         // „navy-yellow” przy karcie żółto-granatowej — kara zostawiała kartę bez zdjęcia (Portwest/Mascot/JHK). Zbiory:
         // karta dwubarwna to inny kolor niż jednobarwna. Nazwa bez koloru — bez tej reguły.
-        $cardColours = $product !== null && $this->sharesModelDescription($product) ? ColourWords::allInName($name) : [];
+        // te same kolory karty co picker i usuwanie zdjęć (fakty z cennika, zapasowo nazwa)
+        $cardColours = $product !== null && $this->sharesModelDescription($product) ? $this->cardColours($product) : [];
 
         $push = static function (string $url, int $bonus) use (&$scored): void {
             $scored[$url] = max($scored[$url] ?? 0, $bonus);
@@ -3956,8 +4167,9 @@ final class ProductEnrichmentService
                 if (ColourWords::sameSet($fileColours, $cardColours)) {
                     $score += 30;
                 } elseif ($fileColours !== [] && array_intersect($fileColours, $cardColours) === []) {
-                    // plik mówi o kolorach i żaden nie jest kolorem karty — inny wariant
-                    $score -= 50;
+                    // plik mówi o kolorach i żaden nie jest kolorem karty — inny wariant, odpada (etap 2b: −50 nie
+                    // odrzucało — lider szarego Orthomatu pobrał „black-1.jpg”)
+                    continue;
                 }
             }
             if ($score >= 20) {

@@ -238,3 +238,30 @@ ucięty do 160 znaków; członek bez koloru w nazwie kopiuje zdjęcie lidera mim
 `previousPublished` przy tej samej treści cofa się dalej; `CompareCardsCommand` tylko średnik i dopasowanie po numerze
 karty; `ProductWebFileCopier` zostawia plik bez wiersza przy wyjątku `create()`; pominięty członek nie ponawia
 nieudanego pobrania zdjęcia; `PriceListFileSources::modelCount` bez skrótu dla marek bez grupowania.
+
+## 7. Etap 2b — poprawki po pilotażu (08.10.2026, partia #499: 52 karty, 5 modeli, 0 błędów)
+Wynik pilotażu: 49/50 opisanych kart z twardym werdyktem, 0 w przeglądzie, opis identyczny w modelu, CCLIP25 ze strony
+uchwytu, zielone i szare kraty ze zdjęciem w kolorze. Wady: (1) CCLIP-38/-50 „ręcznie” — strona pisze „CCLIP38”,
+program szuka „CCLIP-38”; (2) lider zielonej kraty bez zielonego zdjęcia (weryfikator zdjęć zostawił tylko og:image
+Gray.jpg; `verified_count: 1`), lider szarego Orthomatu pobrał czarne (−50 nie odrzuca); (3) żółte kraty bez
+„Yellow-1.jpg” (reguła słowa rdzenia w nazwie pliku za ostra dla coba.com). Decyzje właściciela (08.10): zakres A+B+C,
+stare zdjęcie w sprzecznym kolorze bez zamiennika USUWAĆ przy pełnym pobraniu (z force).
+
+- **A — kod z myślnikiem.** `SourceIdentity::skuForms`: dodatkowa postać bez separatorów między literami a cyframi
+  („CCLIP-38” → „CCLIP38”, także spacja/podkreślenie); `ProductModelKey::family()` liczony także na tej postaci
+  (uchwyty 25/38/50 = jeden model „CCLIP”). Testy na tekście prawdziwej strony c-type-cobagrip-grating-accessory.
+- **B — zdjęcie lidera jak u członków.** W `enrichProduct` dla marki z `model.group` i karty z kolorem: najpierw
+  `ModelImagePicker::pickFor` na całej galerii stron opisu (zaufane pierwsze; ta sama lista co `page_image_urls`
+  wersji), PRZED weryfikatorem; adres w kolorze → pierwszy kandydat; „inny kolor” → bez nowego zdjęcia; brak koloru
+  w galerii → dotychczasowa ścieżka, ale kandydat o kolorze rozłącznym z kartą ODPADA (nie −50). Picker: nazwa pliku
+  z samych słów koloru i cyfr („Yellow-1.jpg”, „Gray.jpg”) liczy się jak nazwa ze słowem rdzenia.
+- **C — bramka zdjęć.** `ImageUrlBlocklist` (wzorce ogólne: placeholder/no-image/coming-soon/logo/banner/captcha/
+  cloudflare + `image_url_blocklist` profilu; coba: StandUpforHealth, Modal_Elephant) stosowana przy wyciąganiu zdjęć
+  ze strony (`ProductPageFetcher`) i w `ProductImageDownloader`; downloader odrzuca treść HTML niezależnie od nagłówka
+  (`<!DOCTYPE`, `<html`) i obrazki mniejsze niż 180×180 px.
+- **D — usuwanie złego zdjęcia.** Lider i członek: gdy karta ma kolor, przebieg jest z force i nie znaleziono nowego
+  zdjęcia (picker „inny kolor” / brak kandydata), zdjęcia z internetu karty (bez b2b_account_id, z source_url), których
+  nazwa pliku ma kolory rozłączne z kartą, są usuwane (`clearProductImages`) z notą w śladzie i komunikacie karty
+  („zdjęcie w innym kolorze usunięte — nowego brak”). Zdjęć ręcznych i B2B nie dotyczy. Wycofanie partią ich nie
+  przywraca (uwaga w podglądzie rollback-batch już jest).
+Po wdrożeniu: ponowne zlecenie 6 uchwytów (11054–11062 bez 11055), potem pełne pobranie Coby (§4 krok 5).

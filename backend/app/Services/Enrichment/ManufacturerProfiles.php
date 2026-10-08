@@ -64,6 +64,7 @@ final class ManufacturerProfiles
             labelledShortCodes: (bool) ($entry['labelled_short_codes'] ?? $default['labelled_short_codes'] ?? false),
             modelGroup: is_string($modelGroup) && $modelGroup !== '' ? $modelGroup : null,
             modelMinMembers: max(1, (int) ($model['min_members'] ?? 2)),
+            imageUrlBlocklist: array_values(array_filter((array) ($entry['image_url_blocklist'] ?? []), static fn (mixed $s): bool => is_string($s) && $s !== '')),
         );
     }
 }

@@ -63,6 +63,50 @@ final class SourceIdentityTest extends TestCase
         $this->assertNotSame('hard', $grating['verdict']);
     }
 
+    public function test_coba_dashed_price_list_code_matches_page_code_without_dash(): void
+    {
+        // Etap 2b: cennik pisze „CCLIP-38” / „LCLIP-50”, strona uchwytu (coba.com/pl/produkt/c-type-cobagrip-grating-accessory,
+        // kopia z 08.10.2026) „CCLIP25 / CCLIP38 / CCLIP50” — w tabeli części (tekst) i w data-part (mikrodane). Klucz
+        // kodu (ProductCodeMatch::key) nie ma separatorów, więc obie postaci to ten sam kod; produkcja 07.10.2026:
+        // dokument źródła karty 11059 „SKU CCLIP-38 w mikrodanych” (hard).
+        $url = 'https://www.coba.com/pl/produkt/c-type-cobagrip-grating-accessory';
+        $title = 'C-Type COBAGRiP Grating Accessory - COBA PL';
+        $html = <<<'HTML'
+            <table id="parts-table" class="table-auto overflow-scroll w-full"><thead class="bg-slate md:bg-white"><td colspan="100%"><h3 class="text-white md:text-slate">Części</h3></td></thead><tr class="text-left"><th class="p-3 whitespace-nowrap text-slate" scope="col">
+            Numer części</th><th class="p-3 table-cell text-left text-slate" scope="col">
+            Waga (kg)</th><th class="p-3 whitespace-nowrap text-center text-slate price-request" scope="col">
+            Zapytaj o cenę</th></tr><tr><td class="whitespace-nowrap" data-label="Numer części">CCLIP50</td><td class="whitespace-nowrap" data-label="Waga (kg)">0.1</td><td class="price-request price-request-container text-center" data-label="Zapytaj o cenę">
+            <a id="submit-price" data-type="Request Price" productname="C-Type COBAGRiP Grating Accessory" data-id="15551" data-part="CCLIP50" data-colour="" data-quantity="1">Zapytaj o cenę</a></td></tr><tr><td class="whitespace-nowrap" data-label="Numer części">CCLIP38</td><td class="whitespace-nowrap" data-label="Waga (kg)">0.1</td><td class="price-request price-request-container text-center" data-label="Zapytaj o cenę">
+            <a id="submit-price" data-type="Request Price" productname="C-Type COBAGRiP Grating Accessory" data-id="15551" data-part="CCLIP38" data-colour="" data-quantity="1">Zapytaj o cenę</a></td></tr><tr><td class="whitespace-nowrap" data-label="Numer części">CCLIP25</td><td class="whitespace-nowrap" data-label="Waga (kg)">0.1</td><td class="price-request price-request-container text-center" data-label="Zapytaj o cenę">
+            <a id="submit-price" data-type="Request Price" productname="C-Type COBAGRiP Grating Accessory" data-id="15551" data-part="CCLIP25" data-colour="" data-quantity="1">Zapytaj o cenę</a></td></tr></table>
+            HTML;
+        $text = "C-Type COBAGRiP Grating Accessory\nUchwyt typu C łączy dwie platformy kratowe GRP, zapobiegając ich unoszeniu się i zwiększając bezpieczeństwo.\n"
+            ."Części\nNumer części Waga (kg) Zapytaj o cenę\nCCLIP50 0.1 Qty: Zapytaj o cenę\nCCLIP38 0.1 Qty: Zapytaj o cenę\nCCLIP25 0.1 Qty: Zapytaj o cenę";
+        $markup = (new ProductPageFetcher)->markupIdentifiers($html);
+        $this->assertContains(['type' => 'part', 'value' => 'CCLIP38'], $markup);
+        $product = $this->coba('CCLIP-38', 'Akcesoria Krata GRP - Uchwyt typu C - 38mm');
+
+        $byMarkup = $this->judge($product, $url, $title, '', $markup);
+        $this->assertSame(['hard', 'sku', 'CCLIP-38', 'markup'], [$byMarkup['verdict'], $byMarkup['key_type'], $byMarkup['key'], $byMarkup['where']]);
+        // strona z czytnika (bez mikrodanych): tekst tabeli części na hoście producenta
+        $byText = $this->judge($product, $url, $title, $text);
+        $this->assertSame(['hard', 'text'], [$byText['verdict'], $byText['where']]);
+        // uchwyt L: strona l-type-… z tabelą tego samego kształtu (LCLIP25 / LCLIP38 / LCLIP50)
+        $lType = $this->judge(
+            $this->coba('LCLIP-50', 'Akcesoria Krata GRP - Uchwyt typu L - 50mm'),
+            'https://www.coba.com/pl/produkt/l-type-cobagrip-grating-accessory',
+            'L-Type COBAGRiP Grating Accessory - COBA PL',
+            str_replace('CCLIP', 'LCLIP', $text),
+            [['type' => 'part', 'value' => 'LCLIP50'], ['type' => 'part', 'value' => 'LCLIP38'], ['type' => 'part', 'value' => 'LCLIP25']]
+        );
+        $this->assertSame(['hard', 'LCLIP-50'], [$lType['verdict'], $lType['key']]);
+
+        // strona z samym CCLIP25 nie potwierdza CCLIP-38; strona uchwytu C nie potwierdza uchwytu L
+        $only25 = $this->judge($product, $url, $title, "Części\nNumer części Waga (kg)\nCCLIP25 0.1 Qty: Zapytaj o cenę", [['type' => 'part', 'value' => 'CCLIP25']]);
+        $this->assertNotSame('hard', $only25['verdict']);
+        $this->assertNotSame('hard', $this->judge($this->coba('LCLIP-38', 'Akcesoria Krata GRP - Uchwyt typu L - 38mm'), $url, $title, $text, $markup)['verdict']);
+    }
+
     public function test_coba_price_list_code_forms_match_page_codes(): void
     {
         // „FF0100-5” w cenniku = „FF010005” na stronie; „CD010610C” (na metry) = rolka „CD010610”

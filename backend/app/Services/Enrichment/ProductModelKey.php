@@ -122,12 +122,15 @@ final class ProductModelKey
      * dopasowanie) plus literowo-cyfrowy przyrostek po literach i cyfrach, gdy jest („ST/B1” z „ST010001B1”, „SS/MN”
      * z „SS070002MN”, „GRP/G” z „GRP040001G”). Sam przechwyt sklejał inne wyroby o tej samej nazwie: ST010001 (Solid
      * Fatigue-Step) z ST010001B1 (wersja nitrylowa — inna odporność na oleje), SS070002MN z SS070002B1M, SS070002FN
-     * z SS070002B1F; na 714 kartach Coby (08.10.2026) przyrostek rozdziela dokładnie te trzy pary. '' gdy brak wzorca
-     * albo SKU nie pasuje („LCLIP-38”) — wtedy rozstrzyga sam rdzeń nazwy.
+     * z SS070002B1F; na 714 kartach Coby (08.10.2026) przyrostek rozdziela dokładnie te trzy pary. Wzorzec dopasowujemy
+     * do SKU bez separatorów między literą a cyfrą (withoutLetterDigitSeparators): cennik pisze „CCLIP-38”, strona
+     * producenta „CCLIP38”, a uchwyty 25/38/50 to jeden model „CCLIP” (do etapu 2b „CCLIP-38” nie pasowało do wzorca
+     * i szło do osobnej grupy od CCLIP25 — pilotaż 08.10.2026). '' gdy brak wzorca albo SKU nie pasuje — wtedy
+     * rozstrzyga sam rdzeń nazwy.
      */
     public static function family(string $sku, ?string $modelRegex): string
     {
-        $sku = strtoupper(trim($sku));
+        $sku = self::withoutLetterDigitSeparators(strtoupper(trim($sku)));
         if ($sku === '' || $modelRegex === null || $modelRegex === '') {
             return '';
         }
@@ -141,10 +144,20 @@ final class ProductModelKey
     }
 
     /**
-     * Przyrostek SKU po literach i cyfrach, bez końcówki rozmiaru „-N” („LCLIP-38”, „SD0107-6”) i bez pojedynczego „C”
-     * po cyfrze (postać sprzedaży na metry: AF060003C = AF060003 — jak variant_suffixes w SourceIdentity::skuForms):
+     * SKU bez separatorów (spacja, myślnik, podkreślenie) między literą a cyfrą — tak kod pisze strona producenta
+     * („CCLIP-38” → „CCLIP38”, „LCLIP 50” → „LCLIP50”). Separatory między cyframi („SD0107-6”) i po cyfrze przed literą
+     * („P249-C63-C”) zostają — tam znaczą rozmiar albo człon kodu.
+     */
+    private static function withoutLetterDigitSeparators(string $sku): string
+    {
+        return preg_replace('/(?<=\p{L})[\s\-_]+(?=\d)/u', '', $sku) ?? $sku;
+    }
+
+    /**
+     * Przyrostek SKU po literach i cyfrach, bez końcówki rozmiaru „-N” („SD0107-6”) i bez pojedynczego „C” po cyfrze
+     * (postać sprzedaży na metry: AF060003C = AF060003 — jak variant_suffixes w SourceIdentity::skuForms):
      * „ST010001B1” → „B1”, „SS070002B1M” → „B1M”, „PT010601C” → '', „P249-C63-C” → '' (przyrostek kończy się na
-     * pierwszym znaku spoza liter i cyfr).
+     * pierwszym znaku spoza liter i cyfr), „CCLIP38” → ''.
      */
     private static function skuSuffix(string $sku): string
     {

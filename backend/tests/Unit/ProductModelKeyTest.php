@@ -111,6 +111,7 @@ final class ProductModelKeyTest extends TestCase
         $this->assertTrue($same($this->key('SN0100-7', 'Senso Runner Czarny 1m x 10m (3mm)'), $this->key('SN060007C', 'Senso Runner Szary 1m x mb. (3mm) - maks. 10m')));
         $this->assertFalse($same($this->key('CCLIP25', 'Akcesoria Krata GRP - Uchwyt typu C - 25mm'), $this->key('LCLIP-38', 'Akcesoria Krata GRP - Uchwyt typu L - 38mm')));
         $this->assertTrue($same($this->key('LCLIP-38', 'Akcesoria Krata GRP - Uchwyt typu L - 38mm'), $this->key('LCLIP-50', 'Akcesoria Krata GRP - Uchwyt typu L - 50mm')));
+        $this->assertTrue($same($this->key('CCLIP25', 'Akcesoria Krata GRP - Uchwyt typu C - 25mm'), $this->key('CCLIP-38', 'Akcesoria Krata GRP - Uchwyt typu C - 38mm')), 'etap 2b: kod z myślnikiem w rodzinie kodu bez myślnika');
         $this->assertFalse($same($this->key('SS010002M', "Krawędź/narożnik 'męski' Czarny 85mm x 1m"), $this->key('SS070002B1M', "Krawędź/narożnik 'męski' Żółty (100% Nitryl) 75mm x 1m")));
         $this->assertTrue($same($this->key('LM010201', 'COBAwash Czarny/Niebieski 0.6m x 0.85m'), $this->key('LM010301', 'COBAwash Czarny/Czerwony 0.6m x 0.85m')));
 
@@ -127,6 +128,24 @@ final class ProductModelKeyTest extends TestCase
         // postać sprzedaży „C” i końcówka „-N” nie są przyrostkiem — ten sam model
         $this->assertTrue($same($this->key('AF060003C', 'Orthomat Standard Szary 0.9m x mb. (9.5mm)'), $this->key('AF060003', 'Orthomat Standard Szary 0.9m x 18.3m (9.5mm)')));
         $this->assertTrue($same($this->key('SD0107-6', 'Deckplate Czarny/Żółte krawędzie 0.6m x 18.3m (15mm)'), $this->key('SD0107-4', 'Deckplate Czarny/Żółte krawędzie 0.9m x 6m (15mm)')));
+    }
+
+    public function test_dashed_clip_codes_group_with_their_undashed_family(): void
+    {
+        // Etap 2b (pilotaż 08.10.2026, partia #499): cennik pisze „CCLIP-38”, strona producenta „CCLIP38”; „CCLIP-38”
+        // nie pasowało do model_regex, dostawało rodzinę '' i razem z CCLIP-50 szło do osobnej grupy od CCLIP25 — jako
+        // własny lider kończyło „ręcznie”. Uchwyty 25/38/50 jednego typu to jeden model, typy C/L/M — trzy modele.
+        $groups = [];
+        foreach (['C', 'L', 'M'] as $type) {
+            $keys = array_unique([
+                $this->key($type.'CLIP25', 'Akcesoria Krata GRP - Uchwyt typu '.$type.' - 25mm')[0],
+                $this->key($type.'CLIP-38', 'Akcesoria Krata GRP - Uchwyt typu '.$type.' - 38mm')[0],
+                $this->key($type.'CLIP-50', 'Akcesoria Krata GRP - Uchwyt typu '.$type.' - 50mm')[0],
+            ]);
+            $this->assertCount(1, $keys, 'uchwyt typu '.$type.': 25/38/50 to jeden model');
+            $groups[] = reset($keys);
+        }
+        $this->assertSame(['coba|CCLIP|akcesoria krata grp uchwyt typu c', 'coba|LCLIP|akcesoria krata grp uchwyt typu l', 'coba|MCLIP|akcesoria krata grp uchwyt typu m'], $groups);
     }
 
     public function test_brand_without_model_profile_or_manufacturer_has_no_key(): void
@@ -154,7 +173,12 @@ final class ProductModelKeyTest extends TestCase
         $this->assertSame('AF', ProductModelKey::family('AF060001', $regex));
         $this->assertSame('GRP/G', ProductModelKey::family('grp040001g', $regex), 'przyrostek po cyfrach, wielkość liter bez znaczenia');
         $this->assertSame('P', ProductModelKey::family('P249-C63-C', $regex), 'przyrostek kończy się na pierwszym znaku spoza liter i cyfr');
-        $this->assertSame('', ProductModelKey::family('LCLIP-38', $regex), 'SKU nie pasuje do wzorca');
+        // etap 2b: wzorzec na SKU bez separatora między literą a cyfrą („LCLIP-38” = „LCLIP38” ze strony producenta);
+        // do 08.10.2026 oczekiwane było '' i osobna grupa od LCLIP25
+        $this->assertSame('LCLIP', ProductModelKey::family('LCLIP-38', $regex));
+        $this->assertSame('CCLIP', ProductModelKey::family('CCLIP 50', $regex), 'spacja');
+        $this->assertSame('CCLIP', ProductModelKey::family('cclip_38', $regex), 'podkreślenie, małe litery');
+        $this->assertSame('', ProductModelKey::family('38-CCLIP', $regex), 'SKU nie pasuje do wzorca');
         $this->assertSame('', ProductModelKey::family('AF060001', null));
         $this->assertSame('AF0', ProductModelKey::family('AF060001', '/^[A-Z]+\d/'), 'bez przechwytu całe dopasowanie');
 

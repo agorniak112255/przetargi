@@ -15,6 +15,7 @@ final class ManufacturerProfile
      * @param  list<string>  $catalogs  adresy katalogów PDF marki
      * @param  list<string>  $identityIn  url | title | markup | text
      * @param  list<string>  $variantSuffixes  litery po kodzie, które znaczą ten sam wyrób w innej postaci sprzedaży
+     * @param  list<string>  $imageUrlBlocklist  wyrażenia regularne adresów grafik witryny producenta, które nie są zdjęciem wyrobu
      */
     public function __construct(
         public readonly string $brandKey,
@@ -40,6 +41,8 @@ final class ManufacturerProfile
         public readonly ?string $modelGroup = null,
         /** od ilu kart modelu w partii lider dostaje notę modelu w poleceniu */
         public readonly int $modelMinMembers = 2,
+        /** grafiki reklamowe witryny producenta (coba: StandUpforHealth, Modal_Elephant) — App\Support\ImageUrlBlocklist */
+        public readonly array $imageUrlBlocklist = [],
     ) {}
 
     /**

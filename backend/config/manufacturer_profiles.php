@@ -23,6 +23,9 @@ declare(strict_types=1);
 |   name_stem: klucz modelu = marka | rodzina z model_regex | rdzeń nazwy bez rozmiarów, wymiarów i słów koloru
 |   (App\Services\Enrichment\ProductModelKey) — zadanie idzie do lidera grupy, członkowie dostają jego opis
 |   (ApplyModelDescriptionJob). min_members — od ilu kart modelu w partii lider dostaje notę modelu w poleceniu;
+| - image_url_blocklist: wyrażenia regularne (cały adres) grafik witryny producenta, które nie są zdjęciem wyrobu —
+|   obok wzorców ogólnych App\Support\ImageUrlBlocklist (logo, banner, placeholder…); adres odpada z listy zdjęć strony
+|   i z pobierania;
 | - resolver: klasa PHP dla reguł, których nie da się opisać danymi (na razie żadna).
 | brand_keys — klucze marki jak w manufacturer_domains (małe litery, myślniki).
 */
@@ -43,6 +46,8 @@ return [
             'code' => ['normalize' => 'upper_alnum', 'model_regex' => '/^([A-Z]+)\d/', 'dash_suffix_pad' => 2, 'variant_suffixes' => ['C']],
             // 869 kart cennika to ~258 modeli (08.10.2026): każdy wymiar i kolor osobną kartą, strona coba.com jedna na model
             'model' => ['group' => 'name_stem', 'min_members' => 2],
+            // grafiki reklamowe coba.com na kartach po audycie 08.10.2026 („Stand up for health”, słoń z okna modalnego)
+            'image_url_blocklist' => ['/StandUpforHealth/i', '/Modal_Elephant/i'],
         ],
         'cederroth' => [
             'brand_keys' => ['cederroth'],

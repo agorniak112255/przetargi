@@ -12,7 +12,7 @@ use Tests\TestCase;
 
 /**
  * Zdjęcie dla członka modelu (etap 2 opisów z cenników): adres strony w kolorze karty (zbiór kolorów + słowo rdzenia
- * w nazwie pliku), kopia zdjęcia lidera albo nic.
+ * w nazwie pliku albo nazwa z samych słów koloru, cyfr i tokenów technicznych — etap 2b), kopia zdjęcia lidera albo nic.
  */
 final class ModelImagePickerTest extends TestCase
 {
@@ -50,17 +50,22 @@ final class ModelImagePickerTest extends TestCase
     public function test_page_image_without_model_stem_in_file_name_does_not_count_even_as_other_colour(): void
     {
         // galeria strony Orthomata to wszystkie <img> tej strony, także cudzych wyrobów: „cobagrip-grey.jpg” nie idzie
-        // na szarą kartę Orthomata, a „Gray.jpg” bez rdzenia nie liczy się jako „inny kolor” — zostaje kopia lidera
+        // na szarą kartę Orthomata i nie liczy się jako „inny kolor” — zostaje kopia lidera
         $greyLeader = $this->coba('AF060002', 'Orthomat Standard Szary 0.9m x 1.5m (9.5mm)');
         $member = $this->coba('AF060001', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)');
         $leaderImage = $this->image($greyLeader, self::ORTHOMAT_NEUTRAL);
         $foreign = 'https://www.coba.com/wp-content/uploads/2024/09/cobagrip-grey.jpg';
         $foreignBlack = 'https://www.coba.com/wp-content/uploads/2024/09/cobagrip-black.jpg';
 
-        $pick = (new ModelImagePicker)->pickFor($member, ['grey'], [$foreign, $foreignBlack, self::GREY], [$leaderImage], 'Orthomat Standard');
+        $pick = (new ModelImagePicker)->pickFor($member, ['grey'], [$foreign, $foreignBlack], [$leaderImage], 'Orthomat Standard');
         $this->assertNull($pick['url']);
         $this->assertSame((int) $leaderImage->id, (int) $pick['copy_of']?->id);
         $this->assertSame(ModelImagePicker::REASON_LEADER_COPY, $pick['reason']);
+        // etap 2b: „Gray.jpg” — nazwa z samego koloru — liczy się jak nazwa z rdzeniem (do 08.10.2026 nie liczyła się wcale)
+        $this->assertSame(
+            [self::GREY, ModelImagePicker::REASON_PAGE_IN_COLOUR],
+            array_values(array_intersect_key((new ModelImagePicker)->pickFor($member, ['grey'], [$foreign, $foreignBlack, self::GREY], [$leaderImage], 'Orthomat Standard'), array_flip(['url', 'reason'])))
+        );
 
         // z rdzeniem w nazwie pliku, ale tylko w innym kolorze — bez nowego zdjęcia i bez kopii lidera
         $this->assertSame(
@@ -180,6 +185,102 @@ final class ModelImagePickerTest extends TestCase
             ['url' => null, 'copy_of' => null, 'reason' => ModelImagePicker::REASON_LEADER_NONE],
             (new ModelImagePicker)->pickFor($member, ['grey'], [self::NEUTRAL], [], 'Orthomat Standard')
         );
+    }
+
+    public function test_file_named_only_by_colour_counts_like_a_file_with_the_model_stem(): void
+    {
+        // Etap 2b (pilotaż 08.10.2026, partia #499): galeria strony kraty COBAGRiP ma „Yellow-1.jpg” bez słowa „cobagrip”
+        // — żółte kraty zostały bez zdjęcia. Nazwa z samych słów koloru, cyfr i tokenów technicznych liczy się jak nazwa
+        // ze słowem rdzenia.
+        $leader = $this->coba('GRP040001G', 'COBAGRiP Krata GRP Zielony 2000mm x 1000mm x 25mm');
+        $member = $this->coba('GRP070009G', 'COBAGRIP Krata GRP Żółty 3660mm x 1220mm x 50mm');
+        $leaderImage = $this->image($leader, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Green-1.jpg');
+        $yellow = 'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Yellow-1.jpg';
+        $stem = 'COBAGRiP Krata GRP';
+        $picker = new ModelImagePicker;
+
+        $pick = $picker->pickFor($member, ['yellow'], [self::NEUTRAL, self::GREY, $yellow], [$leaderImage], $stem);
+        $this->assertSame([$yellow, null, ModelImagePicker::REASON_PAGE_IN_COLOUR], [$pick['url'], $pick['copy_of'], $pick['reason']]);
+
+        // dopiski techniczne WordPressa („-1000x1000”, „-scaled”, „-e1696234567”), rozszerzenia i „img” nie są słowem wyrobu
+        foreach ([
+            'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Yellow-1-1000x1000.jpg',
+            'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/yellow-2-scaled.webp',
+            'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Yellow-1-e1696234567.png',
+            'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/img_%C5%BC%C3%B3%C5%82ty_01.jpg',
+        ] as $url) {
+            $this->assertSame($url, $picker->pickFor($member, ['yellow'], [$url], [$leaderImage], $stem)['url'], $url);
+        }
+        // nazwa z samymi innymi kolorami to „inny kolor” — bez nowego zdjęcia i bez kopii zielonego lidera
+        $this->assertSame(
+            ['url' => null, 'copy_of' => null, 'reason' => ModelImagePicker::REASON_PAGE_OTHER_COLOUR],
+            $picker->pickFor($member, ['yellow'], ['https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/black-grey-2-scaled.jpg', self::GREY], [$leaderImage], $stem)
+        );
+        // słowo innego wyrobu („deckplate-yellow.jpg” na stronie kraty) albo spoza listy („yellow-copy.jpg”) — nazwa nie
+        // liczy się wcale; zostaje reguła lidera: „Green-1.jpg” zielonego lidera nie idzie na żółtą kartę
+        $this->assertSame(
+            ModelImagePicker::REASON_LEADER_OTHER_COLOUR,
+            $picker->pickFor($member, ['yellow'], [
+                'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/deckplate-yellow.jpg',
+                'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/yellow-copy.jpg',
+            ], [$leaderImage], $stem)['reason']
+        );
+    }
+
+    public function test_colour_only_file_name_counts_only_on_manufacturer_host_and_never_as_swatch_thumbnail_or_clear(): void
+    {
+        // Przegląd etapu 2b: nazwa z samych kolorów łapała próbki kolorów sklepów, miniatury i zaślepki — członek dostawał
+        // próbkę jako zdjęcie wyrobu albo „inny kolor” (bez zdjęcia, z force usunięcie starego).
+        // lider żółty z plikiem bez koloru — gdy galeria nie rozstrzyga, wynikiem jest kopia lidera
+        $leader = $this->coba('GRP070001G', 'COBAGRiP Krata GRP Żółty 2000mm x 1000mm x 25mm');
+        $member = $this->coba('GRP070009G', 'COBAGRIP Krata GRP Żółty 3660mm x 1220mm x 50mm');
+        $leaderImage = $this->image($leader, 'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/cobagrip-grating-1.jpg');
+        $stem = 'COBAGRiP Krata GRP';
+        $picker = new ModelImagePicker;
+        $copy = fn (array $urls): array => $picker->pickFor($member, ['yellow'], $urls, [$leaderImage], $stem);
+        $leaderCopy = static fn (array $pick): array => [$pick['url'], $pick['reason']];
+
+        // (a) sklep: nazwa z samego koloru bez słowa rdzenia nie liczy się — ani „w kolorze”, ani „inny kolor”
+        $this->assertSame([null, ModelImagePicker::REASON_LEADER_COPY], $leaderCopy($copy(['https://sklep.example/img/yellow.jpg'])));
+        $this->assertSame([null, ModelImagePicker::REASON_LEADER_COPY], $leaderCopy($copy(['https://sklep.example/img/black.png'])));
+        // ze słowem rdzenia sklep liczy się jak dawniej
+        $shopStem = 'https://sklep.example/img/cobagrip-yellow.jpg';
+        $this->assertSame($shopStem, $copy([$shopStem])['url']);
+
+        // (b) próbki kolorów i małe miniatury — nawet na hoście producenta i ze słowem rdzenia
+        foreach ([
+            'https://www.coba.com/media/attribute/swatch/swatch_image/30x20/y/e/yellow.png',
+            'https://www.coba.com/media/attribute/swatches/yellow.png',
+            'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Yellow-1-300x300.jpg',
+            'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/cobagrip-yellow-150x150.jpg',
+            'https://www.coba.com/media/catalog/product/cache/1/265x265/cobagrip-yellow.jpg',
+        ] as $url) {
+            $this->assertSame([null, ModelImagePicker::REASON_LEADER_COPY], $leaderCopy($copy([$url])), $url);
+        }
+        // próbka w innym kolorze nie robi „innego koloru”
+        $this->assertSame([null, ModelImagePicker::REASON_LEADER_COPY], $leaderCopy($copy(['https://sklep.example/media/attribute/swatch/cobagrip-black.png'])));
+        // duża wersja (≥ 600 px) zostaje
+        $big = 'https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Yellow-1-1000x1000.jpg';
+        $this->assertSame($big, $copy([$big])['url']);
+        $this->assertSame($big, $copy(['https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Yellow-1-300x300.jpg', $big])['url']);
+
+        // (c) „transparent”/„clear” jako jedyny kolor nazwy to zaślepka — bez słowa rdzenia nie liczy się (także dla
+        // przezroczystej karty), a nazwa z przezroczystym i innym kolorem tak
+        $clearMember = $this->coba('GF120002', 'Gripfoot Standard Taśma 50mm x 18.3m - Clear (przezroczysty)');
+        foreach (['transparent.png', 'clear.gif', 'clear-1.jpg'] as $file) {
+            $pick = $picker->pickFor($clearMember, ['clear'], ['https://www.coba.com/wp-content/uploads/'.$file], [], 'Gripfoot Standard Taśma');
+            $this->assertSame([null, ModelImagePicker::REASON_LEADER_NONE], [$pick['url'], $pick['reason']], $file);
+        }
+        $this->assertSame(
+            ModelImagePicker::REASON_PAGE_OTHER_COLOUR,
+            $copy(['https://www.coba.com/wp-content/uploads/black-transparent.png'])['reason'],
+            'kolor obok przezroczystego liczy się'
+        );
+        $withStem = 'https://www.coba.com/wp-content/uploads/gripfoot-clear.jpg';
+        $this->assertSame($withStem, $picker->pickFor($clearMember, ['clear'], [$withStem], [], 'Gripfoot Standard Taśma')['url']);
+
+        // „Yellow-1.jpg” z coba.com dalej w kolorze karty
+        $this->assertSame(ModelImagePicker::REASON_PAGE_IN_COLOUR, $copy(['https://www.coba.com/pl/wp-content/uploads/sites/6/2024/09/Yellow-1.jpg'])['reason']);
     }
 
     private function coba(string $sku, string $name): Product

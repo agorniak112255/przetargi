@@ -7,11 +7,13 @@ namespace Tests\Feature;
 use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\ApplyModelDescriptionJob;
 use App\Jobs\PrefetchProductSourcesJob;
+use App\Models\B2bAccount;
 use App\Models\Product;
 use App\Models\ProductDescriptionVersion;
 use App\Models\ProductEnrichmentBatch;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Models\ProductEnrichmentCache;
+use App\Models\ProductImage;
 use App\Models\ProductSourceDocument;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
@@ -27,6 +29,7 @@ use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Enrichment\ProductSearchIdentity;
 use App\Services\Enrichment\SourceDocumentStore;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\ColourWords;
 use App\Support\ManufacturerNormFacts;
 use App\Support\PpeAssortment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -36,6 +39,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
 use ReflectionMethod;
+use ReflectionProperty;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -401,10 +405,10 @@ final class EnrichmentModelSharedFlowTest extends TestCase
         $this->assertSame('https://www.coba.com/uploads/deckplate-black-yellow-1.jpg', $ranked[0] ?? null);
         $this->assertContains('https://www.coba.com/uploads/deckplate-black-1.jpg', $ranked);
         $this->assertNotContains('https://www.coba.com/uploads/deckplate-grey-1.jpg', $ranked);
-        // jednobarwna karta: plik w jej kolorze przed plikiem innego koloru (kara −50 obniża rangę; przy słowach nazwy
-        // w adresie kandydat zostaje na końcu listy)
+        // jednobarwna karta: plik innego koloru odpada (etap 2b — −50 nie wystarczało przy słowach nazwy w adresie)
         $single = $this->coba('AF060001', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)');
-        $this->assertSame([self::IMAGE_GREY, self::IMAGE_BLACK], $rank($single, [self::IMAGE_BLACK, self::IMAGE_GREY]));
+        $this->assertSame([self::IMAGE_GREY], $rank($single, [self::IMAGE_BLACK, self::IMAGE_GREY]));
+        $this->assertSame([], $rank($single, [self::IMAGE_BLACK]), 'jedyny kandydat w innym kolorze też odpada');
     }
 
     public function test_release_stale_hands_over_members_when_leader_item_is_stuck_running(): void
@@ -459,6 +463,25 @@ final class EnrichmentModelSharedFlowTest extends TestCase
         $this->assertSame((int) $alive->id, (int) ProductEnrichmentBatchItem::query()->where('product_id', $waiting->id)->value('model_leader_id'), 'żywy lider zostaje liderem');
     }
 
+    public function test_leader_description_passes_on_full_name_when_stem_loses_the_deciding_dimension(): void
+    {
+        // pilotaż 08.10.2026 (#499): lider „CCLIP-38” z rdzeniem bez „38mm” — „38” czytane jako rozmiar buta, wymagany typ
+        // „obuwie”, poprawny opis uchwytu odrzucony; pełna nazwa karty ma „38mm” i przechodzi
+        $card = $this->coba('CCLIP-38', 'Akcesoria Krata GRP - Uchwyt typu C - 38mm');
+        $description = 'Uchwyt typu C Coba CCLIP do mocowania kraty COBAGRiP GRP o grubości 38 mm do konstrukcji stalowej. '
+            .'Wykonany ze stali nierdzewnej, zapewnia stabilne i trwałe połączenie kraty z belką nośną oraz łatwy montaż.';
+        $service = $this->service();
+        $context = new ReflectionProperty(ProductEnrichmentService::class, 'modelContext');
+        $context->setValue($service, ['key' => 'coba|CCLIP|akcesoria krata grp uchwyt typu c', 'stem' => 'Akcesoria Krata GRP Uchwyt typu C', 'members' => []]);
+        $stemOnly = new ReflectionMethod(ProductEnrichmentService::class, 'isUsableProductDescription');
+        $stemCard = (new ReflectionMethod(ProductEnrichmentService::class, 'modelIdentityCard'))->invoke($service, $card);
+        $usable = new ReflectionMethod(ProductEnrichmentService::class, 'isUsableModelDescription');
+
+        $this->assertFalse($stemOnly->invoke($service, $description, $stemCard, []), 'sam rdzeń odrzuca opis (stan sprzed poprawki)');
+        $this->assertTrue($stemOnly->invoke($service, $description, $card, []), 'pełna nazwa przepuszcza');
+        $this->assertTrue($usable->invoke($service, $description, $card, []));
+    }
+
     public function test_rejected_leader_version_is_no_basis_for_members(): void
     {
         $leader = $this->coba('AF010001', 'Orthomat Standard Czarny 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_DONE, 'description' => self::DESCRIPTION]);
@@ -482,6 +505,190 @@ final class EnrichmentModelSharedFlowTest extends TestCase
         $this->assertNull($member->description);
         $this->assertSame(Product::ENRICHMENT_QUEUED, $member->enrichment_status, 'karta nietknięta — status ustawia wołające zadanie');
         $this->assertSame(0, ProductDescriptionVersion::query()->where('product_id', $member->id)->count());
+    }
+
+    public function test_leader_takes_gallery_image_in_its_colour_before_the_verifier(): void
+    {
+        // pilotaż #499 (krata GRP 11027): weryfikator zostawił tylko og:image w innym kolorze (atrapa modelu wizyjnego
+        // nie potwierdza żadnego kandydata — zostaje tylko zaufany og:image), a reguła koloru je cięła — lider bez zdjęcia
+        $gray = 'https://www.coba.com/wp-content/uploads/Gray.jpg';
+        $green = 'https://www.coba.com/wp-content/uploads/Green-1.jpg';
+        $greenStem = 'https://www.coba.com/wp-content/uploads/Orthomat-Standard-Green.jpg';
+        $leader = $this->coba('AF010001', 'Orthomat Standard Zielony 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $member = $this->coba('AF060003C', 'Orthomat Standard Zielony 0.9m x mb. (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $batch = $this->batch($leader, [$member]);
+        $service = $this->service(gallery: [$gray, $green, $greenStem]);
+
+        $service->enrichProduct($leader, false, (int) $batch->id);
+
+        $leader->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $leader->enrichment_status, (string) $leader->enrichment_error);
+        $this->assertNull($leader->enrichment_error);
+        $image = $leader->images()->sole();
+        $this->assertSame(['green'], ColourWords::allInUrl((string) $image->source_url), 'zdjęcie w kolorze karty, nie szare og:image: '.$image->source_url);
+        $steps = array_column($leader->enrichment_trace['steps'] ?? [], 'm');
+        $this->assertNotEmpty(array_filter($steps, static fn (string $m): bool => str_starts_with($m, 'zdjęcie strony w kolorze karty')), json_encode($steps, JSON_UNESCAPED_UNICODE));
+        $meta = app(DescriptionVersionStore::class)->meta($service->lastRunVersion());
+        // ta sama galeria dla członków: zaufany og:image pierwszy, reszta w kolejności fetchera
+        $this->assertSame($gray, $meta['page_image_urls'][0] ?? null);
+        $this->assertEqualsCanonicalizing([$gray, $green, $greenStem], $meta['page_image_urls'] ?? null);
+    }
+
+    public function test_leader_without_gallery_in_its_colour_removes_old_image_in_other_colour_only_with_force(): void
+    {
+        // galeria strony tylko czarna, karta szara: bez nowego zdjęcia i bez szukania na kartach sklepów; stare czarne
+        // zdjęcie z internetu znika przy pełnym pobraniu (force), bez force zostaje
+        $leader = $this->coba('AF010001', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_DONE, 'description' => self::OLD_DESCRIPTION]);
+        $old = $this->webImage($leader, self::IMAGE_BLACK);
+        $member = $this->coba('AF060003C', 'Orthomat Standard Szary 0.9m x mb. (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $batch = $this->batch($leader, [$member], [$leader->id => Product::ENRICHMENT_DONE], force: true);
+        $service = $this->service(gallery: [self::IMAGE_BLACK]);
+
+        $service->enrichProduct($leader, true, (int) $batch->id);
+
+        $leader->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $leader->enrichment_status, (string) $leader->enrichment_error);
+        $this->assertSame(self::DESCRIPTION, $leader->description);
+        $this->assertSame(0, $leader->images()->count(), 'stare czarne zdjęcie usunięte, nowego brak');
+        $this->assertFalse(Storage::disk('public')->exists($old->path));
+        $this->assertSame('Opis OK, zdjęcie w innym kolorze usunięte, nowego brak (zdjęcia strony w innym kolorze).', $leader->enrichment_error);
+        $steps = array_column($leader->enrichment_trace['steps'] ?? [], 'm');
+        $this->assertContains('zdjęcia strony w innym kolorze — bez nowego', $steps);
+        $this->assertContains('zdjęcie w innym kolorze usunięte: orthomat-standard-black-1.jpg — nowego brak', $steps);
+        $this->assertNotContains('zdjęcie producenta nie pobrało się — szukam na kartach sklepów', $steps);
+
+        // bez force: zdjęcie w innym kolorze zostaje, komunikat jak dotąd
+        $plain = $this->coba('AF060003', 'Orthomat Standard Szary 0.9m x 18.3m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_NONE]);
+        $kept = $this->webImage($plain, self::IMAGE_BLACK);
+        $batch2 = $this->batch($plain, [$member]);
+
+        $this->service(gallery: [self::IMAGE_BLACK])->enrichProduct($plain, false, (int) $batch2->id);
+
+        $plain->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $plain->enrichment_status, (string) $plain->enrichment_error);
+        $this->assertSame([(int) $kept->id], $plain->images()->pluck('id')->map(static fn ($id): int => (int) $id)->all());
+        $this->assertSame('Opis OK, nie udało się pobrać zdjęcia (zdjęcia strony w innym kolorze).', $plain->enrichment_error);
+    }
+
+    public function test_member_with_force_loses_old_image_in_other_colour_but_keeps_b2b_and_manual_images(): void
+    {
+        $leader = $this->coba('AF010001', 'Orthomat Standard Czarny 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        // członek żółty: galeria lidera (czarne, szare) bez żółtego — bez nowego zdjęcia; stare szare z internetu znika
+        // przy partii z force, zdjęcie z B2B i ręczne (bez adresu) zostają
+        $yellow = $this->coba('AF060003C', 'Orthomat Standard Żółty 0.9m x mb. (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $staleGrey = $this->webImage($yellow, self::IMAGE_GREY);
+        $account = B2bAccount::query()->create(['username' => 'konto', 'password' => 'sekret', 'sites' => ['b2b.example.test']]);
+        $fromB2b = $this->webImage($yellow, self::IMAGE_BLACK, ['b2b_account_id' => $account->id]);
+        $manual = $this->webImage($yellow, null);
+        $batch = $this->batch($leader, [$yellow], force: true);
+        $service = $this->service();
+        $service->enrichProduct($leader, false, (int) $batch->id);
+        $leaderVersion = $service->lastRunVersion();
+        $this->assertNotNull($leaderVersion);
+        $service->recordBatchProduct($batch, $yellow, ProductEnrichmentBatchItem::STATUS_RUNNING);
+
+        $this->assertSame(ApplyModelDescriptionJob::RESULT_PUBLISHED, $service->applyModelDescription($yellow->fresh(), $leaderVersion, (int) $batch->id));
+
+        $yellow->refresh();
+        $this->assertSame(self::DESCRIPTION, $yellow->description);
+        $this->assertEqualsCanonicalizing([(int) $fromB2b->id, (int) $manual->id], $yellow->images()->pluck('id')->map(static fn ($id): int => (int) $id)->all());
+        $this->assertFalse(Storage::disk('public')->exists($staleGrey->path));
+        $this->assertTrue(Storage::disk('public')->exists($fromB2b->path));
+        $this->assertSame('Opis OK, zdjęcie w innym kolorze usunięte, nowego brak (zdjęcie strony w innym kolorze).', $yellow->enrichment_error);
+        $this->assertContains('zdjęcie w innym kolorze usunięte: orthomat-standard-grey-1.jpg — nowego brak', array_column($yellow->enrichment_trace['steps'] ?? [], 'm'));
+
+        // bez force (partia bez force): stare szare zostaje
+        $other = $this->coba('AF060004', 'Orthomat Standard Żółty 0.9m x 1.5m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $keptGrey = $this->webImage($other, self::IMAGE_GREY);
+        $batch2 = $this->batch($leader, [$other], [], ProductEnrichmentBatchItem::STATUS_DONE);
+        $service->recordBatchProduct($batch2, $other, ProductEnrichmentBatchItem::STATUS_RUNNING);
+
+        $this->assertSame(ApplyModelDescriptionJob::RESULT_PUBLISHED, $service->applyModelDescription($other->fresh(), $leaderVersion, (int) $batch2->id));
+
+        $other->refresh();
+        $this->assertSame([(int) $keptGrey->id], $other->images()->pluck('id')->map(static fn ($id): int => (int) $id)->all());
+        $this->assertSame('Opis OK, nie udało się pobrać zdjęcia (zdjęcie strony w innym kolorze).', $other->enrichment_error);
+    }
+
+    public function test_member_falls_back_to_leader_image_copy_when_gallery_url_fails(): void
+    {
+        $missing = 'https://www.coba.com/wp-content/uploads/orthomat-standard-grey-missing.jpg';
+        $leader = $this->coba('AF010001', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)', ['description' => self::DESCRIPTION, 'enrichment_status' => Product::ENRICHMENT_DONE]);
+        // plik lidera bez koloru w nazwie — kolor z nazwy karty lidera (szary) = kolor członka
+        $leaderImage = $this->webImage($leader, 'https://www.coba.com/wp-content/uploads/orthomat-standard-1.jpg');
+        $version = app(DescriptionVersionStore::class)->record($leader, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => self::DESCRIPTION,
+            'primary_source_url' => self::PAGE,
+            'identity_verdict' => 'hard',
+            'enrichment_payload' => ['norms' => [], 'source_urls' => [self::PAGE], 'primary_source_url' => self::PAGE],
+            DescriptionVersionStore::META_KEY => ['page_image_urls' => [$missing]],
+        ]);
+        $member = $this->coba('AF060003C', 'Orthomat Standard Szary 0.9m x mb. (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $batch = $this->batch($leader, [$member], [], ProductEnrichmentBatchItem::STATUS_DONE);
+        Http::fake(['*' => Http::response('', 404)]);
+        $service = app(ProductEnrichmentService::class);
+        $service->recordBatchProduct($batch, $member, ProductEnrichmentBatchItem::STATUS_RUNNING);
+
+        $this->assertSame(ApplyModelDescriptionJob::RESULT_PUBLISHED, $service->applyModelDescription($member->fresh(), $version, (int) $batch->id));
+
+        $member->refresh();
+        $image = $member->images()->sole();
+        $this->assertSame($leaderImage->checksum, $image->checksum, 'kopia pliku lidera');
+        $this->assertNull($member->enrichment_error);
+        $this->assertContains('adres z galerii nie pobrał się — kopia zdjęcia lidera', array_column($member->enrichment_trace['steps'] ?? [], 'm'));
+    }
+
+    public function test_leader_proposal_with_force_keeps_image_in_other_colour_and_trace_says_so(): void
+    {
+        // twarda baza z dużą liczbą dowodów — nowy opis zostaje propozycją; galeria tylko czarna, karta szara
+        $leader = $this->coba('AF010001', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_DONE, 'description' => self::OLD_DESCRIPTION]);
+        app(DescriptionVersionStore::class)->record($leader, ProductDescriptionVersion::STATUS_PUBLISHED, ProductDescriptionVersion::ORIGIN_ENRICHMENT, [
+            'description' => self::OLD_DESCRIPTION, 'primary_source_url' => self::PAGE, 'identity_verdict' => 'hard', 'evidence_count' => 50,
+        ]);
+        $old = $this->webImage($leader, self::IMAGE_BLACK);
+        $member = $this->coba('AF060003C', 'Orthomat Standard Szary 0.9m x mb. (9.5mm)', ['enrichment_status' => Product::ENRICHMENT_QUEUED]);
+        $batch = $this->batch($leader, [$member], [$leader->id => Product::ENRICHMENT_DONE], force: true);
+        $service = $this->service(gallery: [self::IMAGE_BLACK]);
+
+        $service->enrichProduct($leader, true, (int) $batch->id);
+
+        $leader->refresh();
+        $this->assertSame(self::OLD_DESCRIPTION, $leader->description);
+        $this->assertSame([(int) $old->id], $leader->images()->pluck('id')->map(static fn ($id): int => (int) $id)->all(), 'przy propozycji nic nie znika');
+        $this->assertTrue(Storage::disk('public')->exists($old->path));
+        $proposal = ProductDescriptionVersion::query()->where('product_id', $leader->id)->where('status', ProductDescriptionVersion::STATUS_PROPOSED)->sole();
+        $steps = array_column($proposal->enrichment_trace['steps'] ?? [], 'm');
+        $this->assertContains('zdjęcie w innym kolorze zostaje — opis czeka w przeglądzie', $steps);
+        $this->assertEmpty(array_filter($steps, static fn (string $m): bool => str_contains($m, 'usunięte')), json_encode($steps, JSON_UNESCAPED_UNICODE));
+        $this->assertStringNotContainsString('usunięte', (string) $leader->enrichment_error);
+    }
+
+    public function test_image_ranking_uses_colour_from_price_list_attribute(): void
+    {
+        $service = $this->service();
+        $pick = new ReflectionMethod(ProductEnrichmentService::class, 'pickPrimaryImageUrls');
+        // kolor tylko w kolumnie cennika, nie w nazwie — ranking bierze te same kolory co picker i usuwanie zdjęć
+        $card = $this->coba('AF060001', 'Orthomat Standard 0.6m x 0.9m (9.5mm)', ['price_list_attributes' => ['kolor' => 'Szary']]);
+
+        $this->assertSame([self::IMAGE_GREY], $pick->invoke($service, [self::IMAGE_BLACK, self::IMAGE_GREY], [], (string) $card->sku, (string) $card->name, $card));
+    }
+
+    /**
+     * Zdjęcie karty sprzed przebiegu z plikiem na dysku: z internetu (adres źródła), ręczne (bez adresu) albo z B2B.
+     *
+     * @param  array<string, mixed>  $extra
+     */
+    private function webImage(Product $product, ?string $sourceUrl, array $extra = []): ProductImage
+    {
+        $path = 'products/'.$product->id.'/'.uniqid('img', true).'.jpg';
+        Storage::disk('public')->put($path, $this->jpeg());
+        $sort = (int) (ProductImage::query()->where('product_id', $product->id)->max('sort_order') ?? -1) + 1;
+
+        return ProductImage::query()->create([
+            'product_id' => $product->id, 'path' => $path, 'source_url' => $sourceUrl, 'is_primary' => $sort === 0,
+            'sort_order' => $sort, 'checksum' => hash('sha256', $path),
+            ...$extra,
+        ]);
     }
 
     public function test_leader_without_sources_leaves_no_run_version(): void
@@ -710,14 +917,19 @@ final class EnrichmentModelSharedFlowTest extends TestCase
      *
      * @param  list<array<string, string>>|null  $searchResults
      */
-    private function service(?array $searchResults = null): ProductEnrichmentService
+    /**
+     * @param  list<array<string, string>>|null  $searchResults
+     * @param  list<string>|null  $gallery  adresy `<img>` strony (domyślnie czarne i szare); og:image = pierwszy z nich
+     */
+    private function service(?array $searchResults = null, ?array $gallery = null): ProductEnrichmentService
     {
+        $gallery ??= [self::IMAGE_BLACK, self::IMAGE_GREY];
         $facts = 'Orthomat Standard to mata antyzmęczeniowa Coba z pianki PVC o zamkniętych komórkach, z fakturą bąbelkową i skośnymi '
             .'krawędziami, do stanowisk pracy stojącej w suchych pomieszczeniach. Zmniejsza zmęczenie nóg i pleców, poprawia krążenie. '
             .'Norma EN 13552. Dostępne warianty: Orthomat Standard 0.9m x 1.5m (9.5mm), rolki cięte na metry.';
         $html = '<html><head><title>Orthomat Standard | COBA Europe</title>'
-            .'<meta property="og:image" content="'.self::IMAGE_BLACK.'"></head><body><h1>Orthomat Standard</h1>'
-            .'<img src="'.self::IMAGE_BLACK.'" alt="Orthomat Standard czarny"><img src="'.self::IMAGE_GREY.'" alt="Orthomat Standard szary">'
+            .'<meta property="og:image" content="'.$gallery[0].'"></head><body><h1>Orthomat Standard</h1>'
+            .implode('', array_map(static fn (string $url): string => '<img src="'.$url.'" alt="Orthomat Standard">', $gallery))
             .'<div class="product-description"><p>'.$facts.'</p>'
             .'<p>Producent: Coba Europe. Mata o grubości 9,5 mm, lekka i łatwa do przycięcia, utrzymuje czystość na stanowisku.</p>'
             .'<table><tr><th>Kod</th><th>Wymiary</th></tr>'
@@ -761,7 +973,7 @@ final class EnrichmentModelSharedFlowTest extends TestCase
 
         Http::fake(function (Request $request) use ($html) {
             $url = $request->url();
-            if (str_starts_with($url, self::IMAGE_BLACK) || str_starts_with($url, self::IMAGE_GREY)) {
+            if (str_starts_with($url, 'https://www.coba.com/wp-content/uploads/') && str_ends_with(mb_strtolower($url), '.jpg')) {
                 return Http::response($this->jpeg(), 200, ['Content-Type' => 'image/jpeg']);
             }
             if (str_contains($url, 'r.jina.ai')) {
