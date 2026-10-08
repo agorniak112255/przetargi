@@ -12,6 +12,7 @@ use DOMDocument;
 use DOMElement;
 use DOMXPath;
 use RuntimeException;
+use Throwable;
 
 /**
  * Sklep producenta Honeywell automation.honeywell.com (myAutomation) — ŚOI i przenośne detektory gazów. Sprawdzone na
@@ -158,6 +159,9 @@ final class HoneywellB2bConnector implements B2bConnector, B2bDocumentSource, B2
     private array $fileCache = [];
 
     private int $fileCacheBytes = 0;
+
+    /** @var array<string, string> adres → komunikat: plik bieżącej rodziny, który już raz się nie pobrał */
+    private array $fileErrors = [];
 
     public function __construct(
         private readonly HoneywellB2bClient $client,
@@ -886,6 +890,7 @@ final class HoneywellB2bConnector implements B2bConnector, B2bDocumentSource, B2
         // pliki poprzedniej rodziny nie będą już potrzebne
         $this->fileCache = [];
         $this->fileCacheBytes = 0;
+        $this->fileErrors = [];
 
         $codes = array_column($skus, 'code');
         $byShopCode = [];
@@ -1183,6 +1188,9 @@ final class HoneywellB2bConnector implements B2bConnector, B2bDocumentSource, B2
 
     /**
      * Plik rodziny z pamięci bieżącej rodziny — jej karty mają wspólną galerię i PDF-y (A700: kilkanaście kart).
+     * Nieudany plik też zostaje zapamiętany: bez tego każda karta rodziny pobierała go od nowa (karta techniczna
+     * i zapis pliku), a każda próba szła do serii błędów klienta — 08.10.2026 jeden PDF ponad limit przy 10 kaskach
+     * NSB i 3 martwe odnośniki przy 7 kartach TurboLite Edge przerwały przebiegi.
      *
      * @return array{bytes: string, mime: string}
      */
@@ -1191,7 +1199,18 @@ final class HoneywellB2bConnector implements B2bConnector, B2bDocumentSource, B2
         if (isset($this->fileCache[$url])) {
             return $this->fileCache[$url];
         }
-        $file = $this->client->fileBytes($url);
+        if (isset($this->fileErrors[$url])) {
+            throw new RuntimeException($this->fileErrors[$url]);
+        }
+        try {
+            $file = $this->client->fileBytes($url);
+        } catch (B2bFatalException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            $this->fileErrors[$url] = $e->getMessage();
+
+            throw $e;
+        }
         $size = strlen($file['bytes']);
         if ($this->fileCacheBytes + $size <= self::FILE_CACHE_BYTES) {
             $this->fileCache[$url] = $file;

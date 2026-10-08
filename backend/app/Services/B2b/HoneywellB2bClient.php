@@ -599,7 +599,12 @@ final class HoneywellB2bClient
             'progress' => static function (int $total, int $downloaded) use ($tooLarge): void {
                 $tooLarge($downloaded);
             },
-        ])->get($url));
+        ])->get($url), [404, 410]);
+        // martwy odnośnik w katalogu (08.10.2026: 3 z 4 plików rodziny Miller TurboLite Edge na prod-edam odpowiadają 404)
+        // to brak tego pliku, nie awaria serwera — nie liczy się do serii błędów, która przerywa przebieg
+        if (in_array($response->status(), [404, 410], true)) {
+            throw new RuntimeException('brak pliku u Honeywell (HTTP '.$response->status().'): '.$url);
+        }
 
         return ['bytes' => (string) $response->body(), 'mime' => strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]))];
     }

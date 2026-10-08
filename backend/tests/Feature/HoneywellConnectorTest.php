@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Jobs\TranslateB2bProductTextJob;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
@@ -121,6 +122,18 @@ final class HoneywellConnectorTest extends TestCase
 
     /** Kod produktu w sklepie, którego /pricecall odpowiada stroną HTML (sesja ważna). */
     private string $pricesHtmlFor = '';
+
+    /** @var list<string> pliki, których serwer plików nie ma (404 — martwy odnośnik w katalogu) */
+    private array $goneFiles = [];
+
+    /** @var list<string> pliki z nagłówkiem Content-Length ponad limit łącznika */
+    private array $oversizedFiles = [];
+
+    /** @var list<string> pliki, które przy pierwszym pobraniu odpowiadają 404, a potem są */
+    private array $goneOnceFiles = [];
+
+    /** @var array<string, int> liczba pobrań wg adresu pliku */
+    private array $fileRequests = [];
 
     protected function setUp(): void
     {
@@ -519,6 +532,112 @@ final class HoneywellConnectorTest extends TestCase
         $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
     }
 
+    public function test_broken_family_files_cost_one_request_per_family_and_never_stop_the_run(): void
+    {
+        // 08.10.2026: przebiegi stawały na „20 kolejnych błędach”, bo zły plik rodziny szedł od nowa przy każdej karcie
+        // (karta techniczna i zapis pliku) — PDF ponad limit przy 10 kaskach NSB, 3 martwe odnośniki przy 7 kartach
+        // TurboLite Edge. Układ jak TurboLite: dobra instrukcja (z pamięci rodziny, nie zeruje serii) i 3 martwe PDF-y
+        // — dawniej 3 + 6 × 3 = 21 błędów z rzędu przy 7. karcie i przerwany przebieg.
+        Storage::fake('public');
+        Storage::fake('local');
+        $manual = self::EDAM.'synth-edge-user-manual.pdf';
+        $brochure = self::EDAM.'synth-edge-brochure.pdf';
+        $brochureCa = self::EDAM.'synth-edge-brochure-ca.pdf';
+        $srlManual = self::EDAM.'synth-srl-user-manual.pdf';
+        $positions = [];
+        for ($i = 1; $i <= 8; $i++) {
+            $code = 'SYEDGE-'.$i;
+            $positions[] = ['code' => $code, 'shop' => 'Synth Edge0000', 'row' => self::row($code, 'PRD010~'.$code, '', 'SYNTH EDGE LIMITER TYPE '.$i, 'One Size', '300.00', '1 EA', 'each', '')];
+            $this->prices['PRD010~'.$code] = ['listPrice' => '300.00', 'netprice' => '210.00', 'discount' => '30', 'error' => null];
+        }
+        $this->addFamily('3000005', 'Synth Edge Limiters', '/personal-protective-equipment/fall-protection/synth-edge', $positions, [
+            'line_of_business' => 'Fall Protection',
+            'product_family' => 'Personal Fall Limiters',
+            'resources' => [
+                ['name' => 'Synth Edge User Manual', 'url' => $manual, 'category' => 'Manuals and Guides', 'format' => 'application/pdf', 'targetMarket' => ['gb']],
+                ['name' => 'Synth Edge Brochure', 'url' => $brochure, 'category' => 'Brochure', 'format' => 'application/pdf', 'targetMarket' => ['gb']],
+                ['name' => 'Synth Edge Brochure- Canadian', 'url' => $brochureCa, 'category' => 'Brochure', 'format' => 'application/pdf', 'targetMarket' => ['gb']],
+                ['name' => 'Synth SRL User Manual', 'url' => $srlManual, 'category' => 'Manuals and Guides', 'format' => 'application/pdf', 'targetMarket' => ['gb']],
+            ],
+        ]);
+        $this->goneFiles = [$brochure, $brochureCa, $srlManual];
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false, connector: $this->connector());
+
+        $run = B2bSyncRun::query()->findOrFail($result['sync_run_id']);
+        $texts = implode("\n", array_column($run->log ?? [], 'text'));
+        $this->assertSame(B2bSyncRun::STATUS_OK, $run->status, (string) $run->message);
+        $this->assertSame(8, $result['created'], implode(' | ', $result['errors']));
+        $this->assertSame([$manual => 1, $brochure => 1, $brochureCa => 1, $srlManual => 1], $this->fileRequests);
+        $this->assertStringContainsString('brak pliku u Honeywell (HTTP 404): '.$brochureCa, $texts);
+        // dobra instrukcja trafia na każdą kartę, martwych odnośników nie ma nigdzie
+        $this->assertSame(array_fill(0, 8, $manual), ProductDocument::query()->orderBy('product_id')->pluck('source_url')->all());
+    }
+
+    public function test_a_file_that_failed_in_one_family_is_asked_for_again_in_the_next(): void
+    {
+        // pamięć nieudanych plików żyje tylko w obrębie rodziny — wspólny PDF dwóch rodzin, który za pierwszym razem
+        // nie przyszedł, następna rodzina pobiera od nowa i zapisuje
+        Storage::fake('public');
+        Storage::fake('local');
+        $shared = self::EDAM.'synth-shared-datasheet.pdf';
+        foreach (['A' => '3000007', 'B' => '3000008'] as $letter => $id) {
+            $code = 'SYSH'.$letter.'-1';
+            $this->addFamily($id, 'Synth Shared '.$letter, '/personal-protective-equipment/hand-protection/synth-shared-'.strtolower($letter), [
+                ['code' => $code, 'shop' => 'Synth Shared '.$letter.'0000', 'row' => self::row($code, 'PRD010~'.$code, '', 'SYNTH SHARED GLOVE '.$letter, 'One Size', '10.00', '1 EA', 'each', '')],
+            ], [
+                'line_of_business' => 'Hand Protection',
+                'product_family' => 'Gloves',
+                'resources' => [['name' => 'Synth Shared Data Sheet', 'url' => $shared, 'category' => 'Data Sheet', 'format' => 'application/pdf', 'targetMarket' => ['gb']]],
+            ]);
+            $this->prices['PRD010~'.$code] = ['listPrice' => '10.00', 'netprice' => '7.00', 'discount' => '30', 'error' => null];
+        }
+        $this->goneOnceFiles = [$shared];
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false, connector: $this->connector());
+
+        $this->assertSame(2, $result['created'], implode(' | ', $result['errors']));
+        $this->assertSame([$shared => 2], $this->fileRequests);
+        $this->assertSame(
+            ['SYSHB-1'],
+            Product::query()->whereIn('id', ProductDocument::query()->where('source_url', $shared)->pluck('product_id'))->pluck('sku')->all(),
+        );
+    }
+
+    public function test_family_file_over_the_limit_is_asked_for_once_per_family(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $manual = self::EDAM.'synth-hard-hat-user-instruction-eu.pdf';
+        $positions = [];
+        for ($i = 1; $i <= 3; $i++) {
+            $code = 'SYNSB-'.$i;
+            $positions[] = ['code' => $code, 'shop' => 'Synth NSB0000', 'row' => self::row($code, 'PRD010~'.$code, '', 'SYNTH HARD HAT COLOUR '.$i, 'One Size', '20.00', '1 EA', 'each', '')];
+            $this->prices['PRD010~'.$code] = ['listPrice' => '20.00', 'netprice' => '14.00', 'discount' => '30', 'error' => null];
+        }
+        $this->addFamily('3000006', 'Synth NSB Hard Hat', '/personal-protective-equipment/head-protection/synth-nsb', $positions, [
+            'line_of_business' => 'Head Protection',
+            'product_family' => 'Hard Hats',
+            'resources' => [
+                ['name' => 'Synth Hard Hat - User Instruction - EU', 'url' => $manual, 'category' => 'Data Sheet', 'format' => 'application/pdf', 'targetMarket' => ['gb']],
+            ],
+        ]);
+        $this->oversizedFiles = [$manual];
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false, connector: $this->connector());
+
+        $run = B2bSyncRun::query()->findOrFail($result['sync_run_id']);
+        $this->assertSame(B2bSyncRun::STATUS_OK, $run->status, (string) $run->message);
+        $this->assertSame(3, $result['created'], implode(' | ', $result['errors']));
+        // karta techniczna i zapis pliku przy 3 kartach = dawniej 6 zapytań, teraz jedno
+        $this->assertSame([$manual => 1], $this->fileRequests);
+        $this->assertStringContainsString('plik ponad 15 MB pominięty: '.$manual, implode("\n", array_column($run->log ?? [], 'text')));
+        $this->assertSame(0, ProductDocument::query()->count());
+    }
+
     public function test_a_size_without_price_in_the_next_run_does_not_split_the_card(): void
     {
         Storage::fake('public');
@@ -826,6 +945,38 @@ final class HoneywellConnectorTest extends TestCase
         $this->assertSame('application/pdf', $client->fileBytes(self::EDAM.'synth-datasheet.pdf')['mime']);
     }
 
+    public function test_missing_file_is_skipped_and_never_counts_as_a_server_failure(): void
+    {
+        // przebieg 08.10.2026: 3 martwe odnośniki rodziny Miller TurboLite Edge (prod-edam 404) × 7 kart = 20 „błędów”
+        $gone = [self::EDAM.'synth-brochure-404.pdf' => 404, self::SCENE7.'synth-image-410' => 410];
+        Http::fake(static function (Request $request) use ($gone) {
+            if (isset($gone[$request->url()])) {
+                return Http::response('<html>Not Found</html>', $gone[$request->url()], ['Content-Type' => 'text/html;charset=utf-8']);
+            }
+
+            return Http::response('%PDF-1.4 synth', 200, ['Content-Type' => 'application/pdf']);
+        });
+        $client = $this->client();
+
+        // więcej niż próg serii błędów (20)
+        for ($i = 0; $i < 11; $i++) {
+            foreach ($gone as $url => $status) {
+                $thrown = null;
+                try {
+                    $client->fileBytes($url);
+                } catch (Throwable $e) {
+                    $thrown = $e;
+                }
+                $this->assertNotNull($thrown, $url);
+                $this->assertNotInstanceOf(B2bFatalException::class, $thrown, $thrown->getMessage());
+                $this->assertSame('brak pliku u Honeywell (HTTP '.$status.'): '.$url, $thrown->getMessage());
+            }
+        }
+
+        Http::assertSentCount(22);
+        $this->assertSame('application/pdf', $client->fileBytes(self::EDAM.'synth-datasheet.pdf')['mime']);
+    }
+
     public function test_registry_detects_honeywell_by_host_as_the_manufacturer_site(): void
     {
         $registry = app(B2bConnectorRegistry::class);
@@ -1052,7 +1203,7 @@ final class HoneywellConnectorTest extends TestCase
             ]);
         }
 
-        Http::fake(function (Request $request) use ($base, $auth) {
+        Http::fake(function (Request $request, array $options) use ($base, $auth) {
             $url = $request->url();
             $path = (string) parse_url($url, PHP_URL_PATH);
             $host = 'https://'.parse_url($url, PHP_URL_HOST);
@@ -1232,6 +1383,15 @@ final class HoneywellConnectorTest extends TestCase
             }
 
             // --- pliki ---
+            if (str_starts_with($url, self::SCENE7) || str_starts_with($url, self::EDAM)) {
+                $this->fileRequests[$url] = ($this->fileRequests[$url] ?? 0) + 1;
+            }
+            if (in_array($url, $this->goneFiles, true) || (in_array($url, $this->goneOnceFiles, true) && $this->fileRequests[$url] === 1)) {
+                return Http::response('<html>Not Found</html>', 404, ['Content-Type' => 'text/html;charset=utf-8']);
+            }
+            if (in_array($url, $this->oversizedFiles, true)) {
+                return OversizedFileDownload::abortLikeCurl($request, $options);
+            }
             if (str_starts_with($url, self::SCENE7)) {
                 return Http::response('SYNTH-IMAGE-'.basename($path), 200, ['Content-Type' => 'image/jpeg']);
             }

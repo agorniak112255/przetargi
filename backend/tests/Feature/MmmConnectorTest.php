@@ -647,6 +647,34 @@ final class MmmConnectorTest extends TestCase
         $this->assertSame('application/pdf', $client->fileBytes(self::MEDIA.'9000003O/synth-datasheet.pdf')['mime']);
     }
 
+    public function test_missing_file_is_skipped_and_never_counts_as_a_server_failure(): void
+    {
+        $gone = self::MEDIA.'9000004O/synth-brochure-404.pdf';
+        Http::fake(static function (Request $request) use ($gone) {
+            if ($request->url() === $gone) {
+                return Http::response('<html>Not Found</html>', 404, ['Content-Type' => 'text/html']);
+            }
+
+            return Http::response('%PDF-1.4 synth', 200, ['Content-Type' => 'application/pdf']);
+        });
+        $client = $this->client();
+
+        // więcej niż próg serii błędów (20)
+        for ($i = 0; $i < 22; $i++) {
+            $thrown = null;
+            try {
+                $client->fileBytes($gone);
+            } catch (Throwable $e) {
+                $thrown = $e;
+            }
+            $this->assertNotNull($thrown);
+            $this->assertNotInstanceOf(B2bFatalException::class, $thrown, $thrown->getMessage());
+            $this->assertSame('brak pliku na multimedia.3m.com (HTTP 404): '.$gone, $thrown->getMessage());
+        }
+
+        $this->assertSame('application/pdf', $client->fileBytes(self::MEDIA.'9000005O/synth-datasheet.pdf')['mime']);
+    }
+
     public function test_colour_variant_key_reads_the_colour_and_the_code_suffix_from_the_list_name(): void
     {
         $helmet = 'Hełm ochronny 3M™, wskaźnik Uvicator, pinlock, wentylowany, opaska przeciwpotna';

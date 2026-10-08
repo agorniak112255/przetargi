@@ -416,7 +416,11 @@ final class MmmB2bClient
             'progress' => static function (int $total, int $downloaded) use ($tooLarge): void {
                 $tooLarge($downloaded);
             },
-        ])->get($url));
+        ])->get($url), [404, 410]);
+        // martwy odnośnik do pliku to brak tego pliku, nie awaria serwera — nie liczy się do serii błędów przebiegu
+        if (in_array($response->status(), [404, 410], true)) {
+            throw new RuntimeException('brak pliku na '.self::FILE_HOST.' (HTTP '.$response->status().'): '.$url);
+        }
         $mime = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));
 
         return ['bytes' => (string) $response->body(), 'mime' => $mime];
