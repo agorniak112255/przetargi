@@ -802,6 +802,35 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertNotNull($other->fresh());
     }
 
+    public function test_does_not_merge_glued_dimension_codes_of_non_wear_items(): void
+    {
+        Queue::fake();
+
+        // Coba: końcówka kodu to wymiar maty albo moduł, nie rozmiar — ta sama cena nie robi z nich jednej karty
+        $cards = [
+            ['AF010005', 'Orthomat Standard Czarny 1.2m x 18.3m (9.5mm)', 2608.70],
+            ['AF010006', 'Orthomat Standard Czarny 1.5m x 18.3m (9.5mm)', 2608.70],
+            ['HI010004', 'High-Duty Czarny 0.9m x 1.5m (12mm) - moduł boczny (2 kr./1 dł.)', 302.32],
+            ['HI010005', 'High-Duty Czarny 0.9m x 1.5m (12mm) - moduł środkowy (2 kr.)', 302.32],
+            ['SP070001C5', 'SitePath Żółty 1m x 5m (2mm)', 309.37],
+            ['SP070001C6', 'SitePath Żółty 1m x 6m (2mm)', 309.37],
+        ];
+        foreach ($cards as [$sku, $name, $price]) {
+            Product::query()->create([
+                'sku' => $sku,
+                'name' => $name,
+                'manufacturer' => 'Coba',
+                'catalog_price_net' => $price,
+                'purchase_price' => $price,
+            ]);
+        }
+
+        $result = app(ProductSizeMergeService::class)->merge('Coba', false);
+
+        $this->assertSame(0, $result['groups']);
+        $this->assertSame(6, Product::query()->count());
+    }
+
     public function test_does_not_merge_dotted_digit_codes_by_code_tail(): void
     {
         Queue::fake();

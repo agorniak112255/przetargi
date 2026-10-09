@@ -56,6 +56,10 @@ final class SpreadsheetMappingHeuristic
             }
         }
 
+        // skoroszyt zwolniony od razu — cennik Coby (kolumny do XEB) trzymany do końca zajmował dziesiątki MB
+        $spreadsheet->disconnectWorksheets();
+        unset($spreadsheet);
+
         if ($sheets === []) {
             return null;
         }

@@ -122,12 +122,14 @@ final class ProductIdentifierStore
      * Identyfikatory wierszy importu cennika z pliku (source_key „file:{cennik}”), wołane w transakcji importu. Pozycja
      * = kod wiersza dosłownie (bez kodu — EAN), więc zwinięte rozmiary zachowują każdy swój kod i EAN. Import czyta cały
      * plik: identyfikator tego cennika, którego nowy plik już nie ma, dostaje removed_at (wiersze nie są kasowane).
+     * Bez wpisu importu (null — products:repair-price-list-codes czyta plik bez nowego importu): widziane wiersze
+     * zachowują swój price_list_import_id, nowe dostają null.
      *
      * @param  array<int, list<array{position: string, type: string, value: string, field?: string|null, label?: string|null}>>  $rowsByProduct
      *                                                                                                                                           id karty => identyfikatory jej wierszy
      * @return int liczba identyfikatorów oznaczonych jako zniknięte
      */
-    public function recordFile(PriceList $priceList, PriceListImport $import, array $rowsByProduct): int
+    public function recordFile(PriceList $priceList, ?PriceListImport $import, array $rowsByProduct): int
     {
         $sourceKey = self::fileKey((int) $priceList->id);
         $manufacturer = trim((string) $priceList->manufacturer);
@@ -179,9 +181,12 @@ final class ProductIdentifierStore
                 $row->save();
             }
         }
+        $seen = ['last_seen_at' => $now, 'removed_at' => null];
+        if ($import !== null) {
+            $seen['price_list_import_id'] = $import->id;
+        }
         foreach (array_chunk($seenIds, 1000) as $chunk) {
-            ProductIdentifier::query()->toBase()->whereIn('id', $chunk)
-                ->update(['last_seen_at' => $now, 'price_list_import_id' => $import->id, 'removed_at' => null]);
+            ProductIdentifier::query()->toBase()->whereIn('id', $chunk)->update($seen);
         }
         foreach (array_chunk($goneIds, 1000) as $chunk) {
             ProductIdentifier::query()->toBase()->whereIn('id', $chunk)->update(['removed_at' => $now]);
@@ -198,7 +203,7 @@ final class ProductIdentifierStore
                 'b2b_account_id' => null,
                 'price_list_id' => $priceList->id,
                 'b2b_sync_run_id' => null,
-                'price_list_import_id' => $import->id,
+                'price_list_import_id' => $import?->id,
                 'first_seen_at' => $now,
                 'last_seen_at' => $now,
                 'removed_at' => null,

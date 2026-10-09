@@ -161,6 +161,12 @@ final class ProductSizeMergeService
             if (str_starts_with((string) $key, 'stem:') && ! $this->stemNamesAllowMerge($items, $knownStems)) {
                 continue;
             }
+            // rdzeń kodu (sku:) też tylko przy zgodnych nazwach, bez wyjątku kodu bazowego — jak zwijanie przy imporcie
+            if (str_starts_with((string) $key, 'sku:') && ! $this->sizes->namesCompatibleForMerge(
+                array_map(static fn (Product $p): string => (string) $p->name, $items),
+            )) {
+                continue;
+            }
             // karta modelu zostaje: to samo id, jej powiązania innych kont, pozycje przetargów, nazwa i SKU
             $winner = $model ?? $this->preferredKeeper($items);
             $losers = array_values(array_filter(
@@ -449,7 +455,7 @@ final class ProductSizeMergeService
         ?ProductSourcePrice $fileSlot,
     ): ?string {
         $price = $this->filePriceBucket($product, $fileSlot);
-        $stem = $this->sizes->resolveMergeStem((string) $product->sku, $knownStems);
+        $stem = $this->sizes->resolveMergeStem((string) $product->sku, $knownStems, (string) $product->name);
         if ($stem !== null) {
             return 'stem:'.mb_strtolower((string) $product->manufacturer).'|'.mb_strtolower($stem).'|'.$price;
         }

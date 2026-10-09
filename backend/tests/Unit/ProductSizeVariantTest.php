@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use App\Models\Product;
 use App\Support\ProductSizeVariant;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -672,5 +673,103 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertSame([1, 2, 3], array_keys($groups));
         $this->assertSame($groups[1]['key'], $groups[2]['key']);
         $this->assertSame($groups[1]['key'], $groups[3]['key']);
+    }
+
+    /**
+     * Kody z cennika Coby 2026 (import 12.09.2026 uciął je jako „rozmiar doklejony do kodu”): bez dowodu rozmiaru
+     * kod zostaje cały, a dawna reguła (legacy) daje dawny rdzeń — po nim import odnajduje ucięte karty.
+     *
+     * @return array<string, array{0: string, 1: string, 2: string}> kod, nazwa z pliku, dawny rdzeń
+     */
+    public static function gluedCodesWithoutSizeEvidence(): array
+    {
+        return [
+            'mata AF010005' => ['AF010005', 'Orthomat Standard Czarny 1.2m x 18.3m (9.5mm)', 'AF0100'],
+            'guma CRS00005' => ['CRS00005', 'Standardowa guma 1.4m x 5m (8mm)', 'CRS000'],
+            'listwy GRP071250' => ['GRP071250', 'COBAGRiP Decking Strips Żółty 1200mm x 50mm x 3mm - w opakowaniu 3 sztuki', 'GRP0712'],
+            'uchwyt MCLIP38' => ['MCLIP38', 'Akcesoria Krata GRP - Uchwyt typu M - 38mm', 'MCLIP'],
+            'chodnik SP070001C5' => ['SP070001C5', 'SitePath Żółty 1m x 5m (2mm)', 'SP070001C'],
+            'ostrza 620010X10' => ['620010X10', 'Wymienne ostrza GR8 - w opakowaniu 10 sztuk', '620010X'],
+            'ostrza 650010X50RBM' => ['650010X50RBM', 'Wymienne ostrza Anti-Stab AutoSafe Pro - w opakowaniu 50 sztuk', '650010X50RB'],
+            'zaczep YO YO METAL' => ['YO YO METAL', 'Zaczep Heavy Duty YoYo - GR8 Pro, AutoSafe Pro, AutoSlide', 'YO YO META'],
+            'mata DS010610' => ['DS010610', 'DeckStep Matting Czarny ~0.59m/0.6m x 10m (11.5mm)', 'DS0106'],
+            'moduł HI010004' => ['HI010004', 'High-Duty Czarny 0.9m x 1.5m (12mm) - moduł boczny (2 kr./1 dł.)', 'HI0100'],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('gluedCodesWithoutSizeEvidence')]
+    public function glued_code_tail_is_not_a_size_without_evidence(string $sku, string $name, string $legacyCore): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertNull($svc->skuCore($sku, $name));
+        $this->assertNull($svc->groupKey('Coba', $name, $sku));
+        $this->assertNull($svc->resolveMergeStem($sku, [], $name));
+
+        // dawna reguła 1:1 — do odnajdywania kart z kodem uciętym wcześniejszym importem
+        $this->assertSame($legacyCore, $svc->skuCore($sku, $name, legacy: true));
+        $this->assertSame('sku:coba|'.mb_strtolower($legacyCore), $svc->groupKey('Coba', $name, $sku, null, true));
+    }
+
+    #[Test]
+    public function glued_code_tail_is_a_size_with_wear_family_or_matching_size_in_name(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        // (b) rodzina z nazwy: rękawice, obuwie
+        $this->assertSame('A5016', $svc->skuCore('A501609', 'Rękawice montażowe'));
+        $this->assertSame('MCLIP', $svc->skuCore('MCLIP38', 'Półbuty S3'));
+        $this->assertSame('CRIOT', $svc->skuCore('CRIOT08', 'CRYOGENIC GLOVES -196°C LEATHER 40CM'));
+        $this->assertSame('CRIOT', $svc->resolveMergeStem('CRIOT08', [], 'CRYOGENIC GLOVES -196°C LEATHER 40CM'));
+        $this->assertSame('sku:pip|a5016', $svc->groupKey('PIP', 'Rękawice montażowe', 'A501609'));
+        // (a) ten sam rozmiar w nazwie albo w opakowaniu
+        $this->assertSame('HM5500B', $svc->skuCore('HM5500BS', 'HM5500 BAYONET HALF-MASK ELASTOMERIC S'));
+        $this->assertSame('sku:coba|af0100', $svc->groupKey('Coba', 'Orthomat Standard Czarny', 'AF010005', '5'));
+        // rozmiar z nazwy sprzeczny z końcówką kodu to brak dowodu
+        $this->assertNull($svc->skuCore('HM5500BS', 'HM5500 BAYONET HALF-MASK ELASTOMERIC M'));
+        $this->assertSame('HM5500B', $svc->skuCore('HM5500BS', 'HM5500 BAYONET HALF-MASK ELASTOMERIC M', legacy: true));
+    }
+
+    #[Test]
+    public function separator_marker_and_three_digit_code_need_no_evidence(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame('37695VP', $svc->skuCore('37695VP100'));
+        $this->assertSame('34703', $svc->skuCore('34703090', '1st Winter Dry 9'));
+        $this->assertSame('A5016', $svc->skuCore('A5016/09', 'Uchwyt'));
+        $this->assertSame('CADIZ', $svc->skuCore('CADIZ-42', 'Sandał'));
+        $this->assertSame('BAX', $svc->skuCore('BAX-M', 'Okulary BAXTER'));
+        $this->assertSame('BAX', $svc->skuCore('BAX-5', 'Okulary BAXTER'));
+        $this->assertSame('BLACKTACTIL', $svc->skuCore('BLACKTACTILT07', 'Model'));
+        $this->assertSame('MASTERTSHIRT-B03', $svc->skuCore('MASTERTSHIRT-B03TS', 'Model'));
+        $this->assertSame('BLACKTACTIL', $svc->resolveMergeStem('BLACKTACTILT07', [], 'Model'));
+    }
+
+    #[Test]
+    public function merge_stem_without_name_and_tail_stem_keep_the_old_rule(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame('SP070001C', $svc->resolveMergeStem('SP070001C5'));
+        $this->assertSame('SP070001C', $svc->skuTailStem('SP070001C5'));
+        $this->assertSame('620010X', $svc->skuTailStem('620010X10'));
+        $this->assertSame('CRIOT', $svc->skuTailStem('CRIOT08'));
+        // kod bazowy z listy znanych rdzeni — także z nazwą bez dowodu
+        $this->assertSame('CANADA-IT', $svc->resolveMergeStem('CANADA-IT', ['canada-it' => 'CANADA-IT'], 'Model'));
+    }
+
+    public function test_letter_size_in_glove_name_confirms_number_in_code_by_en420(): void
+    {
+        $svc = new ProductSizeVariant;
+        // EN 420: 8 = M, 11 = XXL — ten sam rozmiar, dowód jak przed 10.10.2026
+        $this->assertSame('NITRO', $svc->skuCore('NITRO08', 'Rękawice nitrylowe NITRO M'));
+        $this->assertSame('NITRO', $svc->skuCore('NITRO11', 'Rękawice nitrylowe NITRO XXL'));
+        // jawna sprzeczność: litera inna niż EN 420 albo inna liczba w nazwie — brak dowodu
+        $this->assertNull($svc->skuCore('NITRO08', 'Rękawice nitrylowe NITRO L'));
+        $this->assertNull($svc->skuCore('NITRO08', 'Rękawice nitrylowe NITRO rozmiar 9'));
+        // poza rodzinami z rozmiarem litera w nazwie nie jest dowodem
+        $this->assertNull($svc->skuCore('AF010005', 'Orthomat Standard Czarny M'));
     }
 }

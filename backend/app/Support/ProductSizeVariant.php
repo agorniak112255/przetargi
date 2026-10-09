@@ -56,6 +56,32 @@ final class ProductSizeVariant
     private const RANGE_SEP = '(?:do|to|à|au|bis|[-–—])';
 
     /**
+     * Rodzaje końcówki kodu, którą czytamy jako rozmiar. Doklejone (bez separatora) potrzebują dowodu
+     * (trustsSkuOnlySize): Coba AF010005 to mata 1.2 m x 18.3 m, nie „AF0100 w rozmiarze 5” — import z 12.09.2026
+     * uciął tak 167 kodów i zlał pozycje o tej samej cenie. Separator, znacznik T i trzycyfrowy kod Ansella/Showy
+     * zostają bez dowodu, jak dotąd.
+     */
+    private const TAIL_GLUED_NUMERIC = 'glued_numeric';
+
+    private const TAIL_GLUED_LETTER = 'glued_letter';
+
+    private const TAIL_MARKER = 'marker';
+
+    private const TAIL_SEPARATOR = 'separator';
+
+    private const TAIL_DIGIT_CODE = 'digit_code';
+
+    /** Rodziny, w których doklejona końcówka kodu bywa rozmiarem. */
+    private const SIZED_FAMILIES = [
+        PpeAssortment::FAMILY_GLOVES,
+        PpeAssortment::FAMILY_FOOTWEAR,
+        PpeAssortment::FAMILY_APPAREL,
+    ];
+
+    /** Tworzony leniwie — klasa nie ma zależności w konstruktorze (wiele miejsc robi `new ProductSizeVariant`). */
+    private ?PpeAssortment $assortment = null;
+
+    /**
      * Lista rozmiarów z pola opakowania (np. „7, 8, 9, 10”) albo jeden rozmiar z nazwy/SKU.
      *
      * @return list<string>
@@ -589,34 +615,111 @@ final class ProductSizeVariant
      */
     public function skuTailStem(string $sku): ?string
     {
+        return $this->gluedTail($sku)['core'] ?? null;
+    }
+
+    /**
+     * Rozbiór końcówki kodu na rdzeń i rozmiar — te same ścieżki i ta sama kolejność co dawniej w skuTailStem,
+     * z rodzajem końcówki (doklejone cyfry potrzebują dowodu, separator i znacznik T nie).
+     *
+     * @return array{core: string, size: ?string, kind: string}|null
+     */
+    private function gluedTail(string $sku): ?array
+    {
         $sku = trim($sku);
         if ($sku === '' || preg_match('/[A-Za-z]/u', $sku) !== 1) {
             return null;
         }
         // „BLACKTACTILT07” — T08–T14 to taille, nie litera modelu (ALUWELD-DRT zostaje).
         if (preg_match('/^(\p{L}{5,})T(0\d|1[0-4])$/u', $sku, $m) === 1) {
-            return $m[1];
+            return ['core' => $m[1], 'size' => $this->normalizeSizeToken($m[2]), 'kind' => self::TAIL_MARKER];
         }
         if (preg_match('/^(.{4,}[A-Za-z])(\d{2})$/u', $sku, $m) === 1) {
             $n = (int) $m[2];
             $stem = rtrim($m[1], "-/_ \t");
             if ($n >= 4 && $n <= 13 && $this->isUsableCore($stem)) {
-                return $stem;
+                return ['core' => $stem, 'size' => $this->normalizeSizeToken($m[2]), 'kind' => self::TAIL_GLUED_NUMERIC];
             }
         }
         if (preg_match('/^(.{4,})(\d)$/u', $sku, $m) === 1 && preg_match('/\d$/u', $m[1]) !== 1) {
             $n = (int) $m[2];
             $stem = rtrim($m[1], "-/_ \t");
             if ($n >= 4 && $n <= 9 && $this->isUsableCore($stem)) {
-                return $stem;
+                // „BAX-5” to rozmiar po separatorze, „SP070001C5” cyfra doklejona do kodu
+                $kind = $stem !== $m[1] ? self::TAIL_SEPARATOR : self::TAIL_GLUED_NUMERIC;
+
+                return ['core' => $stem, 'size' => $this->normalizeSizeToken($m[2]), 'kind' => $kind];
             }
         }
         $letterStem = $this->skuLetterSizeStem($sku);
         if ($letterStem !== null) {
             return $letterStem;
         }
+        $stem = $this->stripWearSizeSuffix($sku);
+        if ($stem === null) {
+            return null;
+        }
 
-        return $this->stripWearSizeSuffix($sku);
+        return [
+            'core' => $stem,
+            'size' => $this->normalizeSizeToken(ltrim(mb_substr(trim($sku), mb_strlen($stem)), "-/_ \t")),
+            'kind' => self::TAIL_SEPARATOR,
+        ];
+    }
+
+    /**
+     * Czy rozmiar odczytany z samego kodu jest pewny. Końcówka po separatorze, znacznik T i trzycyfrowy kod
+     * (Ansell VP100, Showa 34703090) — tak, jak dotąd. Końcówka doklejona do kodu (AF010005, CRIOT08, SP070001C5,
+     * 620010X10, HM5500BS) — tylko z dowodem: (a) nazwa albo opakowanie podaje ten sam rozmiar, albo (b) nazwa mówi
+     * o rękawicach, obuwiu lub odzieży. Rozmiar z nazwy sprzeczny z końcówką to brak dowodu.
+     */
+    private function trustsSkuOnlySize(?string $name, ?string $packaging, string $kind, ?string $size): bool
+    {
+        if ($kind !== self::TAIL_GLUED_NUMERIC && $kind !== self::TAIL_GLUED_LETTER) {
+            return true;
+        }
+        $named = $this->normalizeSizeToken((string) $packaging) ?? $this->sizeFromName((string) $name);
+        if ($named !== null && $size !== null && $named === $size) {
+            return true;
+        }
+        $name = trim((string) $name);
+        if ($name === '' || $size === null) {
+            return false;
+        }
+        $this->assortment ??= new PpeAssortment;
+        $family = $this->assortment->family($name);
+        if (! in_array($family, self::SIZED_FAMILIES, true)) {
+            return false;
+        }
+        if ($named === null) {
+            return true;
+        }
+
+        return ! $this->sizesContradict($named, $size, $family === PpeAssortment::FAMILY_GLOVES);
+    }
+
+    /**
+     * Jawna sprzeczność rozmiaru z nazwy i z kodu: liczba ≠ liczba, litera ≠ litera, a przy rękawicach litera ≠
+     * odpowiednik liczby wg EN 420 (6 = XS … 11 = XXL; „Rękawice … M” przy NITRO08 to ten sam rozmiar). Litera przy
+     * liczbie spoza tabeli albo w obuwiu i odzieży — bez sprzeczności.
+     */
+    private function sizesContradict(string $named, string $size, bool $gloves): bool
+    {
+        $numeric = static fn (string $s): bool => preg_match('/^\d+(?:[.,]\d+)?$/', $s) === 1;
+        if ($numeric($named) === $numeric($size)) {
+            return true;
+        }
+        if (! $gloves) {
+            return false;
+        }
+        [$number, $letter] = $numeric($named) ? [$named, $size] : [$size, $named];
+        $en420 = [6 => ['XS'], 7 => ['S'], 8 => ['M'], 9 => ['L'], 10 => ['XL'], 11 => ['XXL', '2XL']];
+        $letters = $en420[(int) $number] ?? null;
+        if ($letters === null || (string) (int) $number !== ltrim($number, '0')) {
+            return false;
+        }
+
+        return ! in_array(strtoupper($letter), $letters, true);
     }
 
     /**
@@ -646,32 +749,34 @@ final class ProductSizeVariant
     /**
      * Koszulki Rostaing: MASTERTSHIRT-B03TXL / MASTERTSHIRT-BTS.
      * Nie obcina ROOTS, PRODUCTS ani modeli typu SCANFORCE-BRTL.
+     *
+     * @return array{core: string, size: ?string, kind: string}|null
      */
-    private function skuLetterSizeStem(string $sku): ?string
+    private function skuLetterSizeStem(string $sku): ?array
     {
         $tLong = 'T(?:6XL|5XL|4XL|3XL|XXXL|XXL|XL|XXS|XS)';
         if (preg_match('/^(.{4,})('.$tLong.')$/iu', $sku, $m) === 1) {
             $stem = rtrim($m[1], "-/_ \t");
             if ($this->isUsableCore($stem) && preg_match('/[\/\-_]/u', $stem) === 1) {
-                return $stem;
+                return ['core' => $stem, 'size' => $this->normalizeSizeToken(substr($m[2], 1)), 'kind' => self::TAIL_MARKER];
             }
         }
         if (preg_match('/^(.{4,}\d)(T(?:S|M|L))$/iu', $sku, $m) === 1) {
             $stem = rtrim($m[1], "-/_ \t");
             if ($this->isUsableCore($stem)) {
-                return $stem;
+                return ['core' => $stem, 'size' => $this->normalizeSizeToken(substr($m[2], 1)), 'kind' => self::TAIL_MARKER];
             }
         }
         if (preg_match('/^(.{4,}[\/\-_][A-Z])(T(?:6XL|5XL|4XL|3XL|XXXL|XXL|XL|XXS|XS|S|M|L))$/iu', $sku, $m) === 1) {
             $stem = rtrim($m[1], "-/_ \t");
             if ($this->isUsableCore($stem)) {
-                return $stem;
+                return ['core' => $stem, 'size' => $this->normalizeSizeToken(substr($m[2], 1)), 'kind' => self::TAIL_MARKER];
             }
         }
         if (preg_match('/^(.{4,})[\/\-_](XXXXL|XXXL|XXL|XXS|XS|XL|[2-6]XL|[SML])$/iu', $sku, $m) === 1) {
             $stem = rtrim($m[1], "-/_ \t");
             if ($this->isUsableCore($stem)) {
-                return $stem;
+                return ['core' => $stem, 'size' => $this->normalizeSizeToken($m[2]), 'kind' => self::TAIL_SEPARATOR];
             }
         }
 
@@ -679,13 +784,16 @@ final class ProductSizeVariant
     }
 
     /**
+     * Rdzeń do łączenia rozmiarów. Z nazwą (import, łączenie po imporcie) końcówka doklejona do kodu liczy się
+     * tylko z dowodem (trustsSkuOnlySize); bez nazwy — jak dotąd.
+     *
      * @param  array<string, string>  $knownStems
      */
-    public function resolveMergeStem(string $sku, array $knownStems = []): ?string
+    public function resolveMergeStem(string $sku, array $knownStems = [], ?string $name = null): ?string
     {
-        $stem = $this->skuTailStem($sku);
-        if ($stem !== null) {
-            return $stem;
+        $tail = $this->gluedTail($sku);
+        if ($tail !== null && ($name === null || $this->trustsSkuOnlySize($name, null, $tail['kind'], $tail['size']))) {
+            return $tail['core'];
         }
         $key = mb_strtolower(trim($sku));
         if ($key !== '' && isset($knownStems[$key])) {
@@ -840,7 +948,68 @@ final class ProductSizeVariant
         return true;
     }
 
-    public function skuCore(?string $sku, ?string $name = null): ?string
+    /**
+     * Kod bez rozmiaru. Rozmiar doklejony do kodu (AF010005, CRIOT08, HM5500BS) odcina tylko z dowodem
+     * (trustsSkuOnlySize) — bez dowodu null, kod zostaje cały.
+     *
+     * @param  bool  $legacy  dawna reguła bez dowodu (sprzed 10.10.2026) — wyłącznie do odnajdywania kart, którym
+     *                        wcześniejszy import uciął kod (AF010005 → AF0100)
+     */
+    public function skuCore(?string $sku, ?string $name = null, bool $legacy = false): ?string
+    {
+        return $this->coreWithEvidence($sku, $name, null, $legacy);
+    }
+
+    /**
+     * Kody, które dawna reguła rozmiaru (importy sprzed 10.10.2026) nadawała karcie wiersza: rdzeń (pozycje o tej
+     * samej cenie zwinięte w jedną kartę: AF010005 → AF0100) albo rdzeń-rozmiar (różne ceny: DP010004 → DP0100-4 —
+     * PriceListImportService::finalizeProductCode). Pusta lista — dawna reguła tego kodu nie ucinała. Wyłącznie do
+     * odnajdywania kart z uciętym kodem (import, products:repair-price-list-codes, products:price-list-file-audit).
+     *
+     * @return list<string>
+     */
+    public function legacyCutCodes(string $sku, ?string $name = null, ?string $packaging = null): array
+    {
+        $sku = trim($sku);
+        $core = $this->skuCore($sku, $name, legacy: true);
+        if ($core === null || mb_strtolower($core) === mb_strtolower($sku)) {
+            return [];
+        }
+        $codes = [$core];
+        $size = trim((string) $packaging);
+        if ($size === '') {
+            $size = (string) ($this->extractSize((string) $name, $sku, null) ?? '');
+        }
+        // ten sam warunek co PriceListImportService::isSizePackaging przy doklejaniu rozmiaru do kodu modelu
+        if ($size !== '' && preg_match(
+            '/^(XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|[2-6]XL|ONE\s*SIZE|ONESIZE|\d{1,2})$/',
+            strtoupper($size),
+        ) === 1) {
+            $codes[] = $core.'-'.$size;
+        }
+
+        return $codes;
+    }
+
+    private function coreWithEvidence(?string $sku, ?string $name, ?string $packaging, bool $legacy): ?string
+    {
+        $hit = $this->skuCoreTail($sku, $name);
+        if ($hit === null) {
+            return null;
+        }
+        if ($legacy || $this->trustsSkuOnlySize($name, $packaging, $hit['kind'], $hit['size'])) {
+            return $hit['core'];
+        }
+
+        return null;
+    }
+
+    /**
+     * Dawna ścieżka skuCore 1:1 (ta sama kolejność i te same rdzenie), z rodzajem odciętej końcówki.
+     *
+     * @return array{core: string, size: ?string, kind: string}|null
+     */
+    private function skuCoreTail(?string $sku, ?string $name): ?array
     {
         $sku = trim((string) $sku);
         if ($sku === '') {
@@ -849,7 +1018,7 @@ final class ProductSizeVariant
         if (preg_match('/^\d+$/u', $sku) === 1 && $this->sizeFromName((string) $name) === null) {
             return null;
         }
-        $tail = $this->skuTailStem($sku);
+        $tail = $this->gluedTail($sku);
         if ($tail !== null) {
             return $tail;
         }
@@ -859,11 +1028,11 @@ final class ProductSizeVariant
         }
         $letterCore = $this->stripGluedLetterSize($sku);
         if ($letterCore !== null) {
-            return $letterCore;
+            return ['core' => $letterCore, 'size' => $this->sizeFromGluedSku($sku), 'kind' => self::TAIL_GLUED_LETTER];
         }
         $code = $this->sizeToSkuSuffix($size);
         if ($code !== null && preg_match('/^(.+)'.$code.'$/i', $sku, $m) === 1 && $this->isUsableCore($m[1])) {
-            return rtrim($m[1], "-/_ \t");
+            return ['core' => rtrim($m[1], "-/_ \t"), 'size' => $size, 'kind' => self::TAIL_DIGIT_CODE];
         }
         if (preg_match('/^\d+(?:\.\d)?$/', $size) === 1 && preg_match('/[\/\-_]/u', $sku) !== 1) {
             $n = (int) $size;
@@ -871,7 +1040,7 @@ final class ProductSizeVariant
             foreach ($suffixes as $suffix) {
                 if (preg_match('/^(.+)'.preg_quote($suffix, '/').'$/i', $sku, $m) === 1
                     && $this->isUsableCore($m[1])) {
-                    return rtrim($m[1], "-/_ \t");
+                    return ['core' => rtrim($m[1], "-/_ \t"), 'size' => $size, 'kind' => self::TAIL_GLUED_NUMERIC];
                 }
             }
         }
@@ -880,17 +1049,23 @@ final class ProductSizeVariant
     }
 
     /**
-     * Null = nie jest wariantem rozmiaru, nie scalać.
+     * Null = nie jest wariantem rozmiaru, nie scalać. Klucz z kodu (sku:, także gdy rozmiar zna tylko końcówka
+     * kodu) wymaga dowodu dla końcówki doklejonej; klucz z nazwy (name:) — bez zmian.
+     *
+     * @param  bool  $legacy  dawna reguła bez dowodu — jak w skuCore
      */
-    public function groupKey(string $manufacturer, string $name, string $sku, ?string $packaging = null): ?string
+    public function groupKey(string $manufacturer, string $name, string $sku, ?string $packaging = null, bool $legacy = false): ?string
     {
         $size = $this->extractSize($name, $sku, $packaging);
         if ($size === null) {
-            $stem = $this->skuTailStem($sku);
+            $stem = $this->gluedTail($sku);
             if ($stem === null || preg_match('/(\d{1,2})$/', $sku, $tail) !== 1) {
                 return null;
             }
             $size = $this->normalizeSizeToken($tail[1]);
+            if ($size !== null && ! $legacy && ! $this->trustsSkuOnlySize($name, $packaging, $stem['kind'], $size)) {
+                return null;
+            }
         }
         if ($size === null) {
             return null;
@@ -901,7 +1076,7 @@ final class ProductSizeVariant
         if ($stripped !== '' && $stripped !== $original && mb_strlen($stripped) >= 6) {
             return 'name:'.$mfr.'|'.$stripped;
         }
-        $core = $this->skuCore($sku, $name);
+        $core = $this->coreWithEvidence($sku, $name, $packaging, $legacy);
         if ($core !== null) {
             return 'sku:'.$mfr.'|'.mb_strtolower($core);
         }
