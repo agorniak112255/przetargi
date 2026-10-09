@@ -214,3 +214,18 @@ Warsztat i legalizacja UDT, kasacja/utylizacja, sprzedaż z samochodu (stany aut
 urządzeń → zlecenie uzupełniające, klient nieobecny / przełożenie, brak podpisu na miejscu, nowy klient bez karty XL,
 dojazd jako pozycja, anulowanie/korekta ZS po wysyłce, naklejki z datą, wykaz sprzętu dla ubezpieczyciela i straży,
 retencja protokołów, zgubiony tablet, widoczność (serwisant — swoje zlecenia, kierownik — swój oddział).
+
+### 10.3 Uproszczenie (informacja od użytkownika, 09.10.2026) — wiąże ponad sekcjami wyżej
+Serwisant w protokole wpisuje **tylko rodzaj usługi i ilość** (np. „Przegląd gaśnicy proszkowej × 12”) — **nie wpisuje
+zużytych materiałów ani części**. Skutki:
+- Pozycje protokołu i ZS = wyłącznie usługi XL (`erp_services`, Twr_Typ 4). Bez wyszukiwarki towarów na tablecie,
+  bez stanów samochodu, bez MM (punkt „sprzedaż z samochodu” z 10.2 odpada, chyba że dział powie inaczej).
+- Lista usług na tablecie: najpierw usługi z ostatniej wizyty u tego klienta (z ilościami), potem krótka lista usług
+  serwisowych wybranych przez dział (pozycje Przeglądów `inspection_positions` z xl_type usługi), na końcu
+  wyszukiwanie po wszystkich usługach. Ekran = lista z przyciskami − / + przy ilości.
+- Rejestr pojedynczych urządzeń (10, pkt 4 i etap 3) przestaje być potrzebny do rozliczenia — zostaje tylko
+  jako opcja, jeśli dział zechce wykaz sprzętu albo pomiary hydrantów w protokole (pytanie na warsztat).
+- Kartoteka (punkt 2 prośby) dotyczy głównie usług: opis, zdjęcia, co obejmuje usługa — `service_catalog_entries`
+  po (xl_type, xl_gid); opis może pokazać się serwisantowi po dotknięciu usługi i klientowi w PDF.
+- MVP (10.1, etap 1) mniejsze: zlecenie z Przeglądów → tablet: usługi × ilość, uwagi/usterki tekstem, zdjęcia
+  opcjonalnie, podpisy → PDF + mail → kierownik → ZS (bufor).
