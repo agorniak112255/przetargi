@@ -30,6 +30,30 @@ const NETWORK_LABELS: Record<NetworkMode, string> = {
 /** Wartość pola edycji: '' = jak w grupie. */
 type NetworkChoice = '' | NetworkMode
 
+/** Bez znaków mylonych przy przepisywaniu z maila (0/O, 1/l/I). */
+const PASSWORD_ALPHABETS = ['abcdefghijkmnopqrstuvwxyz', 'ABCDEFGHJKLMNPQRSTUVWXYZ', '23456789']
+
+/** Losowe hasło 12 znaków: litery i cyfry, co najmniej po jednym z każdej grupy (jak Str::password na serwerze). */
+function generatePassword(length = 12): string {
+  // losowy indeks 0..n-1; bajty ≥ wielokrotności n odrzucane — bez przewagi pierwszych znaków
+  const randomIndex = (n: number): number => {
+    const limit = 256 - (256 % n)
+    const b = new Uint8Array(1)
+    do crypto.getRandomValues(b)
+    while (b[0] >= limit)
+    return b[0] % n
+  }
+  const all = PASSWORD_ALPHABETS.join('')
+  const chars = PASSWORD_ALPHABETS.map((a) => a[randomIndex(a.length)])
+  while (chars.length < length) chars.push(all[randomIndex(all.length)])
+  // tasowanie Fishera–Yatesa, żeby wymagane znaki nie stały zawsze na początku
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomIndex(i + 1)
+    ;[chars[i], chars[j]] = [chars[j], chars[i]]
+  }
+  return chars.join('')
+}
+
 function customersLabel(n: number): string {
   return `${n} ${n === 1 ? 'klient' : 'klientów'}`
 }
@@ -333,6 +357,8 @@ export function AdminUsers() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  /** wygenerowane hasło widać od razu — administrator może je przepisać albo skopiować */
+  const [showPassword, setShowPassword] = useState(false)
   const [role, setRole] = useState<string>('handlowiec')
   const [appearance, setAppearance] = useState(DEFAULT_NEW_USER_APPEARANCE)
   const [sendOnCreate, setSendOnCreate] = useState(true)
@@ -403,6 +429,7 @@ export function AdminUsers() {
       setName('')
       setEmail('')
       setPassword('')
+      setShowPassword(false)
       setAppearance(DEFAULT_NEW_USER_APPEARANCE)
       setMsg('Użytkownik utworzony.')
       // Konto już istnieje — nieudana wysyłka nie cofa go; wpisane hasło nadal działa.
@@ -523,15 +550,29 @@ export function AdminUsers() {
           onChange={(e) => setEmail(e.target.value)}
           required
         />
-        <input
-          className="rounded border px-2 py-1.5 text-sm"
-          type="password"
-          placeholder="Hasło (min. 8)"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          minLength={8}
-        />
+        <div className="flex gap-2">
+          <input
+            className="min-w-0 flex-1 rounded border px-2 py-1.5 text-sm"
+            type={showPassword ? 'text' : 'password'}
+            placeholder="Hasło (min. 8)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+            required
+            minLength={8}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setPassword(generatePassword())
+              setShowPassword(true)
+            }}
+            className="shrink-0 rounded border px-2 py-1.5 text-sm hover:bg-slate-50"
+            title="Wpisze losowe hasło (12 liter i cyfr) i pokaże je w polu"
+          >
+            Wygeneruj
+          </button>
+        </div>
         <select className="rounded border px-2 py-1.5 text-sm" value={role} onChange={(e) => setRole(e.target.value)}>
           {roleOptions.map((r) => (
             <option key={r.name} value={r.name}>
