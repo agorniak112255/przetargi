@@ -55,6 +55,39 @@ final class DescriptionVersionStoreTest extends TestCase
         $this->assertSame(Product::REVIEW_IDENTITY_SOFT, $decision['review_reason']);
     }
 
+    /**
+     * Tabela części producenta (09.10.2026): strona z tabeli przypięta do karty publikuje mimo twardej bazy z innej
+     * strony z większą liczbą dowodów i mimo słabszego werdyktu; strona odrzucona przez handlowca dalej daje propozycję.
+     */
+    public function test_pinned_parts_table_page_publishes_over_hard_base_but_rejected_page_still_proposes(): void
+    {
+        $card = $this->card();
+        $this->published($card, 'hard', 30, 'https://www.coba.com/pl/produkt/inny-model');
+
+        $decision = $this->store->decide($card, ['identity' => ['verdict' => 'hard'], 'evidence_count' => 2, 'primary_source_url' => 'https://www.coba.com/pl/produkt/orthomat', 'pinned_page' => true]);
+        $this->assertSame(['action' => 'publish', 'review_reason' => null, 'reason' => DescriptionVersionStore::PARTS_TABLE_REASON], $decision);
+        // bez przypięcia ta sama kandydatura to propozycja (mniej dowodów niż w bazie)
+        $this->assertSame('propose', $this->store->decide($card, ['identity' => ['verdict' => 'hard'], 'evidence_count' => 2, 'primary_source_url' => 'https://www.coba.com/pl/produkt/orthomat'])['action']);
+        $this->assertSame('propose', $this->store->decide($card, ['identity' => ['verdict' => 'hard'], 'evidence_count' => 2, 'primary_source_url' => 'https://www.coba.com/pl/produkt/orthomat', 'pinned_page' => false])['action']);
+
+        $this->version($card, ProductDescriptionVersion::STATUS_REJECTED, 'https://www.coba.com/pl/produkt/orthomat', blocked: true);
+        $rejected = $this->store->decide($card, ['identity' => ['verdict' => 'hard'], 'evidence_count' => 2, 'primary_source_url' => 'https://www.coba.com/pl/produkt/orthomat', 'pinned_page' => true]);
+        $this->assertSame('propose', $rejected['action']);
+        $this->assertSame(Product::REVIEW_REJECTED_SOURCE, $rejected['review_reason']);
+
+        // publishRun dostaje tego samego kandydata — decyzja pod blokadą też publikuje z powodem tabeli części
+        $other = $this->card(['sku' => 'A-9']);
+        $this->published($other, 'hard', 30, 'https://www.coba.com/pl/produkt/inny-model');
+        $result = $this->store->publishRun($other, ['identity' => ['verdict' => 'hard'], 'evidence_count' => 1, 'primary_source_url' => 'https://www.coba.com/pl/produkt/orthomat', 'pinned_page' => true], [
+            'description' => 'Mata Orthomat ze strony z tabeli części, opis nowy i inny niż poprzedni.',
+            'primary_source_url' => 'https://www.coba.com/pl/produkt/orthomat',
+            'identity_verdict' => 'hard',
+            'evidence_count' => 1,
+        ], static function (): void {});
+        $this->assertNotNull($result['version']);
+        $this->assertSame(DescriptionVersionStore::PARTS_TABLE_REASON, $result['version']->reason);
+    }
+
     public function test_rejected_source_proposes_also_on_card_without_description(): void
     {
         $card = $this->card(['description' => null]);

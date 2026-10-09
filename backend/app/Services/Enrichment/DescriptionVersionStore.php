@@ -61,6 +61,9 @@ final class DescriptionVersionStore
     /** Powód zapisu wersji z adresu strony podanego przez człowieka (decide reguła 1) — taki opis nie jest cofany. */
     public const MANUAL_URL_REASON = 'adres strony podany ręcznie';
 
+    /** Powód zapisu wersji ze strony z tabeli części producenta przypiętej do karty (decide, po stronie odrzuconej). */
+    public const PARTS_TABLE_REASON = 'strona z tabeli części producenta';
+
     /**
      * Klucze enrichment_payload karty, które nie należą do opisu, tylko do stanu karty: ślady łączenia i rozłączania
      * kart — rozmiary (merged_size_skus czyta ProductSizeMergeService przy łączeniu rozmiarów; bez niej kolejny import
@@ -169,6 +172,7 @@ final class DescriptionVersionStore
      * Czy nowy opis zapisać, czy zostawić jako propozycję (reguła z kontraktu etapu 1, sekcja 2):
      *   1. adres podany ręcznie → zapis;
      *   2. strona źródła odrzucona wcześniej w przeglądzie → propozycja (rejected_source);
+     *   2a. strona z tabeli części producenta przypięta do karty (pinned_page) → zapis (PARTS_TABLE_REASON);
      *   3. karta bez opisu albo bez bieżącej bazy → zapis;
      *   4. obie rangi tożsamości znane: niższa → propozycja (worse_version), wyższa → zapis;
      *   5. ranga równa albo nieznana: baza ma liczbę dowodów, a nowy opis o co najmniej MIN_EVIDENCE_DROP mniej
@@ -177,7 +181,7 @@ final class DescriptionVersionStore
      * Opis z B2B i force nie zmieniają reguły — kartę z opisem B2B przebieg obchodzi wcześniej, jak dotąd.
      * identity w kandydacie: werdykt ('hard'|'soft'|'none'|null) albo tablica z kluczem verdict (SourceIdentity::judgeCard).
      *
-     * @param  array{identity?: mixed, evidence_count?: int|null, primary_source_url?: string|null, manual_url?: bool}  $candidate
+     * @param  array{identity?: mixed, evidence_count?: int|null, primary_source_url?: string|null, manual_url?: bool, pinned_page?: bool}  $candidate
      * @return array{action: 'publish'|'propose', review_reason: string|null, reason: string}
      */
     public function decide(Product $p, array $candidate): array
@@ -205,6 +209,11 @@ final class DescriptionVersionStore
         }
         if ($url !== '' && $this->isRejectedUrl($p, $url)) {
             return $propose(Product::REVIEW_REJECTED_SOURCE, 'strona źródła odrzucona wcześniej w przeglądzie');
+        }
+        // strona z tabeli części producenta przypięta do karty (kod → wiersz tabeli, decyzja właściciela 09.10.2026) —
+        // zapis jak przy adresie ręcznym, także przy twardej bazie z innej strony i większej liczbie jej dowodów
+        if (($candidate['pinned_page'] ?? false) === true) {
+            return $publish(self::PARTS_TABLE_REASON);
         }
         if (! $p->hasDescriptionText()) {
             return $publish('karta bez opisu');
@@ -311,7 +320,7 @@ final class DescriptionVersionStore
      * nie jest wołane, a wynik ma version = null (wołający robi to, co przy propozycji, z oddaną decyzją).
      * review_reason i reason wersji pochodzą z decyzji pod blokadą. Wyjątek z $writeCard cofa także wersję.
      *
-     * @param  array{identity?: mixed, evidence_count?: int|null, primary_source_url?: string|null, manual_url?: bool}  $candidate  jak decide()
+     * @param  array{identity?: mixed, evidence_count?: int|null, primary_source_url?: string|null, manual_url?: bool, pinned_page?: bool}  $candidate  jak decide()
      * @param  array<string, mixed>  $data  jak record() (+ '_version' z versionMeta())
      * @param  callable(ProductDescriptionVersion, array{action: 'publish', review_reason: string|null, reason: string}): void  $writeCard
      * @return array{decision: array{action: 'publish'|'propose', review_reason: string|null, reason: string}, version: ProductDescriptionVersion|null}

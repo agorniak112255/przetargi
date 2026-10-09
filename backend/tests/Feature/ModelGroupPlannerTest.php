@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Enrichment\ModelGroup;
 use App\Services\Enrichment\ModelGroupPlanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Support\FakePartsTableResolver;
 use Tests\TestCase;
 
 /**
@@ -221,6 +222,42 @@ final class ModelGroupPlannerTest extends TestCase
         // obaj upadli liderzy (AF060001, AF060003) pod ostatnim liderem — dostaną jego opis (relayedLeaders)
         $this->assertSame([(int) $leader->id, (int) $roll->id], ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('model_leader_id', $cut->id)->where('product_id', '!=', $cut->id)->orderBy('product_id')->pluck('product_id')->map(static fn ($id): int => (int) $id)->all());
         $this->assertNull($this->planner()->nextLeader((int) $batch->id, (int) $cut->id), 'nikt już nie czeka');
+    }
+
+    /**
+     * Tabela części coba.com (09.10.2026): karta przypięta do wiersza ma model = stronę z tabeli — różne rdzenie nazw
+     * z cennika na jednej stronie to jedna grupa, ten sam rdzeń na dwóch stronach to dwie grupy; karta nierozwiązana
+     * zostaje przy kluczu z nazwy.
+     */
+    public function test_pinned_cards_are_grouped_by_parts_table_page(): void
+    {
+        $page = 'https://www.coba.com/pl/produkt/fatigue-step';
+        $other = 'https://www.coba.com/pl/produkt/fatigue-step-edges';
+        FakePartsTableResolver::install([
+            'FS010001' => FakePartsTableResolver::pin('FS010001', $page, pageTitle: 'Fatigue Step'),
+            'FS0102' => FakePartsTableResolver::pin('FS010203', $page, viaShortCode: true, cardCode: 'FS0102', pageTitle: 'Fatigue Step'),
+            'FS020001' => FakePartsTableResolver::pin('FS020001', $other, pageTitle: 'Fatigue Step krawędzie'),
+            'FS9999' => 'kilku kandydatów',
+        ]);
+        $a = $this->coba('FS010001', 'Fatigue Step Czarny 0.6m x 0.9m');
+        // inny rdzeń nazwy z cennika, ta sama strona
+        $b = $this->coba('FS0102', 'Mata Fatigue Step z krawędziami Czarny/Żółty 0.9m x 1.2m');
+        // ten sam rdzeń co $a, inna strona
+        $c = $this->coba('FS020001', 'Fatigue Step Czarny 0.9m x 1.5m');
+        // nierozwiązana — klucz z nazwy jak dotąd
+        $d = $this->coba('FS9999', 'Fatigue Step Czarny 1.2m x 1.8m');
+
+        $groups = $this->planner()->groups([(int) $a->id, (int) $b->id, (int) $c->id, (int) $d->id]);
+
+        $this->assertCount(3, $groups);
+        [$first, $second, $third] = $groups;
+        $this->assertSame('coba|page:fatigue-step', $first->key);
+        $this->assertSame([(int) $a->id, (int) $b->id], $first->memberIds);
+        $this->assertSame('Fatigue Step', $first->stem);
+        $this->assertSame('coba|page:fatigue-step-edges', $second->key);
+        $this->assertSame([(int) $c->id], $second->memberIds);
+        $this->assertSame('coba|FS|fatigue step', $third->key);
+        $this->assertSame([(int) $d->id], $third->memberIds);
     }
 
     /** @param  array<string, mixed>  $extra */

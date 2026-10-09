@@ -7,6 +7,8 @@ namespace App\Services\Enrichment;
 use App\Models\Product;
 use App\Models\ProductDescriptionVersion;
 use App\Models\ProductEnrichmentBatchItem;
+use App\Services\Enrichment\PartsTable\PartsTablePin;
+use App\Services\Enrichment\PartsTable\PartsTables;
 use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
 
@@ -18,6 +20,8 @@ use InvalidArgumentException;
  * niż lidera to osobna grupa — jej opis musi przyjść z jej adresu. Karta marki bez grupowania = grupa jednoelementowa
  * bez klucza. Klucz i lider zamrażają się w pozycjach partii (model_key, model_leader_id) — stąd czytają je
  * contextFor/membersOf/nextLeader, nie z ponownego liczenia (nazwa karty mogła się zmienić w trakcie).
+ * Karta przypięta do wiersza tabeli części (PartsTables, 09.10.2026) ma klucz strony `marka|page:slug` zamiast klucza
+ * z nazwy — model to strona producenta, z której pochodzi opis.
  */
 final class ModelGroupPlanner
 {
@@ -53,6 +57,15 @@ final class ModelGroupPlanner
             foreach (Product::query()->whereIntegerInRaw('id', $chunk)->get(self::COLUMNS) as $product) {
                 $id = (int) $product->id;
                 $key = $this->keys->for($product);
+                // Karta przypięta do wiersza tabeli części (09.10.2026, Coba): model = strona z tabeli — karty jednej
+                // strony idą razem mimo różnych rdzeni nazw z cennika, ten sam rdzeń na dwóch stronach to dwa modele.
+                // Karta nierozwiązana (bez przypięcia) — klucz z nazwy jak dotąd.
+                $pin = $this->pinFor($product);
+                if ($pin !== null) {
+                    $byKey[$pin->brandKey.'|page:'.$pin->pageKey][] = $this->entry($product, $hard, $key?->stem ?? (string) ($pin->pageTitle ?? $pin->pageKey));
+
+                    continue;
+                }
                 if ($key === null) {
                     $groups[$position[$id]] = new ModelGroup('', '', $id, [$id]);
 
@@ -254,6 +267,19 @@ final class ModelGroupPlanner
             ->where('model_leader_id', $leaderId)
             ->where('product_id', '!=', $leaderId)
             ->where('status', ProductEnrichmentBatchItem::STATUS_QUEUED);
+    }
+
+    /**
+     * Przypięcie karty do wiersza tabeli części (PartsTables) — tylko dla marki z grupowaniem modeli; null = marka bez
+     * grupowania albo bez tabeli, adres ręczny, karta nierozwiązana. Przez kontener — konstruktor bez zmian.
+     */
+    private function pinFor(Product $product): ?PartsTablePin
+    {
+        if ($this->profiles->for($product)?->modelGroup === null) {
+            return null;
+        }
+
+        return app(PartsTables::class)->pinFor($product)?->pin;
     }
 
     /**

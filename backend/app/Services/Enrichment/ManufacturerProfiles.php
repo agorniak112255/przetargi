@@ -69,6 +69,7 @@ final class ManufacturerProfiles
             longestCodeWins: (bool) ($code['longest_code_wins'] ?? false),
             indexLabel: is_string($code['index_label'] ?? null) && trim($code['index_label']) !== '' ? trim($code['index_label']) : null,
             sizeLetters: array_values(array_filter((array) ($code['size_letters'] ?? []), static fn (mixed $s): bool => is_string($s) && trim($s) !== '')),
+            partsTable: is_array($entry['parts_table'] ?? null) ? $entry['parts_table'] : [],
         );
     }
 }

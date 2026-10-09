@@ -22,6 +22,12 @@ class ProductImageRejection extends Model
     /** Nadmiar galerii karty kolorów po scaleniu — zostaje jedno zdjęcie na kolor (B2b\ColourGalleryTrim). */
     public const REASON_COLOUR_GALLERY = 'colour_gallery';
 
+    /**
+     * Karta przypięta do tabeli części producenta (products:parts-table, PartsTableImages): zdjęcie z internetu spoza
+     * hostów producenta albo grafika witryny (baner) — zdjęciem karty jest zdjęcie z wiersza tabeli.
+     */
+    public const REASON_PARTS_TABLE = 'parts_table';
+
     protected $fillable = [
         'product_id',
         'file_key_hash',

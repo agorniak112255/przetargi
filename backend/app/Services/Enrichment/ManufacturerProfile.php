@@ -55,6 +55,13 @@ final class ManufacturerProfile
         public readonly ?string $indexLabel = null,
         /** oznaczenia rozmiaru w kodzie (SECURA „S56T0SM0” = półmaska 3000 w rozmiarze M); [] = bez tej reguły */
         public readonly array $sizeLetters = [],
+        /**
+         * tabela części na stronach producenta (resolver App\Services\Enrichment\PartsTable\PartsTableResolver):
+         * page_prefix — początek adresu stron z tabelą, page_overrides — kod części => slug strony; [] = bez tabeli
+         *
+         * @var array{page_prefix?: string, page_overrides?: array<string, string>}
+         */
+        public readonly array $partsTable = [],
     ) {}
 
     /**

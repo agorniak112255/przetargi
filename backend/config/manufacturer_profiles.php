@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Services\Enrichment\PartsTable\CobaPartsTable;
+
 /*
 | Profile producentów — warstwa nad enrichment.manufacturer_domains / manufacturer_only_sources / manufacturer_catalogs
 | (te zostają, czyta je wiele miejsc). Tu tylko to, czego tam nie ma (App\Services\Enrichment\ManufacturerProfiles):
@@ -39,7 +41,12 @@ declare(strict_types=1);
 | - code.size_letters: oznaczenia rozmiaru w kodzie wyrobu (ManufacturerProfile::sizeSibling) — kod innej karty albo
 |   pole „Indeks” różniące się od naszego tylko rozmiarem w tym samym miejscu (S56T0SL0 ↔ S56T0SM0) to ten sam model:
 |   nie „strona innego wyrobu”, tylko „soft” (strona modelu w innym rozmiarze);
-| - resolver: klasa PHP dla reguł, których nie da się opisać danymi (na razie żadna).
+| - resolver: klasa PHP dla reguł, których nie da się opisać danymi — dziś tabela części na stronie producenta
+|   (App\Services\Enrichment\PartsTable\PartsTableResolver; coba: CobaPartsTable). Karta cennika przypięta do wiersza
+|   tabeli (dokładny kod albo skrót cennika po kolorze i rozmiarze) bierze opis wyłącznie z tej strony, bez wyszukiwarki;
+|   wiersze zapisuje products:parts-table --brand=<marka> --refresh (tabela manufacturer_parts);
+| - parts_table: page_prefix — początek adresu stron z tabelą części (strony z catalog_pages), page_overrides — kod
+|   części => slug strony, gdy kod stoi na kilku stronach z różnymi tabelami i człowiek wskazał właściwą.
 | brand_keys — klucze marki jak w manufacturer_domains (małe litery, myślniki).
 */
 return [
@@ -61,6 +68,12 @@ return [
             'model' => ['group' => 'name_stem', 'min_members' => 2],
             // grafiki reklamowe coba.com na kartach po audycie 08.10.2026 („Stand up for health”, słoń z okna modalnego)
             'image_url_blocklist' => ['/StandUpforHealth/i', '/Modal_Elephant/i'],
+            // przypięcie po tabeli części coba.com (decyzja właściciela 09.10.2026): pomiar na 869 kartach cennika 14 —
+            // 680 kodów dokładnie w tabeli (z duplikatami stron jak hygimat / hygimat-2), 70 skrótów po kolorze i rozmiarze;
+            // 10 kodów stoi na stronach z różnymi tabelami (Fatigue-Step krawędź B1, Ringmat) — przypięcie dopiero przez
+            // page_overrides; 109 bez strony zostaje bez zmian
+            'resolver' => CobaPartsTable::class,
+            'parts_table' => ['page_prefix' => 'https://www.coba.com/pl/produkt/', 'page_overrides' => []],
         ],
         'cederroth' => [
             'brand_keys' => ['cederroth'],
