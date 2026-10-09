@@ -229,3 +229,16 @@ zużytych materiałów ani części**. Skutki:
   po (xl_type, xl_gid); opis może pokazać się serwisantowi po dotknięciu usługi i klientowi w PDF.
 - MVP (10.1, etap 1) mniejsze: zlecenie z Przeglądów → tablet: usługi × ilość, uwagi/usterki tekstem, zdjęcia
   opcjonalnie, podpisy → PDF + mail → kierownik → ZS (bufor).
+
+### 10.4 Termin umawia serwisant (informacja od użytkownika, 09.10.2026)
+Każdy serwisant sam umawia terminy swoich wizyt — biuro nie planuje wyjazdów. Skutki:
+- Punkt wyjścia na tablecie: „Do umówienia” — klienci serwisanta, którym wypada przegląd (z Przeglądów, okno 30 dni
+  i zaległe), z telefonem i e-mailem osoby kontaktowej (dotknięcie = połączenie).
+- Serwisant sam tworzy zlecenie: wybiera klienta, datę i godzinę → wizyta trafia do „Moje wizyty”. Przełożenie
+  i „klient nie odbiera / zadzwonić później” (z datą przypomnienia) też robi sam.
+- „Utwórz zlecenie” w biurze (10.1) zostaje tylko jako zastępstwo (urlop, choroba) — kierownik może przypisać
+  klienta lub wizytę innemu serwisantowi.
+- Kierownik widzi kalendarz wszystkich serwisantów i listę „wypada, a nikt nie umówił” (zaległe).
+- Nowe pytanie na warsztat: jak klient jest przypisany do serwisanta — stały serwisant klienta, oddział/region,
+  czy „kto pierwszy umówi”? Od tego zależy lista „Do umówienia” (pole serwisanta na kliencie albo na obiekcie).
+- Opcjonalnie później: mail do klienta z potwierdzeniem terminu wysłany jednym dotknięciem.
