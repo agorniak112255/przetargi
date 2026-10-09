@@ -9,6 +9,7 @@ use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Mail\Mailables\Attachment;
 use Illuminate\Support\Facades\Mail;
 use Laravel\Sanctum\Sanctum;
 use RuntimeException;
@@ -67,6 +68,41 @@ final class AdminUserCredentialsMailTest extends TestCase
         $mail->assertSeeInHtml('https://przetargi.example.test');
         $mail->assertSeeInText('adresat@test.local');
         $mail->assertSeeInText('haslo-do-podgladu');
+    }
+
+    public function test_message_attaches_the_thunderbird_addon(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+
+        $mail = new AccountCredentialsMail($user, 'haslo-do-podgladu', 'https://przetargi.example.test', 'Handlowiec');
+
+        $this->assertFileExists($mail->addonPath);
+        $this->assertTrue($mail->hasAttachment(
+            Attachment::fromPath(public_path('dodatek/supon-przetargi.xpi'))
+                ->as('supon-przetargi.xpi')
+                ->withMime('application/x-xpinstall')
+        ));
+        $mail->assertSeeInHtml('Dodatek do Thunderbirda w załączniku');
+        $mail->assertSeeInHtml('https://przetargi.example.test/help');
+        $mail->assertSeeInText('Zainstaluj dodatek z pliku');
+
+        // załącznik naprawdę ląduje w wysłanej wiadomości, pod nazwą .xpi
+        Mail::to($user->email)->send($mail);
+        $sent = collect(app('mailer')->getSymfonyTransport()->messages())->last()->getOriginalMessage();
+        $names = array_map(static fn ($part) => $part->getFilename(), $sent->getAttachments());
+        $this->assertSame(['supon-przetargi.xpi'], $names);
+    }
+
+    public function test_message_without_addon_file_goes_out_without_attachment(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+
+        $mail = new AccountCredentialsMail($user, 'haslo-do-podgladu', 'https://przetargi.example.test', 'Handlowiec', base_path('nie-ma-takiego-pliku.xpi'));
+
+        $this->assertSame([], $mail->attachments());
+        $mail->assertDontSeeInHtml('Dodatek do Thunderbirda w załączniku');
+        $mail->assertDontSeeInText('Zainstaluj dodatek z pliku');
+        $mail->assertSeeInHtml('haslo-do-podgladu');
     }
 
     public function test_admin_sends_password_typed_in_the_panel(): void

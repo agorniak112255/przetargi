@@ -63,6 +63,19 @@
                 Jeśli przycisk nie działa, wklej link do przeglądarki:<br>
                 <a href="{{ $appUrl }}" style="color:#0369a1;word-break:break-all;">{{ $appUrl }}</a>
               </p>
+              @if ($hasAddon)
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:22px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;">
+                  <tr>
+                    <td style="padding:16px 20px;font-size:13px;line-height:1.55;color:#334155;">
+                      <strong style="color:#0f172a;">Dodatek do Thunderbirda w załączniku</strong><br>
+                      Plik <strong>{{ $addonFileName }}</strong> zapisz na dysku, a potem w Thunderbirdzie:
+                      Narzędzia → Dodatki i motywy → koło zębate → „Zainstaluj dodatek z pliku…” → wskaż zapisany plik → „Dodaj”.
+                      W ustawieniach dodatku podaj adres aplikacji, login i hasło z tej wiadomości.
+                      Instrukcja z obrazkami jest w <a href="{{ $helpUrl }}" style="color:#0369a1;">Pomocy</a>.
+                    </td>
+                  </tr>
+                </table>
+              @endif
               <p style="margin:18px 0 0;font-size:12px;line-height:1.5;color:#64748b;">
                 Zachowaj tę wiadomość w bezpiecznym miejscu albo usuń ją po zapisaniu hasła.
                 Hasło zmienisz po zalogowaniu w zakładce „Moje konto”.
