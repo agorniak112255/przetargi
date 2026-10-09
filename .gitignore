@@ -54,3 +54,13 @@ Webserwis/
 
 # ewidencja godzin pracy - prywatny plik wlasciciela
 Godziny_pracy_SUPON_AI.xlsx
+
+# raporty audytow cennikow i pliki zadan dla czatow - robocze, poza repozytorium
+SUPON_AI_Audyt_*.csv
+SUPON_AI_M2_*.csv
+SUPON_AI_Zadanie_*.md
+SUPON_AI_Stan_audytow_*.md
+SUPON_AI_Pilne_bezpieczenstwo_*.md
+
+# lokalna konfiguracja podgladu Claude Code
+.claude/launch.json
