@@ -829,6 +829,92 @@ final class ProductEnrichmentApiTest extends TestCase
         Queue::assertPushed(EnrichProductJob::class, 1);
     }
 
+    /**
+     * Partia #507 (MAPA, force, 09.10.2026): po prefetchu karty 5 worker nie zdołał usunąć zadania z tabeli `jobs`
+     * (zakleszczenie MariaDB przy `delete from jobs`), więc po retry_after (480 s) kolejka oddała je drugi raz — już po
+     * opisie karty. Drugi przebieg ustawiał pozycję na „running”, a opisu nie zlecał (znacznik zlecenia), więc pozycja
+     * wisiała w „running” przy partii „done”.
+     */
+    #[DataProvider('prefetchRedeliveryCases')]
+    public function test_redelivered_prefetch_after_enrich_leaves_batch_item_alone(bool $dispatchMarkerLost): void
+    {
+        Queue::fake();
+        $product = $this->makeProduct(['sku' => '34175138', 'manufacturer' => 'MAPA']);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 1,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'force' => true,
+        ]);
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => []]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+        $service = app(ProductEnrichmentService::class);
+
+        (new PrefetchProductSourcesJob($product->id, $batch->id, true))->handle($service, app(PrefetchSlots::class));
+        Queue::assertPushed(EnrichProductJob::class, 1);
+        // EnrichProductJob opisał kartę i zamknął pozycję
+        $product->update(['enrichment_status' => Product::ENRICHMENT_DONE, 'enriched_at' => now()]);
+        $service->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_DONE);
+        if ($dispatchMarkerLost) {
+            // pamięć podręczna wyczyszczona między przebiegami — o końcu karty mówi wtedy sama pozycja partii
+            Cache::flush();
+        }
+
+        // to samo zadanie oddane drugi raz przez kolejkę
+        (new PrefetchProductSourcesJob($product->id, $batch->id, true))->handle($service, app(PrefetchSlots::class));
+
+        $item = ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $product->id)->sole();
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_DONE, $item->status);
+        $this->assertSame(1, (int) $batch->fresh()->done);
+        Queue::assertPushed(EnrichProductJob::class, 1);
+    }
+
+    /** @return array<string, array{bool}> */
+    public static function prefetchRedeliveryCases(): array
+    {
+        return [
+            'znacznik zlecenia opisu w pamięci' => [false],
+            'znacznik utracony' => [true],
+        ];
+    }
+
+    public function test_redelivered_prefetch_while_enrich_queued_does_not_search_again(): void
+    {
+        Queue::fake();
+        $product = $this->makeProduct(['sku' => 'PF-PENDING', 'manufacturer' => 'MAPA']);
+        $batch = ProductEnrichmentBatch::query()->create([
+            'scope' => ProductEnrichmentBatch::SCOPE_PRODUCTS,
+            'scope_id' => 1,
+            'total' => 1,
+            'done' => 0,
+            'failed' => 0,
+            'status' => ProductEnrichmentBatch::STATUS_RUNNING,
+            'force' => true,
+        ]);
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => []]);
+        $this->app->instance(HybridWebSearchService::class, $search);
+        $service = app(ProductEnrichmentService::class);
+
+        (new PrefetchProductSourcesJob($product->id, $batch->id, true))->handle($service, app(PrefetchSlots::class));
+        // opis zlecony, ale jeszcze nie ruszył — pozycja zostaje jak była, bez drugiego szukania
+        $service->recordBatchProduct($batch, $product, ProductEnrichmentBatchItem::STATUS_QUEUED, 'Czeka na opis');
+        (new PrefetchProductSourcesJob($product->id, $batch->id, true))->handle($service, app(PrefetchSlots::class));
+
+        $item = ProductEnrichmentBatchItem::query()->where('batch_id', $batch->id)->where('product_id', $product->id)->sole();
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_QUEUED, $item->status);
+        $this->assertSame('Czeka na opis', $item->message);
+        Queue::assertPushed(EnrichProductJob::class, 1);
+    }
+
     public function test_prefetch_failure_of_cancelled_batch_does_not_dispatch_enrich(): void
     {
         Queue::fake();

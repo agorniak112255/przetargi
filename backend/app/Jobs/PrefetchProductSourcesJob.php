@@ -73,6 +73,16 @@ class PrefetchProductSourcesJob implements ShouldQueue
             return;
         }
 
+        if ($this->handedOverToEnrich()) {
+            Log::info('Product source prefetch skipped, product already handed over to enrich', [
+                'product_id' => $product->id,
+                'batch_id' => $batch->id,
+                'attempts' => $this->attempts(),
+            ]);
+
+            return;
+        }
+
         if (! $this->force && in_array($product->enrichment_status, [
             Product::ENRICHMENT_DONE,
             Product::ENRICHMENT_MANUAL,
@@ -147,6 +157,32 @@ class PrefetchProductSourcesJob implements ShouldQueue
             'error' => $e?->getMessage(),
         ]);
         $this->dispatchEnrichOnce();
+    }
+
+    /**
+     * Ten produkt w tej partii przeszedł już do opisu: zlecony EnrichProductJob albo pozycja w stanie końcowym.
+     * Kolejka bazodanowa oddaje to samo zadanie drugi raz, gdy worker nie zdoła go usunąć po skończonej pracy
+     * (partia #507, 09.10.2026: zakleszczenie przy `delete from jobs`, ponowienie po retry_after 480 s, już po opisie
+     * karty). Drugi przebieg ustawiał pozycję na „running”, a opisu nie zlecał (znacznik) — pozycja wisiała do końca.
+     * Pozycja partii obok znacznika, bo znacznik ginie z wyczyszczoną pamięcią podręczną.
+     */
+    private function handedOverToEnrich(): bool
+    {
+        if (Cache::has(self::enrichDispatchedKey($this->batchId, $this->productId))) {
+            return true;
+        }
+        $status = ProductEnrichmentBatchItem::query()
+            ->where('batch_id', $this->batchId)
+            ->where('product_id', $this->productId)
+            ->value('status');
+
+        return in_array($status, [
+            ProductEnrichmentBatchItem::STATUS_DONE,
+            ProductEnrichmentBatchItem::STATUS_FAILED,
+            ProductEnrichmentBatchItem::STATUS_MANUAL,
+            ProductEnrichmentBatchItem::STATUS_SKIPPED,
+            ProductEnrichmentBatchItem::STATUS_CANCELLED,
+        ], true);
     }
 
     /**

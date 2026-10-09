@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Models\User;
+use App\Queue\DeadlockRetryingDatabaseConnector;
 use App\Services\Ai\AiServedProviderTally;
 use App\Services\Auth\NetworkAccessPolicy;
 use App\Services\B2b\B2bSyncLauncher;
@@ -24,6 +25,7 @@ use App\Support\ProductVariantFacts;
 use App\Support\StorageOwnership;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -75,6 +77,9 @@ class AppServiceProvider extends ServiceProvider
                 }
             });
         }
+
+        // Usunięcie skończonego zadania z tabeli `jobs` ponawiane po zakleszczeniu — inaczej kolejka oddaje je drugi raz.
+        Queue::extend('database', fn (): DeadlockRetryingDatabaseConnector => new DeadlockRetryingDatabaseConnector($this->app['db']));
 
         // Logowanie hasłem: 10 prób na minutę na e-mail i adres (adres biura jest wspólny, więc nie sam adres).
         // Za hasłem stoi kod e-mailem dla kont spoza sieci — limit chroni też przed zgadywaniem hasła na wyścigi.
