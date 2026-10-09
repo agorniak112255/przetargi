@@ -151,6 +151,26 @@ final class CobaPartsTableTest extends TestCase
         $this->assertSame(CobaPartsTable::REASON_NO_PATTERN, $pattern->unresolvedReason);
     }
 
+    /**
+     * Produkcja 10.10: strona senso-dial nie odpowiedziała przy --refresh, a pełny kod SN060002 (Senso Dial 10 mm)
+     * dopasował się jak skrót po samym rozmiarze do Senso Runner (3 mm). Pełny kod (6 cyfr) bez wiersza w tabelach nie
+     * idzie regułą skrótów — rodzina i rozmiar się zgadzają, a karta i tak zostaje bez przypięcia.
+     */
+    public function test_full_code_missing_from_tables_is_not_resolved_by_size(): void
+    {
+        $rows = $this->rows('orthomat');
+
+        // AF060099: rodzina AF06 i rozmiar 0,6 x 0,9 są w tabeli (AF060001), ale to pełny kod, nie skrót
+        $full = $this->parser()->pinFor($this->card('AF060099', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)'), $this->profile(), $rows);
+        $this->assertFalse($full->resolved());
+        $this->assertSame(CobaPartsTable::REASON_FULL_CODE_MISSING, $full->unresolvedReason);
+
+        // skrót z 4 cyframi dalej rozwiązuje się po rozmiarze
+        $short = $this->parser()->pinFor($this->card('AF0600', 'Orthomat Standard Szary 0.6m x 0.9m (9.5mm)'), $this->profile(), $rows);
+        $this->assertTrue($short->resolved());
+        $this->assertSame('AF060001', $short->pin?->part);
+    }
+
     public function test_size_key_matches_python_rules(): void
     {
         $this->assertSame([0.6, 0.9], CobaPartsTable::sizeKey('Orthomat Standard Szary 0.6m x 0.9m (9.5mm)'));

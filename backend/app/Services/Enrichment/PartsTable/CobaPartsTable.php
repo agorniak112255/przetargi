@@ -43,6 +43,9 @@ final class CobaPartsTable implements PartsTableResolver
 
     public const REASON_NO_PATTERN = 'kod bez wzoru Coby';
 
+    /** Pełny kod (nie skrót cennika) bez wiersza w zapisanych tabelach — bez zgadywania po rozmiarze. */
+    public const REASON_FULL_CODE_MISSING = 'pełny kod nie występuje w tabelach';
+
     public const REASON_PAGES_DIFFER = 'kod na kilku stronach z różnymi tabelami';
 
     /** Okno po nagłówku „Dostępne style” (znaki), w którym stoją kafelki stylów — jak w measure.py. */
@@ -100,6 +103,13 @@ final class CobaPartsTable implements PartsTableResolver
         $sku = ManufacturerPart::codeKey((string) $product->sku);
         $viaShort = false;
         if (! isset($index['byCode'][$sku])) {
+            // Regułę skrótów stosujemy tylko do kodów skróconych w cenniku (po literach najwyżej 4 cyfry: AF0107,
+            // DP0100-4, CRS000-5). Pełny kod Coby (6 cyfr: SN060002) bez wiersza w tabelach to strona, która nie
+            // odpowiedziała albo kod spoza stron — dopasowanie po samym rozmiarze dało na produkcji Senso Runner (3 mm)
+            // dla karty Senso Dial (10 mm), gdy strona senso-dial nie odpowiedziała przy --refresh (10.10.2026).
+            if (preg_match('/^[A-Za-z]+(\d+)/', trim((string) $product->sku), $digits) === 1 && strlen($digits[1]) > 4) {
+                return new PinResult(null, self::REASON_FULL_CODE_MISSING);
+            }
             $short = $this->shortCode($sku, (string) $product->name, $index);
             if ($short instanceof PinResult) {
                 return $short;
