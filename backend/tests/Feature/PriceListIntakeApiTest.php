@@ -147,8 +147,16 @@ final class PriceListIntakeApiTest extends TestCase
         $this->postJson('/api/price-lists/intake', [
             'manufacturer' => 'Ansell / test', 'version' => '1', 'manufacturer_hosts' => ['ansell' => ['dowolny-sklep.pl']],
         ])->assertForbidden();
+        // znaki spoza a–z/0–9 brandKey gubi („Ansellé” → „ansell”)
+        $this->postJson('/api/price-lists/intake', [
+            'manufacturer' => 'Ansellé', 'version' => '1', 'manufacturer_hosts' => ['ansell' => ['dowolny-sklep.pl']],
+        ])->assertForbidden();
         $this->assertSame(0, ManufacturerSite::query()->count());
         $this->assertSame(0, PriceList::query()->count());
+        // zwykła nazwa z kropką i myślnikiem — własna marka
+        $this->postJson('/api/price-lists/intake', [
+            'manufacturer' => 'Fagum-Stomil S.A', 'version' => '1', 'manufacturer_hosts' => ['Fagum-Stomil S.A' => ['fagum.pl']],
+        ])->assertCreated();
     }
 
     public function test_list_with_assortment_groups_cannot_switch_to_new_way(): void

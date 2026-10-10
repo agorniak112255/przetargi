@@ -456,9 +456,10 @@ class PriceListIntakeController extends Controller
             return;
         }
         $own = $this->manufacturers->brandKey($listManufacturer);
-        // brandKey bierze tekst przed „/” i „(” — nazwa „Ansell (x)” dałaby nowy cennik z marką „ansell” i stronę
-        // producenta Ansell w całej aplikacji; taka nazwa nie liczy się jako własna marka
-        if ($own !== $this->manufacturers->brandKey(str_replace(['/', '('], ' ', $listManufacturer))) {
+        // brandKey bierze tekst przed „/” i „(” i gubi znaki spoza a–z/0–9 — „Ansell (x)” czy „Ansellé” dałyby nowy cennik
+        // (inny manufacturer_key) z marką „ansell” i stronę producenta Ansell w całej aplikacji. Własna marka tylko przy
+        // nazwie bez strat: litery łacińskie, cyfry, spacja, kropka, myślnik; resztę przypisuje administrator.
+        if (preg_match('/^[A-Za-z0-9][A-Za-z0-9 .\-]*$/', trim($listManufacturer)) !== 1) {
             $own = '';
         }
         $foreign = array_values(array_filter($brands, static fn ($brand): bool => (string) $brand !== $own));
