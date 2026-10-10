@@ -15,6 +15,7 @@ use App\Models\ProductSourcePin;
 use App\Services\B2b\B2bAccountPriceList;
 use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\PriceListCards;
+use App\Services\PriceListImportService;
 use App\Services\PriceLists\Importers\PriceListFormatChanged;
 use App\Services\PriceLists\Importers\PriceListImporterRegistry;
 use App\Services\PriceLists\IntakeBusy;
@@ -148,11 +149,8 @@ class PriceListIntakeController extends Controller
 
         // włączenie nowego sposobu na cenniku z grupami rabatowymi zostawiłoby go bez działającego importu (runner
         // odmawia, stary import jest zablokowany) — odmawiamy od razu
-        if (! $priceList->usesIntake()) {
-            $groupsBlock = PriceListIntakeRunner::assortmentGroupsBlock((string) $priceList->manufacturer);
-            if ($groupsBlock !== null) {
-                return response()->json(['message' => $groupsBlock], 422);
-            }
+        if (! $priceList->usesIntake() && ($block = $this->intakeBlock($priceList)) !== null) {
+            return response()->json(['message' => $block], 422);
         }
 
         DB::transaction(function () use ($priceList, $data, $settings): void {
@@ -202,6 +200,10 @@ class PriceListIntakeController extends Controller
             throw ValidationException::withMessages([
                 'importer_key' => 'Nie ma importera o kluczu „'.$key.'” w tym wdrożeniu.',
             ]);
+        }
+        // importer_key blokuje stary import — cennik, którego importer nie przyjmie, zostałby bez żadnej drogi importu
+        if ($key !== '' && ($block = $this->intakeBlock($priceList)) !== null) {
+            return response()->json(['message' => $block], 422);
         }
         $priceList->importer_key = $key !== '' ? $key : null;
         $priceList->save();
@@ -423,6 +425,24 @@ class PriceListIntakeController extends Controller
      * }
      */
     /**
+     * Powód, dla którego cennik nie może przejść na nowy sposób: runner odmówiłby podglądu i importu (grupy rabatowe,
+     * ceny specjalne dostawcy bez kolumny ceny normalnej w importerze), a stary import jest dla cennika nowym sposobem
+     * zablokowany — cennik zostałby bez żadnej drogi importu.
+     */
+    private function intakeBlock(PriceList $priceList): ?string
+    {
+        $groups = PriceListIntakeRunner::assortmentGroupsBlock((string) $priceList->manufacturer);
+        if ($groups !== null) {
+            return $groups;
+        }
+        if (app(PriceListImportService::class)->supplierSpecialRefusalForImporter((string) $priceList->manufacturer) !== null) {
+            return 'Cennik ma ceny specjalne dostawcy — importer musi czytać kolumnę ceny normalnej, zgłoś programiście.';
+        }
+
+        return null;
+    }
+
+    /**
      * Strony producenta (manufacturer_sites) działają w całej aplikacji — to ustawienie administratora „Strony
      * wyszukiwarka” (admin.search_sites.manage). Bez tego uprawnienia formularz cennika przypisuje strony tylko marce
      * producenta tego cennika; inne marki (cennik wielomarkowy) ustawia administrator.
@@ -436,6 +456,11 @@ class PriceListIntakeController extends Controller
             return;
         }
         $own = $this->manufacturers->brandKey($listManufacturer);
+        // brandKey bierze tekst przed „/” i „(” — nazwa „Ansell (x)” dałaby nowy cennik z marką „ansell” i stronę
+        // producenta Ansell w całej aplikacji; taka nazwa nie liczy się jako własna marka
+        if ($own !== $this->manufacturers->brandKey(str_replace(['/', '('], ' ', $listManufacturer))) {
+            $own = '';
+        }
         $foreign = array_values(array_filter($brands, static fn ($brand): bool => (string) $brand !== $own));
         if ($foreign !== []) {
             abort(response()->json([

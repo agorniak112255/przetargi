@@ -122,6 +122,35 @@ final class PriceListIntakeApiTest extends TestCase
         $this->assertTrue(ManufacturerSite::query()->where('host', 'peltor.example')->exists());
     }
 
+    public function test_list_with_supplier_special_prices_cannot_switch_or_get_importer(): void
+    {
+        // cennik po imporcie z kolumną ceny normalnej (SECURA) — importer bez tej kolumny nie przyjmie pliku, a stary
+        // import po przełączeniu byłby zablokowany
+        $old = $this->list('SECURA', ['manufacturer_key' => 'secura', 'has_supplier_special' => true]);
+
+        $this->patchJson("/api/price-lists/{$old->id}/intake", ['version' => '2027'])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Cennik ma ceny specjalne dostawcy — importer musi czytać kolumnę ceny normalnej, zgłoś programiście.');
+        $this->assertNull($old->fresh()->source_policy);
+        $this->patchJson("/api/price-lists/{$old->id}/importer", ['importer_key' => 'mapa-2025'])->assertStatus(422);
+        $this->assertNull($old->fresh()->importer_key);
+    }
+
+    public function test_name_with_parenthesis_does_not_count_as_own_brand_without_search_sites_permission(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('kierownik')->create());
+
+        // „Ansell (x)” = nowy cennik (inny manufacturer_key), ale marka „ansell” — strona producenta Ansell dla całej aplikacji
+        $this->postJson('/api/price-lists/intake', [
+            'manufacturer' => 'Ansell (x)', 'version' => '1', 'manufacturer_hosts' => ['Ansell (x)' => ['dowolny-sklep.pl']],
+        ])->assertForbidden();
+        $this->postJson('/api/price-lists/intake', [
+            'manufacturer' => 'Ansell / test', 'version' => '1', 'manufacturer_hosts' => ['ansell' => ['dowolny-sklep.pl']],
+        ])->assertForbidden();
+        $this->assertSame(0, ManufacturerSite::query()->count());
+        $this->assertSame(0, PriceList::query()->count());
+    }
+
     public function test_list_with_assortment_groups_cannot_switch_to_new_way(): void
     {
         // grupa rabatowa inna niż „cały asortyment” — runner odmówiłby importu, a stary import byłby już zablokowany
