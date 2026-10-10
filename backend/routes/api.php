@@ -70,6 +70,7 @@ use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\PriceListController;
 use App\Http\Controllers\Api\PriceListFileSourcesController;
 use App\Http\Controllers\Api\PriceListImportController;
+use App\Http\Controllers\Api\PriceListIntakeController;
 use App\Http\Controllers\Api\ProductAiSearchController;
 use App\Http\Controllers\Api\ProductCardConflictsAiController;
 use App\Http\Controllers\Api\ProductCatalogHealthController;
@@ -518,6 +519,35 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/price-lists/{priceList}/site-check', [PriceListFileSourcesController::class, 'siteCheck'])
         ->whereNumber('priceList')
         ->middleware(['permission:price_lists.import', 'throttle:20,1']);
+    // Cenniki z plików jak B2B (10.10.2026): formularz cennika → plik → importer per cennik → mapa kart.
+    // „importers” przed /price-lists/{priceList}, inaczej trafiłoby w wiązanie cennika.
+    Route::get('/price-lists/importers', [PriceListIntakeController::class, 'importers'])->middleware('permission:price_lists.view');
+    Route::post('/price-lists/intake', [PriceListIntakeController::class, 'store'])->middleware('permission:price_lists.import');
+    Route::patch('/price-lists/{priceList}/intake', [PriceListIntakeController::class, 'update'])
+        ->whereNumber('priceList')
+        ->middleware('permission:price_lists.import');
+    // importer wiąże tylko administrator
+    Route::patch('/price-lists/{priceList}/importer', [PriceListIntakeController::class, 'setImporter'])
+        ->whereNumber('priceList')
+        ->middleware(['permission:price_lists.import', 'permission:admin.access']);
+    Route::get('/price-lists/{priceList}/files', [PriceListIntakeController::class, 'files'])
+        ->whereNumber('priceList')
+        ->middleware('permission:price_lists.view');
+    Route::post('/price-lists/{priceList}/files', [PriceListIntakeController::class, 'storeFile'])
+        ->whereNumber('priceList')
+        ->middleware('permission:price_lists.import');
+    Route::get('/price-lists/{priceList}/files/{file}/download', [PriceListIntakeController::class, 'download'])
+        ->whereNumber(['priceList', 'file'])
+        ->middleware('permission:price_lists.view');
+    Route::post('/price-lists/{priceList}/files/{file}/preview', [PriceListIntakeController::class, 'preview'])
+        ->whereNumber(['priceList', 'file'])
+        ->middleware('permission:price_lists.import');
+    Route::post('/price-lists/{priceList}/files/{file}/import', [PriceListIntakeController::class, 'import'])
+        ->whereNumber(['priceList', 'file'])
+        ->middleware('permission:price_lists.import');
+    Route::get('/price-lists/{priceList}/source-pins', [PriceListIntakeController::class, 'sourcePins'])
+        ->whereNumber('priceList')
+        ->middleware('permission:price_lists.view');
     Route::get('/price-lists/{priceList}', [PriceListController::class, 'show'])->middleware('permission:price_lists.view');
     Route::patch('/price-lists/{priceList}', [PriceListController::class, 'update'])
         ->middleware('permission:price_lists.import');

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ManufacturerSite;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Services\Enrichment\CatalogSearchHostService;
@@ -13,6 +14,7 @@ use App\Services\Enrichment\PriceListSourceSettings;
 use App\Services\Enrichment\ProductSearchIdentity;
 use App\Services\PriceListCards;
 use App\Services\PriceListFileSources;
+use App\Services\PriceLists\PriceListIntakeView;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -23,7 +25,7 @@ use Illuminate\Support\Facades\Cache;
  */
 class PriceListFileSourcesController extends Controller
 {
-    private const SEARCH_SITES_CACHE_KEY = 'price_lists.search_sites.v1';
+    private const SEARCH_SITES_CACHE_KEY = 'price_lists.search_sites.v2';
 
     private const SEARCH_SITES_CACHE_SECONDS = 600;
 
@@ -46,16 +48,29 @@ class PriceListFileSourcesController extends Controller
      */
     public function searchSites(CatalogSearchHostService $hosts): JsonResponse
     {
-        $sites = Cache::remember(self::SEARCH_SITES_CACHE_KEY, self::SEARCH_SITES_CACHE_SECONDS, static fn (): array => array_map(
-            static fn (array $row): array => [
-                'host' => (string) $row['host'],
-                'links' => (int) $row['links'],
-                'manufacturers' => array_values(array_map('strval', $row['manufacturers'] ?? [])),
-                'priority' => isset($row['priority']) ? (int) $row['priority'] : null,
-                'sources' => array_values(array_map('strval', $row['sources'] ?? [])),
-            ],
-            $hosts->list(),
-        ));
+        $sites = Cache::remember(self::SEARCH_SITES_CACHE_KEY, self::SEARCH_SITES_CACHE_SECONDS, static function () use ($hosts): array {
+            // producenci przypisani świadomie (manual/config) — wykryci automatem (discovered) są tylko w manufacturers
+            $assigned = [];
+            foreach (ManufacturerSite::brandsByHost() as $host => $brands) {
+                foreach ($brands as $brand) {
+                    if (in_array($brand['source'], PriceListIntakeView::SITE_SOURCES, true)) {
+                        $assigned[$host][$brand['manufacturer']] = true;
+                    }
+                }
+            }
+
+            return array_map(
+                static fn (array $row): array => [
+                    'host' => (string) $row['host'],
+                    'links' => (int) $row['links'],
+                    'manufacturers' => array_values(array_map('strval', $row['manufacturers'] ?? [])),
+                    'assigned_manufacturers' => array_map('strval', array_keys($assigned[(string) $row['host']] ?? [])),
+                    'priority' => isset($row['priority']) ? (int) $row['priority'] : null,
+                    'sources' => array_values(array_map('strval', $row['sources'] ?? [])),
+                ],
+                $hosts->list(),
+            );
+        });
 
         return response()->json(['sites' => $sites]);
     }

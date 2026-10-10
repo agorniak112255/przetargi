@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace App\Services\Enrichment\PartsTable;
 
+use App\Services\Enrichment\DescriptionVersionStore;
+use App\Services\Enrichment\Sources\SourcePin;
+
 /**
  * Karta przypięta do wiersza tabeli części na stronie producenta: strona (kanoniczna przy duplikatach), kod z tabeli,
  * rozmiar, kolor i waga dosłownie z wiersza, zdjęcie (styl w kolorze albo zdjęcie modelu). Jedyne źródło opisu karty.
+ * Kształt wspólny z mapą importera cennika — SourcePin (10.10.2026); właściwości zostają (PartsTableImages, polecenia).
  */
-final class PartsTablePin
+final class PartsTablePin implements SourcePin
 {
     public function __construct(
         public readonly string $brandKey,
@@ -98,6 +102,50 @@ final class PartsTablePin
             'image_reason' => $this->imageReason,
             'via_short_code' => $this->viaShortCode,
         ];
+    }
+
+    public function url(): string
+    {
+        return $this->pageUrl;
+    }
+
+    public function title(): ?string
+    {
+        return $this->pageTitle;
+    }
+
+    public function imageUrl(): ?string
+    {
+        return $this->imageUrl;
+    }
+
+    public function payloadKey(): string
+    {
+        return 'parts_table';
+    }
+
+    /** Model = strona z tabeli (ModelGroupPlanner): „coba|page:orthomat-standard”. */
+    public function groupKey(): string
+    {
+        return $this->brandKey.'|page:'.$this->pageKey;
+    }
+
+    /** Zdjęcia karty przypiętej rozstrzyga zawsze PartsTableImages (także wiersz bez zdjęcia — komunikat karty). */
+    public function handlesImages(): bool
+    {
+        return true;
+    }
+
+    public function logLabel(): string
+    {
+        $code = trim((string) $this->cardCode);
+
+        return 'tabela części producenta: '.$this->part.($this->viaShortCode && $code !== '' ? ' (skrót cennika '.$code.')' : '');
+    }
+
+    public function publishReason(): string
+    {
+        return DescriptionVersionStore::PARTS_TABLE_REASON;
     }
 
     private function host(): string

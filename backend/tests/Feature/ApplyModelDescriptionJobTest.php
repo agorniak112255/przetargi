@@ -12,6 +12,7 @@ use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Enrichment\DescriptionVersionStore;
 use App\Services\Enrichment\ModelGroupPlanner;
 use App\Services\Enrichment\ProductEnrichmentService;
+use App\Services\Enrichment\Sources\SourceUnmappedException;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -185,6 +186,28 @@ final class ApplyModelDescriptionJobTest extends TestCase
         $this->assertSame(ProductEnrichmentBatchItem::STATUS_DONE, $this->item($fine)->status);
         $batch->refresh();
         $this->assertSame([2, 1, ProductEnrichmentBatch::STATUS_DONE], [$batch->done, $batch->failed, $batch->status]);
+    }
+
+    public function test_member_without_importer_page_is_manual_not_failed(): void
+    {
+        [$batch, $leader, $version, $members] = $this->group(2);
+        [$unmapped, $fine] = $members;
+        $job = $this->job($batch, $leader, $version, static function (Product $member) use ($unmapped): string {
+            if ($member->id === $unmapped->id) {
+                // cennik map_only, członek bez strony z importera — kartę ustawia przebieg („Do przeglądu”), to nie błąd
+                throw new SourceUnmappedException('brak strony producenta z tym numerem');
+            }
+
+            return ApplyModelDescriptionJob::RESULT_PUBLISHED;
+        });
+
+        $job->handle($this->service(), app(ModelGroupPlanner::class));
+
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_MANUAL, $this->item($unmapped)->status);
+        $this->assertStringContainsString('brak strony producenta z tym numerem', (string) $this->item($unmapped)->message);
+        $this->assertNotSame(Product::ENRICHMENT_FAILED, $unmapped->fresh()->enrichment_status);
+        $this->assertSame(ProductEnrichmentBatchItem::STATUS_DONE, $this->item($fine)->status);
+        $this->assertSame(0, (int) $batch->fresh()->failed);
     }
 
     public function test_cancelled_batch_restores_members_without_applying(): void

@@ -10,6 +10,7 @@ use App\Models\B2bProductLink;
 use App\Models\CardRedirect;
 use App\Models\PrestaCategory;
 use App\Models\PriceList;
+use App\Models\PriceListFile;
 use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductIdentifier;
@@ -27,9 +28,11 @@ use App\Services\Presta\ProductCategorySanitizer;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\CanonicalBrand;
 use App\Support\ProductSizeVariant;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use Throwable;
@@ -56,6 +59,16 @@ final class PriceListImportService
 
     /** Cena normalna wyższa od katalogowej o więcej niż ta kwota to nie cena normalna (zaokrąglenia groszy przechodzą). */
     private const STANDARD_PRICE_TOLERANCE = 0.01;
+
+    /** Decyzje wiersza w planImport (rows[].action) — te same, które podejmuje zapis importu. */
+    public const ROW_CREATE = 'create';
+
+    public const ROW_UPDATE = 'update';
+
+    public const ROW_SKIP = 'skip';
+
+    /** wiersz zablokowany przez „Usuń i pomijaj przy imporcie” */
+    public const ROW_BLOCKED = 'blocked';
 
     public function __construct(
         private readonly CurrencyDetector $currencyDetector,
@@ -345,6 +358,135 @@ final class PriceListImportService
     }
 
     /**
+     * Import pozycji odczytanych przez importer cennika (cennik z importerem, 10.10.2026) do wskazanego wiersza
+     * cennika: rabat wspólny (applyGroupOptions) i zapis jak każdy import (persistImport) — bez scalania rozmiarów
+     * (collapseSamePriceVariants ani ProductSizeMergeService) i bez AI. Plik cennika z dysku idzie jako UploadedFile
+     * (ceny specjalne z arkusza, nazwa pliku w raporcie).
+     *
+     * @param  array{products: list<array<string, mixed>>, skipped: int, errors: list<string>, rows_total: int, skipped_details?: list<array<string, mixed>>}  $collected
+     * @param  array<string, mixed>|null  $groupOptions
+     * @return array<string, mixed> wynik persistImport (z row_cards: kod wiersza => karta)
+     */
+    public function importCollected(PriceList $list, PriceListFile $file, User $u, array $collected, ?array $groupOptions): array
+    {
+        $manufacturer = (string) $list->manufacturer;
+        $collected = $this->applyGroupOptions($this->withoutMissingFileFields($collected), $manufacturer, $groupOptions);
+        $path = Storage::disk($file->disk ?: 'local')->path((string) $file->path);
+        $upload = new UploadedFile($path, (string) $file->original_name, $file->mime !== null ? (string) $file->mime : null, null, true);
+
+        return $this->persistImport($upload, $manufacturer, (string) ($list->version ?? ''), $u, $collected, $list);
+    }
+
+    /**
+     * Co zrobiłby import tych pozycji do cennika — bez zapisu (podgląd importu, PriceListIntakeRunner::preview). Ta sama
+     * pętla decyzji co persistImport (runRows z planem w pamięci): blokady, mapa połączeń, dopasowanie karty, karta
+     * innego producenta, zmiana ceny. Rabat wspólny liczony bez zapisu grupy (applyGroupOptionsReadOnly).
+     *
+     * @param  array{products: list<array<string, mixed>>, skipped: int, errors: list<string>, rows_total: int, skipped_details?: list<array<string, mixed>>}  $collected
+     * @param  array<string, mixed>|null  $groupOptions
+     * @return array{
+     *     rows: list<array{index: int, sku: string, name: string, action: string, product_id: int|null, reason: string|null, card: Product|null, change: array<string, mixed>|null}>,
+     *     created: int,
+     *     updated: int,
+     *     skipped: int,
+     *     suppressed: int,
+     *     price_changes: list<array<string, mixed>>,
+     *     notes: list<string>
+     * } rows w kolejności pozycji; card — karta po imporcie (nowa: niezapisany Product), product_id null dla nowej
+     */
+    public function planImport(PriceList $list, array $collected, ?array $groupOptions): array
+    {
+        $manufacturer = (string) $list->manufacturer;
+        $collected = $this->applyGroupOptionsReadOnly($this->withoutMissingFileFields($collected), $groupOptions);
+        [$collected, $goodsBrandRows] = $this->prepareCollected($collected, $manufacturer);
+        // uwagi z odczytu pliku; powody pominięcia wierszy (skipRow) są w rows, nie w notes
+        $inputNotes = array_values($collected['errors'] ?? []);
+        $plan = ['cards' => [], 'sku_index' => [], 'next_id' => -1];
+        $run = $this->runRows($list, $manufacturer, $collected, $plan);
+
+        $priceChanges = $run['price_changes'];
+        usort($priceChanges, static fn (array $a, array $b): int => abs($b['catalog_pct']) <=> abs($a['catalog_pct']));
+
+        return [
+            'rows' => $run['rows'],
+            'created' => $run['created'],
+            'updated' => $run['updated'],
+            'skipped' => (int) $collected['skipped'],
+            'suppressed' => $run['suppressed'],
+            'price_changes' => $priceChanges,
+            'notes' => [
+                ...$this->legacyCodeNotes($run['legacy_cards'], (int) $list->id),
+                ...$this->suppressedNotes($run['suppressed'], $run['suppressed_new_codes']),
+                ...$this->goodsBrandNotes($manufacturer, $goodsBrandRows, $run['brand_raised'], $run['brand_kept_b2b']),
+                ...$run['redirect_warnings'],
+                ...$inputNotes,
+            ],
+        ];
+    }
+
+    /**
+     * Pola, których importer cennika nie odczytał (null), znaczą „brak danych w pliku — nie nadpisuj karty” (importer
+     * MAPA nie podaje opakowania, a karty #1 mają tam zakresy rozmiarów „6-9”). Dotyczy tylko cenników z importerem
+     * (importCollected, planImport); stary import zachowuje dotychczasowe zachowanie. Bez klucza category
+     * categoriesFromTree nie rusza też pochodzenia kategorii.
+     *
+     * @param  array<string, mixed>  $collected
+     * @return array<string, mixed>
+     */
+    private function withoutMissingFileFields(array $collected): array
+    {
+        foreach ($collected['products'] as $i => $product) {
+            foreach (['packaging', 'category', 'category_evidence', 'price_list_attributes', 'ean'] as $field) {
+                if (array_key_exists($field, $product) && ($product[$field] === null || $product[$field] === '' || $product[$field] === [])) {
+                    unset($collected['products'][$i][$field]);
+                }
+            }
+        }
+
+        return $collected;
+    }
+
+    /**
+     * Rabat wspólny cennika jak AssortmentGroupService::applyToProducts bez grup (applyGlobalDiscount), ale bez zapisu
+     * grupy GLOBAL — podgląd nic nie zapisuje. Grupy asortymentowe zakładają wpisy grup (upsertGroup), więc podgląd
+     * ich nie liczy: importer cennika podaje rabat w pliku albo cennik ma rabat wspólny.
+     *
+     * @param  array<string, mixed>  $collected
+     * @param  array<string, mixed>|null  $groupOptions
+     * @return array<string, mixed>
+     */
+    private function applyGroupOptionsReadOnly(array $collected, ?array $groupOptions): array
+    {
+        if ($groupOptions === null || $groupOptions === []) {
+            return $collected;
+        }
+        if (is_array($groupOptions['groups'] ?? null) && $groupOptions['groups'] !== []) {
+            throw new \InvalidArgumentException('Podgląd importu bez zapisu nie liczy grup asortymentowych — ustaw rabat na cały cennik albo rabat w pliku.');
+        }
+        $discount = isset($groupOptions['default_discount']) && is_numeric($groupOptions['default_discount'])
+            ? round((float) $groupOptions['default_discount'], 2)
+            : null;
+        if ($discount === null) {
+            return $collected;
+        }
+        $out = [];
+        foreach ($collected['products'] as $product) {
+            $product['assortment_group_id'] = null;
+            if (! empty($product['_purchase_from_file'])) {
+                unset($product['_purchase_from_file']);
+            } else {
+                $catalog = (float) ($product['catalog_price_net'] ?? 0);
+                $product['discount_percent'] = $discount;
+                $product['purchase_price'] = round($catalog * (1 - ($discount / 100)), 2);
+            }
+            $out[] = $product;
+        }
+        $collected['products'] = $out;
+
+        return $collected;
+    }
+
+    /**
      * Nazwy, które import zapisałby z tego arkusza (po scaleniu rozmiarów i przycięciu pól), bez
      * zapisu do bazy — dla naprawy nazw zapisanych wcześniej z sąsiedniego wiersza cennika.
      *
@@ -519,8 +661,9 @@ final class PriceListImportService
      *     errors: list<string>,
      *     prices_changed: int,
      *     price_changes: list<array<string, mixed>>,
-     *     suppressed: int
-     * }
+     *     suppressed: int,
+     *     row_cards: array<string, int>
+     * } row_cards — kod wiersza => karta, na którą trafił; $target — wiersz cennika importu przyjęcia (importCollected)
      */
     private function persistImport(
         UploadedFile $file,
@@ -528,26 +671,16 @@ final class PriceListImportService
         string $version,
         User $user,
         array $collected,
+        ?PriceList $target = null,
     ): array {
+        if ($target !== null && (string) $target->manufacturer_key !== PriceList::manufacturerKey($manufacturer)) {
+            throw new \InvalidArgumentException('Cennik #'.$target->id.' ('.$target->manufacturer.') nie pasuje do producenta importu „'.$manufacturer.'”.');
+        }
         // siatka dla każdej drogi zapisu (wołający sprawdzają to przed grupami asortymentowymi)
         if (($refusal = $this->supplierSpecialRefusal($manufacturer, (bool) ($collected['standard_price_mapped'] ?? false))) !== null) {
             return $this->emptyResult($refusal);
         }
-        $collected['products'] = $this->categoriesFromTree($collected['products']);
-        // Cennik wielomarkowy (Canis, decyzja właściciela z 26.09.2026): wiersz z marką towaru w nazwie („Respirator 3M
-        // 9914”) dostaje tę markę zamiast producenta pliku. Znacznik _goods_brand zdejmuje pętla zapisu.
-        /** @var array<string, int> $goodsBrandRows marka => liczba wierszy */
-        $goodsBrandRows = [];
-        if ($this->goodsBrand->enabledFor($manufacturer)) {
-            foreach ($collected['products'] as $i => $product) {
-                $brand = is_array($product) ? $this->goodsBrand->brandOf($product, $manufacturer) : null;
-                if ($brand !== null) {
-                    $collected['products'][$i]['manufacturer'] = $brand;
-                    $collected['products'][$i]['_goods_brand'] = $brand;
-                    $goodsBrandRows[$brand] = ($goodsBrandRows[$brand] ?? 0) + 1;
-                }
-            }
-        }
+        [$collected, $goodsBrandRows] = $this->prepareCollected($collected, $manufacturer);
         $created = 0;
         $updated = 0;
         $priceChanges = [];
@@ -557,14 +690,17 @@ final class PriceListImportService
         $importRow = null;
         // pozycje pliku pominięte przez blokady „Usuń i pomijaj przy imporcie” (poza rows_skipped i skipped_details)
         $suppressed = 0;
+        /** @var array<string, int> $rowCards kod wiersza => karta, na którą trafił (nowa, zaktualizowana, z mapy połączeń) */
+        $rowCards = [];
 
         // Wpis cennika powstaje na początku tej samej transakcji — sloty ceny pliku wskazują cennik, z którego
         // pochodzą (usunięcie cennika usuwa tylko jego slot). Liczniki uzupełniane na końcu; import dalej atomowy.
         /** @var PriceList $priceList */
-        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, $goodsBrandRows, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails, &$importRow, &$suppressed): PriceList {
+        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, $goodsBrandRows, $target, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails, &$importRow, &$suppressed, &$rowCards): PriceList {
             // Jeden wpis na producenta: kolejna aktualizacja odnajduje swój cennik zamiast zakładać
             // następny. Pola opisują ostatnią aktualizację, historia idzie do price_list_imports.
-            $priceList = PriceList::query()
+            // Import przyjęcia (importCollected) pisze do wskazanego wiersza cennika.
+            $priceList = $target ?? PriceList::query()
                 ->where('manufacturer_key', PriceList::manufacturerKey($manufacturer))
                 ->first();
             $attributes = [
@@ -581,238 +717,25 @@ final class PriceListImportService
                 $priceList->update($attributes);
             }
 
-            $byManufacturer = [];
-            $fileSlots = [];
-            $historyIds = [];
-            /** @var array<int, list<array<string, mixed>>> $identifierRows id karty => identyfikatory jej wierszy */
-            $identifierRows = [];
-            // mapa połączeń tego cennika (decyzje człowieka „pozycja pliku → karta”) — raz na import
-            $redirects = $this->fileRedirects((int) $priceList->id);
-            /** @var array<int, list<array{sku: string, payload: array<string, mixed>, positions: list<string>}>> $redirectGroups */
-            $redirectGroups = [];
-            /** @var list<string> $redirectWarnings ostrzeżenia mapy do uwag importu */
-            $redirectWarnings = [];
-            // blokady pozycji usuniętych kart — po producencie cennika (manufacturer_key), nie po numerze wpisu
-            $exclusionSet = $this->exclusions->forPriceList($priceList);
-            // wiersze z nowymi kodami pominięte, bo założyłyby od nowa kartę o SKU usuniętej karty
-            $suppressedNewCodes = 0;
-            // Karty tego cennika (slot „file” z tym cennikiem) nie są pomijane z powodu marki: markę mogła podnieść nazwa
-            // wyrobu (Canis → 3M) albo poprawić człowiek, a cena z pliku ma dalej trafiać na kartę (26.09.2026).
-            /** @var array<int, int> $listCardIds id karty => indeks */
-            $listCardIds = ProductSourcePrice::query()
-                ->where('source_key', ProductSourcePrice::SOURCE_FILE)
-                ->where('price_list_id', $priceList->id)
-                ->pluck('product_id')
-                ->map(static fn (mixed $id): int => (int) $id)
-                ->flip()
-                ->all();
-            /** @var array<string, list<string>> $brandRaised marka => SKU kart, którym import podniósł markę */
-            $brandRaised = [];
-            /** @var list<string> $brandKeptB2b SKU kart z powiązaniem B2B, które zostają przy marce pliku */
-            $brandKeptB2b = [];
-            /** @var array<int, string> $legacyCards id karty => kod wiersza, który ją odnalazł po kodzie uciętym dawną regułą */
-            $legacyCards = [];
-            /** @var array<string, true> $fileCodes kody pozycji tego pliku (małe litery) */
-            $fileCodes = [];
-            foreach ($collected['products'] as $product) {
-                $fileCodes[mb_strtolower(trim((string) ($product['sku'] ?? '')))] = true;
-            }
-            foreach ($collected['products'] as $payload) {
-                $sku = (string) $payload['sku'];
-                $rowIdentifiers = is_array($payload['_identifiers'] ?? null) ? $payload['_identifiers'] : [];
-                $goodsBrand = is_string($payload['_goods_brand'] ?? null) ? $payload['_goods_brand'] : null;
-                $payload = $this->prepareCardPayload($payload);
-                // „Usuń i pomijaj przy imporcie” — przed mapą połączeń i dopasowaniem: wiersz ze wszystkimi pozycjami
-                // zablokowanymi nie zakłada ani nie aktualizuje karty; część zablokowana (zwinięte rozmiary) — reszta
-                // pozycji idzie zwykłą drogą bez kodów zablokowanych
-                $block = $this->exclusionBlock($sku, $rowIdentifiers, $exclusionSet, (string) ($payload['name'] ?? ''), isset($payload['packaging']) ? (string) $payload['packaging'] : null);
-                $suppressed += $block['blocked'];
-                if ($block['all']) {
-                    continue;
-                }
-                $rowIdentifiers = $block['identifiers'];
-                // mapa połączeń ma pierwszeństwo przed dopasowaniem kodu, rdzenia i nazwy (findExistingProduct)
-                $route = $this->redirectRoute($rowIdentifiers, $redirects, (string) ($payload['manufacturer'] ?? ''), $listCardIds, $manufacturer);
-                foreach ($route['warnings'] as $warning) {
-                    $redirectWarnings[] = $sku.': '.$warning;
-                }
-                if ($route['skip'] !== null) {
-                    $this->skipRow($collected, $sku, $payload, $route['skip']);
-                    // pozycje pominiętego wiersza są w pliku — zostają przy swoich kartach, nie jako zniknięte
-                    foreach ($route['identifiers'] as $productId => $skippedIdentifiers) {
-                        $identifierRows[$productId] = [...($identifierRows[$productId] ?? []), ...$skippedIdentifiers];
-                    }
-
-                    continue;
-                }
-                $existing = $route['card'];
-                $legacyCode = false;
-                if ($existing === null) {
-                    // Wiersz z marką z nazwy szuka najpierw jak dotąd, wśród kart producenta pliku (stare karty Canis,
-                    // także znajdowane rdzeniem albo nazwą), a potem wśród kart swojej marki, ale tylko kart tego cennika —
-                    // rdzeń albo nazwa nie mogą podpiąć ceny Canis pod cudzą kartę 3M.
-                    $existing = $goodsBrand === null
-                        ? $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots, null, $legacyCode)
-                        : ($this->findExistingProduct($sku, ['manufacturer' => $manufacturer] + $payload, $byManufacturer, $fileSlots, null, $legacyCode)
-                            ?? $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots, $listCardIds, $legacyCode));
-                    // karta z dawnym ucięciem, której kod to kod innego wiersza tego pliku, należy do tamtego wiersza
-                    if ($legacyCode && isset($fileCodes[mb_strtolower(trim((string) $existing?->sku))])) {
-                        $existing = null;
-                        $legacyCode = false;
-                    }
-                }
-                $ownCard = $existing !== null && isset($listCardIds[(int) $existing->id]);
-                // sku jest UNIQUE — kod karty innego producenta: pozycja pominięta, bez drugiej karty i bez nadpisania
-                // (karta z mapy przeszła już porównanie marki kanonicznej w redirectRoute; karta tego cennika — patrz wyżej).
-                // Wiersz z marką z nazwy porównuje kartę z producentem pliku, jak przed 26.09.2026: stara karta Canis bez
-                // slotu tego cennika dalej się aktualizuje, a karta 3M od P4S z tym samym kodem nie dostaje danych Canis
-                // (to decyzja człowieka w Łączenie kart).
-                if ($route['card'] === null && $existing !== null && ! $ownCard
-                    && $this->foreignManufacturer($existing, $goodsBrand !== null ? $manufacturer : (string) ($payload['manufacturer'] ?? ''))) {
-                    $this->skipRow($collected, $sku, $payload, 'kod należy do karty producenta '.$existing->manufacturer);
-
-                    continue;
-                }
-                // Karta ma jeden slot „file”: wiersz z marką z nazwy nie nadpisuje ceny innego cennika (także na karcie
-                // z mapy połączeń) — cena przerzucałaby się między cennikami przy kolejnych importach.
-                if ($goodsBrand !== null && $existing !== null && ! $ownCard) {
-                    $otherList = $this->fileSlot($existing, $fileSlots)?->price_list_id;
-                    if ($otherList !== null && (int) $otherList !== (int) $priceList->id) {
-                        $this->skipRow($collected, $sku, $payload, 'karta '.$existing->manufacturer.' ma już cenę z innego cennika (#'.$otherList.')');
-
-                        continue;
-                    }
-                }
-                if ($legacyCode && $existing !== null) {
-                    $legacyCards[(int) $existing->id] ??= $sku;
-                }
-                // karta docelowa mapy tego cennika (z mapy albo trafiona zwykłym dopasowaniem, np. własny wiersz karty
-                // po łączeniu rozmiarów): wiersze zbierane i zapisywane razem po pętli (applyRedirectGroup)
-                if ($existing !== null && isset($redirects['cards'][(int) $existing->id])) {
-                    $redirectGroups[(int) $existing->id][] = [
-                        'sku' => $sku,
-                        'payload' => $payload,
-                        'positions' => $this->rowPositions($rowIdentifiers) ?: [$sku],
-                    ];
-                    $identifierRows[(int) $existing->id] = [...($identifierRows[(int) $existing->id] ?? []), ...$rowIdentifiers];
-
-                    continue;
-                }
-                // Wiersz z częścią pozycji zablokowanych (nowy rozmiar zwinięty z usuniętymi) zakłada kartę z resztą
-                // pozycji — poza kartą o SKU usuniętej karty tych pozycji: to byłaby ta sama karta od nowa.
-                if ($existing === null && isset($block['deleted_skus'][ProductImportExclusions::normalize($sku)])) {
-                    $suppressed += $block['remaining'];
-                    $suppressedNewCodes += $block['remaining'];
-
-                    continue;
-                }
-
-                $slotValues = $this->fileSlotValues($payload, $priceList);
-
-                if ($existing !== null) {
-                    // cena z pliku trafia tylko do slotu „file”; raporty porównują z poprzednią ceną z pliku. Karta bez
-                    // slotu pliku z ceną z konta B2B (także w innej walucie) — dodanie ceny źródła, nie zmiana
-                    // (previousSourcePrices).
-                    $fileSlot = $this->fileSlot($existing, $fileSlots);
-                    $before = $this->effectivePrices->previousSourcePrices($existing, $fileSlot, $slotValues);
-                    // ocena ceny specjalnej idzie tylko do slotu (SLOT_ONLY_FIELDS) — ani do $updates, ani do raportów
-                    $cardPayload = array_diff_key($payload, array_flip(self::SLOT_ONLY_FIELDS));
-                    // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026) —
-                    // poza cennikiem producenta marki karty, gdy powiązania są tylko od dystrybutorów (producerFileOwnsCard)
-                    $hasB2bLink = B2bProductLink::query()->where('product_id', $existing->id)->exists();
-                    if ($hasB2bLink && ! $this->producerFileOwnsCard($existing, $manufacturer)) {
-                        unset($cardPayload['name'], $cardPayload['manufacturer']);
-                    }
-                    // Marka karty (26.09.2026): import podnosi ją z nazwy wyrobu tylko na karcie z marką pliku (Canis → 3M)
-                    // i bez powiązań B2B. Innej marki karty nie nadpisuje i nie cofa do producenta pliku — wiersz bez marki
-                    // w nazwie (nowa wersja pliku) nie zamienia 3M z powrotem w Canis.
-                    $cardBrand = (string) $existing->manufacturer;
-                    // marka pliku albo pusta — jak przed 26.09.2026 (foreignManufacturer); inny zapis marki kanonicznej
-                    // („PELTOR” na karcie cennika 3M) zostaje na karcie
-                    $cardBrandIsList = ! $this->foreignManufacturer($existing, $manufacturer);
-                    $raisesBrand = $goodsBrand !== null && $cardBrandIsList && ! CanonicalBrand::same($cardBrand, $goodsBrand);
-                    if (! $cardBrandIsList || ($raisesBrand && $hasB2bLink)) {
-                        unset($cardPayload['manufacturer']);
-                    }
-                    if ($raisesBrand) {
-                        if ($hasB2bLink) {
-                            $brandKeptB2b[] = $sku;
-                        } else {
-                            $brandRaised[$goodsBrand][] = $sku;
-                        }
-                    }
-                    // Karta innej marki z ceną z tego cennika (marka z nazwy wyrobu, poprawiona ręcznie): plik uzupełnia
-                    // tylko puste pola — nazwy, opisu, kodu ani kategorii karty nie nadpisuje; cena idzie do slotu.
-                    if (! $cardBrandIsList) {
-                        $priceFields = array_flip(ProductEffectivePrice::PRICE_FIELDS);
-                        $cardPayload = [
-                            ...$this->onlyEmptyCardFields($existing, array_diff_key($cardPayload, $priceFields)),
-                            ...array_intersect_key($cardPayload, $priceFields),
-                        ];
-                    }
-                    // kategoria wybrana ręcznie w panelu zostaje — cennik ani drzewo sklepu jej po cichu nie nadpisują
-                    if ($existing->category_source === Product::CATEGORY_SOURCE_MANUAL) {
-                        unset($cardPayload['category'], $cardPayload['category_source']);
-                    }
-                    $change = $this->detectPriceChange($before, $cardPayload, $sku);
-                    if ($change !== null) {
-                        $priceChanges[] = $change;
-                    }
-                    // pierwsza cena z pliku to punkt odniesienia dla kolejnych zmian tego źródła w historii
-                    if ($change !== null || $fileSlot === null) {
-                        $historyIds[(int) $existing->id] = true;
-                    }
-                    $updatedProducts[] = $this->summarizeUpdate($before, $cardPayload, $sku, $change !== null);
-                    $updates = array_diff_key($cardPayload, array_flip(ProductEffectivePrice::PRICE_FIELDS));
-                    if ($legacyCode) {
-                        // karta z kodem uciętym dawną regułą: tylko cena (slot pliku) — kod, nazwę i resztę pól poprawia
-                        // products:repair-price-list-codes (nazwa takiej karty bywa z sąsiedniego wiersza, a karta
-                        // potrafi zbierać kilka wierszy pliku)
-                        $updates = [];
-                    } elseif ($cardBrandIsList && $sku !== (string) $existing->sku) {
-                        // producent zgodny (sprawdzone wyżej), a nowy kod nie jest zajęty przez inną kartę
-                        $taken = Product::query()
-                            ->where('sku', $sku)
-                            ->where('id', '!=', $existing->id)
-                            ->exists();
-                        if (! $taken) {
-                            $updates['sku'] = $sku;
-                        }
-                    }
-                    $existing->update($updates);
-                    $saved = $this->effectivePrices->saveSlot($existing, ProductSourcePrice::SOURCE_FILE, $slotValues);
-                    $this->markSupplierSpecial($priceList, $slotValues);
-                    $fileSlots[(int) $existing->id] = $saved['slot'];
-                    $productIds[] = (int) $existing->id;
-                    $identifierRows[(int) $existing->id] = [...($identifierRows[(int) $existing->id] ?? []), ...$rowIdentifiers];
-                    $updated++;
-                } else {
-                    $card = $this->createFileCard($priceList, $sku, $payload);
-                    $createdProduct = $card['product'];
-                    $fileSlots[(int) $createdProduct->id] = $card['slot'];
-                    $historyIds[(int) $createdProduct->id] = true;
-                    $productIds[] = (int) $createdProduct->id;
-                    $identifierRows[(int) $createdProduct->id] = $rowIdentifiers;
-                    $created++;
-                }
-            }
-
-            // karty z mapy połączeń: jedna aktualizacja na kartę, bez zmiany SKU, nazwy i producenta (decyzja człowieka)
-            foreach ($redirectGroups as $cardId => $groupRows) {
-                $result = $this->applyRedirectGroup($redirects['cards'][$cardId], $groupRows, $priceList, $manufacturer, $fileSlots);
-                if ($result['change'] !== null) {
-                    $priceChanges[] = $result['change'];
-                }
-                if ($result['history']) {
-                    $historyIds[$cardId] = true;
-                }
-                if ($result['warning'] !== null) {
-                    $redirectWarnings[] = $result['warning'];
-                }
-                $updatedProducts[] = $result['summary'];
-                $productIds[] = $cardId;
-                $updated++;
-            }
+            $run = $this->runRows($priceList, $manufacturer, $collected);
+            [
+                'created' => $created,
+                'updated' => $updated,
+                'price_changes' => $priceChanges,
+                'updated_products' => $updatedProducts,
+                'product_ids' => $productIds,
+                'suppressed' => $suppressed,
+                'suppressed_new_codes' => $suppressedNewCodes,
+                'file_slots' => $fileSlots,
+                'history_ids' => $historyIds,
+                'identifier_rows' => $identifierRows,
+                'redirect_warnings' => $redirectWarnings,
+                'exclusion_set' => $exclusionSet,
+                'brand_raised' => $brandRaised,
+                'brand_kept_b2b' => $brandKeptB2b,
+                'legacy_cards' => $legacyCards,
+                'row_cards' => $rowCards,
+            ] = $run;
 
             $productIds = array_values(array_unique($productIds));
 
@@ -913,10 +836,14 @@ final class PriceListImportService
         }
         RegisterManufacturerCatalogJob::dispatch($manufacturer, $sampleId);
 
-        try {
-            $this->sizeMerge->merge($manufacturer, false);
-        } catch (Throwable) {
-            // import już zapisany — scalanie rozmiarów nie cofa cennika
+        // Import przyjęcia (importCollected, cennik z importerem): bez scalania rozmiarów — karta = wiersz pliku, a mapa
+        // kart (MapPriceListSourcesJob) przypina stronę do karty, na którą trafił wiersz.
+        if ($target === null) {
+            try {
+                $this->sizeMerge->merge($manufacturer, false);
+            } catch (Throwable) {
+                // import już zapisany — scalanie rozmiarów nie cofa cennika
+            }
         }
 
         return [
@@ -933,7 +860,471 @@ final class PriceListImportService
             'product_ids' => $productIds,
             'special_prices' => $specialCount,
             'suppressed' => $suppressed,
+            'row_cards' => $rowCards,
         ];
+    }
+
+    /**
+     * Wspólne przygotowanie pozycji przed pętlą decyzji (persistImport i planImport): kategorie z drzewa sklepu
+     * i marka towaru w cenniku wielomarkowym.
+     *
+     * @param  array<string, mixed>  $collected
+     * @return array{0: array<string, mixed>, 1: array<string, int>} pozycje i marka => liczba wierszy z marką z nazwy
+     */
+    private function prepareCollected(array $collected, string $manufacturer): array
+    {
+        $collected['products'] = $this->categoriesFromTree($collected['products']);
+        // Cennik wielomarkowy (Canis, decyzja właściciela z 26.09.2026): wiersz z marką towaru w nazwie („Respirator 3M
+        // 9914”) dostaje tę markę zamiast producenta pliku. Znacznik _goods_brand zdejmuje pętla zapisu.
+        /** @var array<string, int> $goodsBrandRows marka => liczba wierszy */
+        $goodsBrandRows = [];
+        if ($this->goodsBrand->enabledFor($manufacturer)) {
+            foreach ($collected['products'] as $i => $product) {
+                $brand = is_array($product) ? $this->goodsBrand->brandOf($product, $manufacturer) : null;
+                if ($brand !== null) {
+                    $collected['products'][$i]['manufacturer'] = $brand;
+                    $collected['products'][$i]['_goods_brand'] = $brand;
+                    $goodsBrandRows[$brand] = ($goodsBrandRows[$brand] ?? 0) + 1;
+                }
+            }
+        }
+
+        return [$collected, $goodsBrandRows];
+    }
+
+    /**
+     * Pętla decyzji wierszy importu — jedna dla zapisu (persistImport, $plan = null) i podglądu (planImport): blokady
+     * „Usuń i pomijaj”, mapa połączeń, dopasowanie karty, karta innego producenta, zmiana ceny. Z $plan nic nie trafia
+     * do bazy: karty „zapisane” wcześniejszymi wierszami żyją w pamięci planu (planCreate/planUpdate), żeby kolejne
+     * wiersze widziały to samo, co przy zapisie (nowa karta po kodzie, zmieniony kod karty, slot ceny tego cennika).
+     *
+     * @param  array<string, mixed>  $collected
+     * @param  array{cards: array<int, Product>, sku_index: array<string, int>, next_id: int}|null  $plan
+     * @return array<string, mixed>
+     */
+    private function runRows(PriceList $priceList, string $manufacturer, array &$collected, ?array &$plan = null): array
+    {
+        $created = 0;
+        $updated = 0;
+        $priceChanges = [];
+        $updatedProducts = [];
+        $productIds = [];
+        $suppressed = 0;
+        /** @var array<int, array<string, mixed>> $rows indeks pozycji => decyzja wiersza */
+        $rows = [];
+        $byManufacturer = [];
+        $fileSlots = [];
+        $historyIds = [];
+        /** @var array<int, list<array<string, mixed>>> $identifierRows id karty => identyfikatory jej wierszy */
+        $identifierRows = [];
+        // mapa połączeń tego cennika (decyzje człowieka „pozycja pliku → karta”) — raz na import
+        $redirects = $this->fileRedirects((int) $priceList->id);
+        /** @var array<int, list<array{sku: string, payload: array<string, mixed>, positions: list<string>}>> $redirectGroups */
+        $redirectGroups = [];
+        /** @var array<int, list<int>> $redirectRowIndexes id karty z mapy => indeksy jej wierszy */
+        $redirectRowIndexes = [];
+        /** @var list<string> $redirectWarnings ostrzeżenia mapy do uwag importu */
+        $redirectWarnings = [];
+        // blokady pozycji usuniętych kart — po producencie cennika (manufacturer_key), nie po numerze wpisu
+        $exclusionSet = $this->exclusions->forPriceList($priceList);
+        // wiersze z nowymi kodami pominięte, bo założyłyby od nowa kartę o SKU usuniętej karty
+        $suppressedNewCodes = 0;
+        // Karty tego cennika (slot „file” z tym cennikiem) nie są pomijane z powodu marki: markę mogła podnieść nazwa
+        // wyrobu (Canis → 3M) albo poprawić człowiek, a cena z pliku ma dalej trafiać na kartę (26.09.2026).
+        /** @var array<int, int> $listCardIds id karty => indeks */
+        $listCardIds = ProductSourcePrice::query()
+            ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+            ->where('price_list_id', $priceList->id)
+            ->pluck('product_id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->flip()
+            ->all();
+        /** @var array<string, list<string>> $brandRaised marka => SKU kart, którym import podniósł markę */
+        $brandRaised = [];
+        /** @var list<string> $brandKeptB2b SKU kart z powiązaniem B2B, które zostają przy marce pliku */
+        $brandKeptB2b = [];
+        /** @var array<int, string> $legacyCards id karty => kod wiersza, który ją odnalazł po kodzie uciętym dawną regułą */
+        $legacyCards = [];
+        /** @var array<string, true> $fileCodes kody pozycji tego pliku (małe litery) */
+        $fileCodes = [];
+        foreach ($collected['products'] as $product) {
+            $fileCodes[mb_strtolower(trim((string) ($product['sku'] ?? '')))] = true;
+        }
+        foreach ($collected['products'] as $index => $payload) {
+            $sku = (string) $payload['sku'];
+            $rowIdentifiers = is_array($payload['_identifiers'] ?? null) ? $payload['_identifiers'] : [];
+            $goodsBrand = is_string($payload['_goods_brand'] ?? null) ? $payload['_goods_brand'] : null;
+            $payload = $this->prepareCardPayload($payload);
+            $row = ['index' => $index, 'sku' => $sku, 'name' => (string) ($payload['name'] ?? ''), 'action' => null, 'product_id' => null, 'reason' => null, 'card' => null, 'change' => null];
+            // „Usuń i pomijaj przy imporcie” — przed mapą połączeń i dopasowaniem: wiersz ze wszystkimi pozycjami
+            // zablokowanymi nie zakłada ani nie aktualizuje karty; część zablokowana (zwinięte rozmiary) — reszta
+            // pozycji idzie zwykłą drogą bez kodów zablokowanych
+            $block = $this->exclusionBlock($sku, $rowIdentifiers, $exclusionSet, (string) ($payload['name'] ?? ''), isset($payload['packaging']) ? (string) $payload['packaging'] : null);
+            $suppressed += $block['blocked'];
+            if ($block['all']) {
+                $rows[$index] = ['action' => self::ROW_BLOCKED, 'reason' => 'pozycja usunięta z pominięciem przy imporcie'] + $row;
+
+                continue;
+            }
+            $rowIdentifiers = $block['identifiers'];
+            // mapa połączeń ma pierwszeństwo przed dopasowaniem kodu, rdzenia i nazwy (findExistingProduct)
+            $route = $this->redirectRoute($rowIdentifiers, $redirects, (string) ($payload['manufacturer'] ?? ''), $listCardIds, $manufacturer);
+            foreach ($route['warnings'] as $warning) {
+                $redirectWarnings[] = $sku.': '.$warning;
+            }
+            if ($route['skip'] !== null) {
+                $this->skipRow($collected, $sku, $payload, $route['skip']);
+                $rows[$index] = ['action' => self::ROW_SKIP, 'reason' => $route['skip']] + $row;
+                // pozycje pominiętego wiersza są w pliku — zostają przy swoich kartach, nie jako zniknięte
+                foreach ($route['identifiers'] as $productId => $skippedIdentifiers) {
+                    $identifierRows[$productId] = [...($identifierRows[$productId] ?? []), ...$skippedIdentifiers];
+                }
+
+                continue;
+            }
+            $existing = $route['card'];
+            $legacyCode = false;
+            if ($existing === null) {
+                // Wiersz z marką z nazwy szuka najpierw jak dotąd, wśród kart producenta pliku (stare karty Canis,
+                // także znajdowane rdzeniem albo nazwą), a potem wśród kart swojej marki, ale tylko kart tego cennika —
+                // rdzeń albo nazwa nie mogą podpiąć ceny Canis pod cudzą kartę 3M.
+                $existing = $goodsBrand === null
+                    ? $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots, null, $legacyCode, $plan)
+                    : ($this->findExistingProduct($sku, ['manufacturer' => $manufacturer] + $payload, $byManufacturer, $fileSlots, null, $legacyCode, $plan)
+                        ?? $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots, $listCardIds, $legacyCode, $plan));
+                // karta z dawnym ucięciem, której kod to kod innego wiersza tego pliku, należy do tamtego wiersza
+                if ($legacyCode && isset($fileCodes[mb_strtolower(trim((string) $existing?->sku))])) {
+                    $existing = null;
+                    $legacyCode = false;
+                }
+            }
+            $ownCard = $existing !== null && isset($listCardIds[(int) $existing->id]);
+            // sku jest UNIQUE — kod karty innego producenta: pozycja pominięta, bez drugiej karty i bez nadpisania
+            // (karta z mapy przeszła już porównanie marki kanonicznej w redirectRoute; karta tego cennika — patrz wyżej).
+            // Wiersz z marką z nazwy porównuje kartę z producentem pliku, jak przed 26.09.2026: stara karta Canis bez
+            // slotu tego cennika dalej się aktualizuje, a karta 3M od P4S z tym samym kodem nie dostaje danych Canis
+            // (to decyzja człowieka w Łączenie kart).
+            if ($route['card'] === null && $existing !== null && ! $ownCard
+                && $this->foreignManufacturer($existing, $goodsBrand !== null ? $manufacturer : (string) ($payload['manufacturer'] ?? ''))) {
+                $reason = 'kod należy do karty producenta '.$existing->manufacturer;
+                $this->skipRow($collected, $sku, $payload, $reason);
+                $rows[$index] = ['action' => self::ROW_SKIP, 'reason' => $reason] + $row;
+
+                continue;
+            }
+            // Karta ma jeden slot „file”: wiersz z marką z nazwy nie nadpisuje ceny innego cennika (także na karcie
+            // z mapy połączeń) — cena przerzucałaby się między cennikami przy kolejnych importach.
+            if ($goodsBrand !== null && $existing !== null && ! $ownCard) {
+                $otherList = $this->fileSlot($existing, $fileSlots)?->price_list_id;
+                if ($otherList !== null && (int) $otherList !== (int) $priceList->id) {
+                    $reason = 'karta '.$existing->manufacturer.' ma już cenę z innego cennika (#'.$otherList.')';
+                    $this->skipRow($collected, $sku, $payload, $reason);
+                    $rows[$index] = ['action' => self::ROW_SKIP, 'reason' => $reason] + $row;
+
+                    continue;
+                }
+            }
+            if ($legacyCode && $existing !== null) {
+                $legacyCards[(int) $existing->id] ??= $sku;
+            }
+            // karta docelowa mapy tego cennika (z mapy albo trafiona zwykłym dopasowaniem, np. własny wiersz karty
+            // po łączeniu rozmiarów): wiersze zbierane i zapisywane razem po pętli (applyRedirectGroup)
+            if ($existing !== null && isset($redirects['cards'][(int) $existing->id])) {
+                $redirectGroups[(int) $existing->id][] = [
+                    'sku' => $sku,
+                    'payload' => $payload,
+                    'positions' => $this->rowPositions($rowIdentifiers) ?: [$sku],
+                ];
+                $redirectRowIndexes[(int) $existing->id][] = $index;
+                $rows[$index] = ['action' => self::ROW_UPDATE, 'product_id' => (int) $existing->id, 'card' => $plan !== null ? $redirects['cards'][(int) $existing->id] : null] + $row;
+                $identifierRows[(int) $existing->id] = [...($identifierRows[(int) $existing->id] ?? []), ...$rowIdentifiers];
+
+                continue;
+            }
+            // Wiersz z częścią pozycji zablokowanych (nowy rozmiar zwinięty z usuniętymi) zakłada kartę z resztą
+            // pozycji — poza kartą o SKU usuniętej karty tych pozycji: to byłaby ta sama karta od nowa.
+            if ($existing === null && isset($block['deleted_skus'][ProductImportExclusions::normalize($sku)])) {
+                $suppressed += $block['remaining'];
+                $suppressedNewCodes += $block['remaining'];
+                $rows[$index] = ['action' => self::ROW_BLOCKED, 'reason' => 'nowy kod założyłby od nowa usuniętą kartę (to samo SKU)'] + $row;
+
+                continue;
+            }
+
+            $slotValues = $this->fileSlotValues($payload, $priceList);
+
+            if ($existing !== null) {
+                // cena z pliku trafia tylko do slotu „file”; raporty porównują z poprzednią ceną z pliku. Karta bez
+                // slotu pliku z ceną z konta B2B (także w innej walucie) — dodanie ceny źródła, nie zmiana
+                // (previousSourcePrices).
+                $fileSlot = $this->fileSlot($existing, $fileSlots);
+                $before = $this->effectivePrices->previousSourcePrices($existing, $fileSlot, $slotValues);
+                // ocena ceny specjalnej idzie tylko do slotu (SLOT_ONLY_FIELDS) — ani do $updates, ani do raportów
+                $cardPayload = array_diff_key($payload, array_flip(self::SLOT_ONLY_FIELDS));
+                // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026) —
+                // poza cennikiem producenta marki karty, gdy powiązania są tylko od dystrybutorów (producerFileOwnsCard)
+                $hasB2bLink = B2bProductLink::query()->where('product_id', $existing->id)->exists();
+                if ($hasB2bLink && ! $this->producerFileOwnsCard($existing, $manufacturer)) {
+                    unset($cardPayload['name'], $cardPayload['manufacturer']);
+                }
+                // Marka karty (26.09.2026): import podnosi ją z nazwy wyrobu tylko na karcie z marką pliku (Canis → 3M)
+                // i bez powiązań B2B. Innej marki karty nie nadpisuje i nie cofa do producenta pliku — wiersz bez marki
+                // w nazwie (nowa wersja pliku) nie zamienia 3M z powrotem w Canis.
+                $cardBrand = (string) $existing->manufacturer;
+                // marka pliku albo pusta — jak przed 26.09.2026 (foreignManufacturer); inny zapis marki kanonicznej
+                // („PELTOR” na karcie cennika 3M) zostaje na karcie
+                $cardBrandIsList = ! $this->foreignManufacturer($existing, $manufacturer);
+                $raisesBrand = $goodsBrand !== null && $cardBrandIsList && ! CanonicalBrand::same($cardBrand, $goodsBrand);
+                if (! $cardBrandIsList || ($raisesBrand && $hasB2bLink)) {
+                    unset($cardPayload['manufacturer']);
+                }
+                if ($raisesBrand) {
+                    if ($hasB2bLink) {
+                        $brandKeptB2b[] = $sku;
+                    } else {
+                        $brandRaised[$goodsBrand][] = $sku;
+                    }
+                }
+                // Karta innej marki z ceną z tego cennika (marka z nazwy wyrobu, poprawiona ręcznie): plik uzupełnia
+                // tylko puste pola — nazwy, opisu, kodu ani kategorii karty nie nadpisuje; cena idzie do slotu.
+                if (! $cardBrandIsList) {
+                    $priceFields = array_flip(ProductEffectivePrice::PRICE_FIELDS);
+                    $cardPayload = [
+                        ...$this->onlyEmptyCardFields($existing, array_diff_key($cardPayload, $priceFields)),
+                        ...array_intersect_key($cardPayload, $priceFields),
+                    ];
+                }
+                // kategoria wybrana ręcznie w panelu zostaje — cennik ani drzewo sklepu jej po cichu nie nadpisują
+                if ($existing->category_source === Product::CATEGORY_SOURCE_MANUAL) {
+                    unset($cardPayload['category'], $cardPayload['category_source']);
+                }
+                $change = $this->detectPriceChange($before, $cardPayload, $sku);
+                if ($change !== null) {
+                    $priceChanges[] = $change;
+                }
+                // pierwsza cena z pliku to punkt odniesienia dla kolejnych zmian tego źródła w historii
+                if ($change !== null || $fileSlot === null) {
+                    $historyIds[(int) $existing->id] = true;
+                }
+                $updatedProducts[] = $this->summarizeUpdate($before, $cardPayload, $sku, $change !== null);
+                $updates = array_diff_key($cardPayload, array_flip(ProductEffectivePrice::PRICE_FIELDS));
+                if ($legacyCode) {
+                    // karta z kodem uciętym dawną regułą: tylko cena (slot pliku) — kod, nazwę i resztę pól poprawia
+                    // products:repair-price-list-codes (nazwa takiej karty bywa z sąsiedniego wiersza, a karta
+                    // potrafi zbierać kilka wierszy pliku)
+                    $updates = [];
+                } elseif ($cardBrandIsList && $sku !== (string) $existing->sku) {
+                    // producent zgodny (sprawdzone wyżej), a nowy kod nie jest zajęty przez inną kartę
+                    $taken = $plan === null
+                        ? Product::query()
+                            ->where('sku', $sku)
+                            ->where('id', '!=', $existing->id)
+                            ->exists()
+                        : $this->planSkuTaken($plan, $sku, $existing);
+                    if (! $taken) {
+                        $updates['sku'] = $sku;
+                    }
+                }
+                if ($plan === null) {
+                    $existing->update($updates);
+                    $saved = $this->effectivePrices->saveSlot($existing, ProductSourcePrice::SOURCE_FILE, $slotValues);
+                    $this->markSupplierSpecial($priceList, $slotValues);
+                    $fileSlots[(int) $existing->id] = $saved['slot'];
+                } else {
+                    $this->planUpdate($plan, $existing, $updates, $slotValues, $fileSlots);
+                }
+                $productIds[] = (int) $existing->id;
+                $identifierRows[(int) $existing->id] = [...($identifierRows[(int) $existing->id] ?? []), ...$rowIdentifiers];
+                $updated++;
+                // karta nowa z wcześniejszego wiersza podglądu ma ujemne id planu — product_id null
+                $rows[$index] = ['action' => self::ROW_UPDATE, 'product_id' => (int) $existing->id > 0 ? (int) $existing->id : null, 'card' => $plan !== null ? $existing : null, 'change' => $change] + $row;
+            } else {
+                $card = $plan === null
+                    ? $this->createFileCard($priceList, $sku, $payload)
+                    : $this->planCreate($plan, $priceList, $sku, $payload);
+                $createdProduct = $card['product'];
+                $fileSlots[(int) $createdProduct->id] = $card['slot'];
+                $historyIds[(int) $createdProduct->id] = true;
+                $productIds[] = (int) $createdProduct->id;
+                $identifierRows[(int) $createdProduct->id] = $rowIdentifiers;
+                $created++;
+                // w podglądzie nowa karta nie ma id w bazie (ujemne id planu) — product_id null
+                $rows[$index] = ['action' => self::ROW_CREATE, 'product_id' => $plan === null ? (int) $createdProduct->id : null, 'card' => $plan !== null ? $createdProduct : null] + $row;
+            }
+        }
+
+        // karty z mapy połączeń: jedna aktualizacja na kartę, bez zmiany SKU, nazwy i producenta (decyzja człowieka)
+        foreach ($redirectGroups as $cardId => $groupRows) {
+            $result = $this->applyRedirectGroup($redirects['cards'][$cardId], $groupRows, $priceList, $manufacturer, $fileSlots, $plan);
+            if ($result['change'] !== null) {
+                $priceChanges[] = $result['change'];
+                $rows[$redirectRowIndexes[$cardId][0]]['change'] = $result['change'];
+            }
+            if ($result['history']) {
+                $historyIds[$cardId] = true;
+            }
+            if ($result['warning'] !== null) {
+                $redirectWarnings[] = $result['warning'];
+            }
+            $updatedProducts[] = $result['summary'];
+            $productIds[] = $cardId;
+            $updated++;
+        }
+
+        ksort($rows);
+        /** @var array<string, int> $rowCards */
+        $rowCards = [];
+        foreach ($rows as $decided) {
+            if ($decided['product_id'] !== null) {
+                $rowCards[$decided['sku']] ??= $decided['product_id'];
+            }
+        }
+
+        return [
+            'created' => $created,
+            'updated' => $updated,
+            'price_changes' => $priceChanges,
+            'updated_products' => $updatedProducts,
+            'product_ids' => $productIds,
+            'suppressed' => $suppressed,
+            'suppressed_new_codes' => $suppressedNewCodes,
+            'file_slots' => $fileSlots,
+            'history_ids' => $historyIds,
+            'identifier_rows' => $identifierRows,
+            'redirect_warnings' => $redirectWarnings,
+            'exclusion_set' => $exclusionSet,
+            'brand_raised' => $brandRaised,
+            'brand_kept_b2b' => $brandKeptB2b,
+            'legacy_cards' => $legacyCards,
+            'row_cards' => $rowCards,
+            'rows' => array_values($rows),
+        ];
+    }
+
+    /**
+     * Karta o kodzie $sku w podglądzie: najpierw karty „zapisane” w planie (nowe i ze zmienionym kodem), potem baza.
+     * Karta z bazy, której plan zmienił kod, pod starym kodem już nie istnieje (jak po zapisie).
+     *
+     * @param  array{cards: array<int, Product>, sku_index: array<string, int>, next_id: int}  $plan
+     */
+    private function planSkuHit(array &$plan, string $sku): ?Product
+    {
+        // kody bez rozróżniania wielkości liter, jak kolumna sku w MySQL (sortowanie *_ci) na produkcji
+        $key = mb_strtolower($sku);
+        if (isset($plan['sku_index'][$key])) {
+            return $plan['cards'][$plan['sku_index'][$key]];
+        }
+        $query = Product::query();
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            $query->whereRaw('lower(sku) = ?', [$key]);
+        } else {
+            $query->where('sku', $sku);
+        }
+        $hit = $query->first();
+        if ($hit === null) {
+            return null;
+        }
+        $planned = $plan['cards'][(int) $hit->id] ?? null;
+        if ($planned === null) {
+            return $hit;
+        }
+
+        return mb_strtolower((string) $planned->sku) === $key ? $planned : null;
+    }
+
+    /** @param  array{cards: array<int, Product>, sku_index: array<string, int>, next_id: int}  $plan */
+    private function planSkuTaken(array &$plan, string $sku, Product $existing): bool
+    {
+        $hit = $this->planSkuHit($plan, $sku);
+
+        return $hit !== null && (int) $hit->id !== (int) $existing->id;
+    }
+
+    /** @param  array{cards: array<int, Product>, sku_index: array<string, int>, next_id: int}  $plan */
+    private function planRemember(array &$plan, Product $card, ?string $oldSku): void
+    {
+        $id = (int) $card->id;
+        $plan['cards'][$id] = $card;
+        $key = mb_strtolower((string) $card->sku);
+        if ($oldSku !== null && mb_strtolower($oldSku) !== $key && ($plan['sku_index'][mb_strtolower($oldSku)] ?? null) === $id) {
+            unset($plan['sku_index'][mb_strtolower($oldSku)]);
+        }
+        $plan['sku_index'][$key] = $id;
+    }
+
+    /**
+     * Aktualizacja karty w podglądzie: pola w pamięci (fill bez zapisu) i slot „file” tego cennika jako niezapisany
+     * wiersz — kolejne wiersze porównują cenę z nim, jak po saveSlot.
+     *
+     * @param  array{cards: array<int, Product>, sku_index: array<string, int>, next_id: int}  $plan
+     * @param  array<string, mixed>  $updates
+     * @param  array<string, mixed>  $slotValues
+     * @param  array<int, ProductSourcePrice|null>  $fileSlots
+     */
+    private function planUpdate(array &$plan, Product $card, array $updates, array $slotValues, array &$fileSlots): void
+    {
+        $oldSku = (string) $card->sku;
+        $card->fill($updates);
+        $this->planRemember($plan, $card, $oldSku);
+        $fileSlots[(int) $card->id] = new ProductSourcePrice([
+            'product_id' => $card->id,
+            'source_key' => ProductSourcePrice::SOURCE_FILE,
+            ...$slotValues,
+        ]);
+    }
+
+    /**
+     * Nowa karta w podglądzie: niezapisany Product z ujemnym id planu (kolejne wiersze znajdą ją po kodzie jak po zapisie).
+     *
+     * @param  array{cards: array<int, Product>, sku_index: array<string, int>, next_id: int}  $plan
+     * @param  array<string, mixed>  $payload
+     * @return array{product: Product, slot: ProductSourcePrice}
+     */
+    private function planCreate(array &$plan, PriceList $priceList, string $sku, array $payload): array
+    {
+        // jak createFileCard: ocena ceny specjalnej tylko w slocie
+        $product = new Product(['sku' => $sku, ...array_diff_key($payload, array_flip(self::SLOT_ONLY_FIELDS))]);
+        $product->setAttribute('id', $plan['next_id']--);
+        $this->planRemember($plan, $product, null);
+
+        return [
+            'product' => $product,
+            'slot' => new ProductSourcePrice([
+                'product_id' => $product->id,
+                'source_key' => ProductSourcePrice::SOURCE_FILE,
+                ...$this->fileSlotValues($payload, $priceList),
+            ]),
+        ];
+    }
+
+    /**
+     * Karty producenta w podglądzie tak, jak widziałby je zapis w tym miejscu pętli: karty z bazy podmienione na stan
+     * z planu, nowe karty planu na końcu (najwyższe id), karty, którym plan zmienił producenta, wypadają albo dochodzą.
+     *
+     * @param  array{cards: array<int, Product>, sku_index: array<string, int>, next_id: int}  $plan
+     * @param  EloquentCollection<int, Product>  $loaded
+     * @return EloquentCollection<int, Product>
+     */
+    private function planManufacturerCards(array &$plan, EloquentCollection $loaded, string $mfr): EloquentCollection
+    {
+        $sameBrand = static fn (Product $card): bool => mb_strtolower(trim((string) $card->manufacturer)) === mb_strtolower(trim($mfr));
+        $out = [];
+        foreach ($loaded as $card) {
+            $planned = $plan['cards'][(int) $card->id] ?? null;
+            if ($planned === null) {
+                $out[(int) $card->id] = $card;
+            } elseif ($sameBrand($planned)) {
+                $out[(int) $card->id] = $planned;
+            }
+        }
+        foreach ($plan['cards'] as $id => $card) {
+            if (! isset($out[$id]) && $sameBrand($card)) {
+                $out[$id] = $card;
+            }
+        }
+        uksort($out, static fn (int $a, int $b): int => [$a < 0 ? 1 : 0, abs($a)] <=> [$b < 0 ? 1 : 0, abs($b)]);
+
+        return new EloquentCollection(array_values($out));
     }
 
     /**
@@ -1083,6 +1474,14 @@ final class PriceListImportService
             ->exists();
 
         return $flagged ? self::SUPPLIER_SPECIAL_MAPPING_REQUIRED : null;
+    }
+
+    /**
+     * Odmowa dla importera cennika (ImportedRow nie ma kolumny ceny normalnej) — ten sam warunek co persistImport.
+     */
+    public function supplierSpecialRefusalForImporter(string $manufacturer): ?string
+    {
+        return $this->supplierSpecialRefusal($manufacturer, false);
     }
 
     /**
@@ -2093,10 +2492,11 @@ final class PriceListImportService
         array &$fileSlots,
         ?array $onlyIds = null,
         bool &$legacyCode = false,
+        ?array &$plan = null,
     ): ?Product {
         $legacyCode = false;
         // karta po samym kodzie może należeć do innego producenta — persistImport pomija wtedy pozycję
-        $hit = Product::query()->where('sku', $sku)->first();
+        $hit = $plan !== null ? $this->planSkuHit($plan, $sku) : Product::query()->where('sku', $sku)->first();
         if ($hit !== null) {
             return $hit;
         }
@@ -2112,6 +2512,9 @@ final class PriceListImportService
         );
         if (! isset($byManufacturer[$mfr])) {
             $byManufacturer[$mfr] = Product::query()->where('manufacturer', $mfr)->get();
+            if ($plan !== null) {
+                $byManufacturer[$mfr] = $this->planManufacturerCards($plan, $byManufacturer[$mfr], $mfr);
+            }
             $slots = ProductSourcePrice::query()
                 ->where('source_key', ProductSourcePrice::SOURCE_FILE)
                 ->whereIn('product_id', $byManufacturer[$mfr]->modelKeys())
@@ -2433,7 +2836,7 @@ final class PriceListImportService
      * @param  array<int, ProductSourcePrice|null>  $fileSlots
      * @return array{change: array<string, mixed>|null, summary: array<string, mixed>, history: bool, warning: string|null}
      */
-    private function applyRedirectGroup(Product $card, array $rows, PriceList $priceList, string $listManufacturer, array &$fileSlots): array
+    private function applyRedirectGroup(Product $card, array $rows, PriceList $priceList, string $listManufacturer, array &$fileSlots, ?array &$plan = null): array
     {
         // właściciel sprzed zapisu slotu (slot „file” tego importu zmienia wynik ownerSourceKeys)
         // (właściciel „file” = slot pliku marki karty; ten cennik jest właścicielem, gdy to jego slot)
@@ -2481,7 +2884,11 @@ final class PriceListImportService
             // bez ceny w porównaniu: raport pokazuje cenę z pliku sprzed importu (slot zostaje)
             $before = $fileSlot !== null ? $this->effectivePrices->previousSourcePrices($card, $fileSlot, []) : $card;
             $summary = $this->summarizeUpdate($before, $cardPayload, $sku, false);
-            $card->update($updates);
+            if ($plan === null) {
+                $card->update($updates);
+            } else {
+                $card->fill($updates);
+            }
             $positions = array_values(array_unique(array_merge(...array_column($rows, 'positions'))));
 
             return [
@@ -2511,10 +2918,14 @@ final class PriceListImportService
         $before = $this->effectivePrices->previousSourcePrices($card, $fileSlot, $slotValues);
         $change = $this->detectPriceChange($before, $cardPayload, $sku);
         $summary = $this->summarizeUpdate($before, $cardPayload, $sku, $change !== null);
-        $card->update($updates);
-        $saved = $this->effectivePrices->saveSlot($card, ProductSourcePrice::SOURCE_FILE, $slotValues);
-        $this->markSupplierSpecial($priceList, $slotValues);
-        $fileSlots[(int) $card->id] = $saved['slot'];
+        if ($plan === null) {
+            $card->update($updates);
+            $saved = $this->effectivePrices->saveSlot($card, ProductSourcePrice::SOURCE_FILE, $slotValues);
+            $this->markSupplierSpecial($priceList, $slotValues);
+            $fileSlots[(int) $card->id] = $saved['slot'];
+        } else {
+            $this->planUpdate($plan, $card, $updates, $slotValues, $fileSlots);
+        }
 
         return [
             'change' => $change,

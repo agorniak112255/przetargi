@@ -12,6 +12,7 @@ export type ReviewReason =
   | 'worse_version'
   | 'rejected_source'
   | 'manufacturer_missing'
+  | 'source_unmapped'
 
 export const REVIEW_REASONS: ReviewReason[] = [
   'identity_soft',
@@ -19,6 +20,7 @@ export const REVIEW_REASONS: ReviewReason[] = [
   'worse_version',
   'rejected_source',
   'manufacturer_missing',
+  'source_unmapped',
 ]
 
 /** Krótka nazwa powodu (filtr, wiersz listy). */
@@ -28,6 +30,7 @@ export const REVIEW_REASON_LABEL: Record<ReviewReason, string> = {
   worse_version: 'nowy opis gorszy od obecnego',
   rejected_source: 'odrzucona strona',
   manufacturer_missing: 'brak strony producenta',
+  source_unmapped: 'Brak strony z importera — wskaż adres',
 }
 
 /** Wyjaśnienie powodu prostym językiem — co handlowiec ma sprawdzić. */
@@ -42,6 +45,8 @@ export const REVIEW_REASON_HINT: Record<ReviewReason, string> = {
     'Nowy opis pochodzi ze strony, którą ktoś wcześniej odrzucił. Obecny opis zostaje na karcie, nowy czeka jako propozycja.',
   manufacturer_missing:
     'Opis tego producenta bierzemy tylko z jego własnej strony, a program jej nie znalazł. Opisu ze sklepu program nie zapisuje — jeśli karta miała taki opis, został zdjęty z karty i jest w historii wersji („Przywróć”); zdjęcia i pliki zostały. Wskaż adres strony producenta albo opisz ręcznie.',
+  source_unmapped:
+    'Cennik tej karty przyjmuje się z importerem, który przypisuje każdej karcie stronę wyrobu. Tej karcie importer strony nie przypisał, więc program nie szuka opisu w internecie — obecny opis (jeśli jest) zostaje. Wskaż adres strony wyrobu („Wskaż właściwą stronę”) albo opisz kartę ręcznie.',
 }
 
 export function reviewReasonLabel(reason: string | null | undefined): string {

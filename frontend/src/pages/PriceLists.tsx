@@ -552,6 +552,8 @@ export function PriceLists() {
   const [elapsedSec, setElapsedSec] = useState(0)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  /** Stary import odrzucony (422 z price_list_id): cennik przyjmuje się nowym sposobem w zakładce „Z pliku”. */
+  const [intakeBlocked, setIntakeBlocked] = useState('')
   /** „Pobierz ponownie” pominęło karty z gotowym opisem od producenta — przycisk „Pobierz też te karty”. */
   const [manufacturerSkipped, setManufacturerSkipped] = useState<{ row: PriceList; ids: number[] } | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
@@ -1689,6 +1691,7 @@ export function PriceLists() {
     setBusy(true)
     startProgress('import')
     setErr('')
+    setIntakeBlocked('')
     setMsg('')
     try {
       const fd = buildFormData()
@@ -1714,7 +1717,11 @@ export function PriceLists() {
       await load()
       finishProgress(true)
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd importu')
+      if (ex instanceof ApiError && ex.status === 422 && typeof ex.body.price_list_id === 'number') {
+        setIntakeBlocked(ex.message)
+      } else {
+        setErr(ex instanceof Error ? ex.message : 'Błąd importu')
+      }
       finishProgress(false)
     } finally {
       setBusy(false)
@@ -1734,6 +1741,7 @@ export function PriceLists() {
     setBusy(true)
     startProgress('import')
     setErr('')
+    setIntakeBlocked('')
     setMsg('')
     try {
       const fd = buildFormData()
@@ -1747,7 +1755,11 @@ export function PriceLists() {
       await load()
       finishProgress(true)
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd importu')
+      if (ex instanceof ApiError && ex.status === 422 && typeof ex.body.price_list_id === 'number') {
+        setIntakeBlocked(ex.message)
+      } else {
+        setErr(ex instanceof Error ? ex.message : 'Błąd importu')
+      }
       finishProgress(false)
     } finally {
       setBusy(false)
@@ -1771,6 +1783,14 @@ export function PriceLists() {
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {intakeBlocked && (
+        <p className="mb-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {intakeBlocked}{' '}
+          <Link className="font-medium underline" to="/price-lists/files">
+            Przejdź do zakładki „Z pliku” →
+          </Link>
+        </p>
+      )}
       {manufacturerSkipped && (
         <p className="mb-2 flex flex-wrap items-center gap-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-900">
           <span>

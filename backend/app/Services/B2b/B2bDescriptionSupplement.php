@@ -9,6 +9,8 @@ use App\Models\B2bAccount;
 use App\Models\B2bDescriptionSupplementAttempt;
 use App\Models\B2bProductLink;
 use App\Models\Product;
+use App\Models\ProductSourcePrice;
+use App\Services\Enrichment\Sources\SourcePins;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductDescriptionText;
 use App\Support\ProductNormsColumn;
@@ -573,6 +575,11 @@ final class B2bDescriptionSupplement
                     }
                 }
             }
+            // karta cennika z importerem (source_policy) bez strony z mapy — opisu z internetu nie dostaje (10.10.2026);
+            // bez tego zadanie kończyłoby się „brak stron” i karta nie wróciłaby po przypięciu strony (ten sam odcisk)
+            if ($matched !== []) {
+                $matched = $this->withoutUnmappedCards($matched);
+            }
             // karta pasująca też do konta z hostami o niższym id należy do tamtego konta (context bez konta)
             if ($matched !== [] && $lower !== []) {
                 $lowerLinks = $this->linkRows(array_keys($lower), array_keys($matched));
@@ -637,6 +644,37 @@ final class B2bDescriptionSupplement
      * @param  list<int>  $ids
      * @return array<int, object>
      */
+    /**
+     * Bez kart zablokowanych przez SourcePins (cennik map_only, brak strony z mapy i adresu człowieka). Sprawdzane tylko
+     * karty ze slotem pliku cennika z polityką źródeł — jedno zapytanie na porcję.
+     *
+     * @param  array<int, string>  $matched  id karty => odcisk źródła
+     * @return array<int, string>
+     */
+    private function withoutUnmappedCards(array $matched): array
+    {
+        $intake = ProductSourcePrice::query()
+            ->toBase()
+            ->join('price_lists', 'price_lists.id', '=', 'product_source_prices.price_list_id')
+            ->where('product_source_prices.source_key', ProductSourcePrice::SOURCE_FILE)
+            ->whereNotNull('price_lists.source_policy')
+            ->whereIn('product_source_prices.product_id', array_keys($matched))
+            ->pluck('product_source_prices.product_id')
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
+        if ($intake === []) {
+            return $matched;
+        }
+        $pins = app(SourcePins::class);
+        foreach (Product::query()->whereIn('id', $intake)->get(['id', 'sku', 'name', 'manufacturer', 'shop_source_url']) as $product) {
+            if ($pins->blockedReason($product) !== null) {
+                unset($matched[(int) $product->id]);
+            }
+        }
+
+        return $matched;
+    }
+
     private function productRows(array $ids): array
     {
         $out = [];

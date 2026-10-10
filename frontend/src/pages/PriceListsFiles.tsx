@@ -2,11 +2,33 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
+import { PriceListImportPreviewModal } from '../components/PriceListImportPreviewModal'
+import { PriceListIntakeForm, SearchSitesPicker } from '../components/PriceListIntakeForm'
+import { PriceListSourcePinsModal } from '../components/PriceListSourcePinsModal'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { ApiError, api, can, canAny, parseActiveEnrichment, type EnrichmentBatch } from '../lib/api'
-import { applyCheckboxRange } from '../lib/checkboxRange'
 import { plural } from '../lib/plural'
 import { formatDateTime } from '../lib/priceChange'
+import {
+  countOf,
+  downloadPriceListFile,
+  fetchImporters,
+  fetchPriceListFiles,
+  FILE_STATUS_LABEL,
+  formatBytes,
+  INTAKE_FILE_ACCEPT,
+  INTAKE_FILE_MAX_BYTES,
+  INTAKE_STATUS_LABEL,
+  INTAKE_STATUS_TONE,
+  intakeOf,
+  setImporter,
+  uploadPriceListFile,
+  type FilePriceListRow,
+  type FileView,
+  type ImporterOption,
+  type IntakeImportResult,
+  type IntakeView,
+} from '../lib/priceListIntake'
 import {
   appendSites,
   ENRICHMENT_SITES_MAX,
@@ -18,7 +40,6 @@ import {
   type EnrichmentSitesMode,
   type EnrichPreviewResponse,
   type EnrichQueuedResponse,
-  type FilePriceList,
   type FilePriceListSources,
   type FilePriceListsResponse,
   type PriceListSourcesUpdate,
@@ -63,7 +84,7 @@ function isActiveStatus(status: string | undefined): boolean {
   return status === 'queued' || status === 'running'
 }
 
-function listIsDownloading(list: FilePriceList): boolean {
+function listIsDownloading(list: FilePriceListRow): boolean {
   return list.queued + list.running > 0 || isActiveStatus(list.batch?.status)
 }
 
@@ -105,15 +126,31 @@ export function PriceListsFiles() {
   const canSeeBatches = canEdit || can(user, 'products.view')
   const canSeeB2b = can(user, 'b2b_accounts.view')
   const canReview = canAny(user, ['products.review', 'price_lists.import'])
+  // wybór importera cennika: tylko administrator (PATCH /price-lists/{id}/importer: price_lists.import + admin.access)
+  const isAdmin = canEdit && can(user, 'admin.access')
 
-  const [lists, setLists] = useState<FilePriceList[]>([])
+  const [lists, setLists] = useState<FilePriceListRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState<Record<number, boolean>>({})
   const [batches, setBatches] = useState<EnrichmentBatch[]>([])
-  const [reenrichList, setReenrichList] = useState<FilePriceList | null>(null)
+  const [reenrichList, setReenrichList] = useState<FilePriceListRow | null>(null)
+
+  /** Formularz cennika nowym sposobem: 'new' = dodawanie, IntakeView = ustawienia istniejącego. */
+  const [intakeForm, setIntakeForm] = useState<'new' | IntakeView | null>(null)
+  const [previewFor, setPreviewFor] = useState<{ intake: IntakeView; file: FileView } | null>(null)
+  const [pinsFor, setPinsFor] = useState<IntakeView | null>(null)
+  const [filesOpen, setFilesOpen] = useState<Record<number, boolean>>({})
+  const [uploadingId, setUploadingId] = useState<number | null>(null)
+  const [importerBusyId, setImporterBusyId] = useState<number | null>(null)
+  const [importers, setImporters] = useState<ImporterOption[] | null>(null)
+  const importersRequested = useRef(false)
+  /** Cennik wskazany po zapisie albo przy „cennik już istnieje” — podświetlony wiersz. */
+  const [highlightId, setHighlightId] = useState<number | null>(null)
+  const [catalogManufacturers, setCatalogManufacturers] = useState<string[]>([])
+  const catalogManufacturersRequested = useRef(false)
 
   const [searchSites, setSearchSites] = useState<SearchSiteOption[] | null>(null)
   const [searchSitesErr, setSearchSitesErr] = useState('')
@@ -204,7 +241,7 @@ export function PriceListsFiles() {
       )
   }, [lists, query])
 
-  function onSaved(list: FilePriceList, res: PriceListSourcesUpdateResponse) {
+  function onSaved(list: FilePriceListRow, res: PriceListSourcesUpdateResponse) {
     const sitesChanged =
       (res.enrichment_sites ?? []).map(siteKey).join('\n') !== list.enrichment_sites.map(siteKey).join('\n') ||
       res.enrichment_sites_mode !== list.enrichment_sites_mode
@@ -218,7 +255,7 @@ export function PriceListsFiles() {
     void load().catch((ex) => setErr(ex instanceof Error ? ex.message : 'Błąd odświeżania listy'))
   }
 
-  function onQueued(list: FilePriceList, batch: EnrichmentBatch, count: number, models: number | null) {
+  function onQueued(list: FilePriceListRow, batch: EnrichmentBatch, count: number, models: number | null) {
     setReenrichList(null)
     setErr('')
     // liczba modeli tylko, gdy przyszła i różni się od liczby kart (marka z grupowaniem) — inaczej nic nie wnosi
@@ -237,6 +274,144 @@ export function PriceListsFiles() {
     void load().catch(() => {})
   }
 
+  const loadImporters = useCallback(() => {
+    if (importersRequested.current) return
+    importersRequested.current = true
+    fetchImporters()
+      .then((res) => setImporters(Array.isArray(res.importers) ? res.importers : []))
+      .catch((ex) => {
+        importersRequested.current = false
+        setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać listy importerów')
+      })
+  }, [])
+
+  const hasIntake = lists.some((l) => intakeOf(l) !== null)
+  useEffect(() => {
+    if (isAdmin && hasIntake) loadImporters()
+  }, [isAdmin, hasIntake, loadImporters])
+
+  const canSeeCatalog = can(user, 'products.view')
+  function openIntakeForm(value: 'new' | IntakeView) {
+    setMsg('')
+    setErr('')
+    loadSearchSites()
+    if (canSeeCatalog && !catalogManufacturersRequested.current) {
+      catalogManufacturersRequested.current = true
+      api<{ data: string[] }>('/products/manufacturers')
+        .then((res) => setCatalogManufacturers(Array.isArray(res.data) ? res.data : []))
+        .catch(() => {
+          /* podpowiedzi z katalogu są dodatkiem — zostają cenniki i lista stron */
+        })
+    }
+    setIntakeForm(value)
+  }
+
+  /** Podpowiedzi producenta: cenniki z tej zakładki, producenci z listy „Strony wyszukiwarka” i z katalogu kart. */
+  const manufacturerOptions = useMemo(() => {
+    const seen = new Map<string, string>()
+    const add = (name: string) => {
+      const t = name.trim()
+      if (t !== '' && !seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t)
+    }
+    lists.forEach((l) => add(l.manufacturer))
+    ;(searchSites ?? []).forEach((s) => s.manufacturers.forEach(add))
+    catalogManufacturers.forEach(add)
+
+    return [...seen.values()].sort((a, b) => a.localeCompare(b, 'pl', { sensitivity: 'base' }))
+  }, [lists, searchSites, catalogManufacturers])
+
+  function onIntakeSaved(intake: IntakeView, kind: 'created' | 'updated' | 'switched') {
+    const label = `„${intake.manufacturer} / ${intake.version}”`
+    setIntakeForm(null)
+    setErr('')
+    setQuery('')
+    setHighlightId(intake.id)
+    setMsg(
+      kind === 'updated'
+        ? `Zapisano ustawienia cennika ${label}.`
+        : `${kind === 'created' ? `Założono cennik ${label}.` : `Cennik ${label} przyjmuje się teraz nowym sposobem.`} ` +
+            'Teraz dodaj plik cennika — przycisk „Dodaj plik” przy cenniku. Importer przygotuje programista.',
+    )
+    void load().catch((ex) => setErr(ex instanceof Error ? ex.message : 'Błąd odświeżania listy'))
+  }
+
+  function onShowList(priceListId: number) {
+    const list = lists.find((l) => l.id === priceListId)
+    setIntakeForm(null)
+    setQuery(list?.manufacturer ?? '')
+    setHighlightId(priceListId)
+  }
+
+  async function uploadFile(list: FilePriceListRow, file: File) {
+    setMsg('')
+    setErr('')
+    if (file.size > INTAKE_FILE_MAX_BYTES) {
+      setErr(`Plik „${file.name}” ma ${formatBytes(file.size)} — najwyżej 100 MB.`)
+      return
+    }
+    setUploadingId(list.id)
+    try {
+      const res = await uploadPriceListFile(list.id, file)
+      const same = res.duplicate === true
+      const status = res.intake?.status
+      const next =
+        status === 'awaiting_importer'
+          ? ' Programista przygotuje importer — wtedy stan zmieni się na „Gotowy do importu”.'
+          : status === 'importer_missing'
+            ? ' Importer przypisany do cennika nie jest wdrożony — daj znać programiście.'
+            : status === 'ready'
+              ? ' Otwórz „Podgląd importu”, sprawdź liczby i zaimportuj.'
+              : ''
+      setMsg(
+        (same
+          ? `Ten plik jest już dodany („${res.file.original_name}”, cennik „${list.manufacturer}”) — nic się nie zmieniło.`
+          : `Dodano plik „${res.file.original_name}” do cennika „${list.manufacturer} / ${list.version}”.`) + next,
+      )
+      setHighlightId(list.id)
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się dodać pliku')
+    } finally {
+      setUploadingId(null)
+    }
+  }
+
+  async function changeImporter(list: FilePriceListRow, key: string) {
+    setMsg('')
+    setErr('')
+    setImporterBusyId(list.id)
+    try {
+      await setImporter(list.id, key === '' ? null : key)
+      const label = importers?.find((i) => i.key === key)?.label
+      setMsg(
+        key === ''
+          ? `Odpięto importer od cennika „${list.manufacturer}”.`
+          : `Cennik „${list.manufacturer}” używa importera „${label ?? key}”.`,
+      )
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zmienić importera')
+    } finally {
+      setImporterBusyId(null)
+    }
+  }
+
+  function onImported(intake: IntakeView, result: IntakeImportResult, describe: boolean) {
+    setPreviewFor(null)
+    setErr('')
+    const notes = countOf(result.errors)
+    setMsg(
+      `Zaimportowano „${intake.manufacturer} / ${intake.version}”: nowe karty ${n(result.created ?? 0)}, ` +
+        `zaktualizowane ${n(result.updated ?? 0)}, pominięte ${n(result.skipped ?? 0)}, zmiany cen ${n(countOf(result.price_changes))}` +
+        (notes > 0 ? `, uwagi ${n(notes)}` : '') +
+        '. Importer przypisuje kartom strony w tle' +
+        (describe ? ' — potem ruszy pobieranie opisów, każda karta tylko ze swojej strony' : '') +
+        '. Karty bez strony pokażą się przy cenniku i w „Do przeglądu”.',
+    )
+    setHighlightId(intake.id)
+    void load().catch(() => {})
+  }
+
   return (
     <div>
       <PriceListsTabs />
@@ -246,15 +421,27 @@ export function PriceListsFiles() {
           <p className="max-w-3xl text-xs text-slate-500">
             Przy każdym cenniku z pliku możesz wskazać strony, z których program pobiera opisy kart — w kolejności
             ważności — albo wybrać je z listy Administracja → „Strony wyszukiwarka”. {PRICE_LIST_SITES_PRIORITY_NOTE}{' '}
-            Karty z opisem z B2B nie są tu ruszane.
+            Karty z opisem z B2B nie są tu ruszane. Nowy cennik dodajesz przyciskiem „+ Dodaj cennik z pliku”: cennik →
+            plik → importer, który przypisze każdej karcie stronę wyrobu.
           </p>
         </div>
-        <input
-          className="w-64 rounded border border-slate-300 px-2 py-1.5 text-xs"
-          placeholder="Szukaj producenta lub wersji"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            className="w-64 rounded border border-slate-300 px-2 py-1.5 text-xs"
+            placeholder="Szukaj producenta lub wersji"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {canEdit && (
+            <button
+              type="button"
+              className="shrink-0 rounded bg-blue-600 px-3 py-2 text-xs text-white hover:bg-blue-700"
+              onClick={() => openIntakeForm('new')}
+            >
+              + Dodaj cennik z pliku
+            </button>
+          )}
+        </div>
       </div>
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
@@ -265,7 +452,10 @@ export function PriceListsFiles() {
       <div className="rounded-xl bg-white p-4 shadow-sm">
         {loading && <p className="text-sm text-slate-500">Ładowanie…</p>}
         {!loading && lists.length === 0 && !err && (
-          <p className="text-sm text-slate-500">Brak cenników z plików z kartami w katalogu.</p>
+          <p className="text-sm text-slate-500">
+            Brak cenników z plików z kartami w katalogu.
+            {canEdit && ' Nowy cennik dodasz przyciskiem „+ Dodaj cennik z pliku”.'}
+          </p>
         )}
         {!loading && lists.length > 0 && (
           <div className="overflow-x-auto">
@@ -285,9 +475,11 @@ export function PriceListsFiles() {
               <tbody>
                 {visible.map((list) => {
                   const isOpen = Boolean(open[list.id])
+                  const intake = intakeOf(list)
+                  const rowTone = list.id === highlightId ? 'bg-amber-50' : isOpen ? 'bg-blue-50/40' : ''
                   return (
                     <Fragment key={list.id}>
-                      <tr className={`border-b align-top ${isOpen ? 'bg-blue-50/40' : ''}`}>
+                      <tr className={`align-top ${intake ? '' : 'border-b'} ${rowTone}`}>
                         <td className="p-2">
                           <Link
                             to={`/products?price_list=${list.id}&price_list_file=1&price_list_label=${encodeURIComponent(list.manufacturer)}`}
@@ -358,6 +550,32 @@ export function PriceListsFiles() {
                           </button>
                         </td>
                       </tr>
+                      {intake && (
+                        <tr className={`border-b ${rowTone}`}>
+                          <td colSpan={8} className="px-2 pb-2">
+                            <IntakeBar
+                              list={list}
+                              intake={intake}
+                              canEdit={canEdit}
+                              isAdmin={isAdmin}
+                              importers={importers}
+                              uploading={uploadingId === list.id}
+                              importerBusy={importerBusyId === list.id}
+                              filesOpen={Boolean(filesOpen[list.id])}
+                              onUpload={(file) => void uploadFile(list, file)}
+                              onImporterChange={(key) => void changeImporter(list, key)}
+                              onPreview={(file) => {
+                                setMsg('')
+                                setErr('')
+                                setPreviewFor({ intake, file })
+                              }}
+                              onPins={() => setPinsFor(intake)}
+                              onSettings={() => openIntakeForm(intake)}
+                              onToggleFiles={() => setFilesOpen((prev) => ({ ...prev, [list.id]: !prev[list.id] }))}
+                            />
+                          </td>
+                        </tr>
+                      )}
                       {isOpen && (
                         <tr className="border-b bg-slate-50/60">
                           <td colSpan={8} className="p-3">
@@ -370,6 +588,7 @@ export function PriceListsFiles() {
                               searchSites={searchSites}
                               searchSitesErr={searchSitesErr}
                               onNeedSearchSites={loadSearchSites}
+                              onOpenSettings={intake && canEdit ? () => openIntakeForm(intake) : null}
                               onSaved={(res) => onSaved(list, res)}
                               onReenrich={() => {
                                 setMsg('')
@@ -395,6 +614,36 @@ export function PriceListsFiles() {
         )}
       </div>
 
+      {intakeForm !== null && (
+        <PriceListIntakeForm
+          // inny cennik = nowy formularz (stan pól z useState)
+          key={intakeForm === 'new' ? 'new' : intakeForm.id}
+          initial={intakeForm === 'new' ? null : intakeForm}
+          manufacturerOptions={manufacturerOptions}
+          searchSites={searchSites}
+          searchSitesErr={searchSitesErr}
+          onNeedSearchSites={loadSearchSites}
+          findList={(id) => lists.find((l) => l.id === id)}
+          onShowList={onShowList}
+          onSwitchExisting={(intake) => openIntakeForm(intake)}
+          canAssignOtherBrands={canManageSearchSites}
+          onSaved={onIntakeSaved}
+          onClose={() => setIntakeForm(null)}
+        />
+      )}
+
+      {previewFor && (
+        <PriceListImportPreviewModal
+          intake={previewFor.intake}
+          file={previewFor.file}
+          onClose={() => setPreviewFor(null)}
+          onImported={(result, describe) => onImported(previewFor.intake, result, describe)}
+          onImportFailed={() => void load().catch(() => {})}
+        />
+      )}
+
+      {pinsFor && <PriceListSourcePinsModal intake={pinsFor} canReview={canReview} onClose={() => setPinsFor(null)} />}
+
       {reenrichList && (
         <ReenrichModal
           list={reenrichList}
@@ -402,6 +651,296 @@ export function PriceListsFiles() {
           onQueued={(batch, count, models) => onQueued(reenrichList, batch, count, models)}
         />
       )}
+    </div>
+  )
+}
+
+const INTAKE_PREVIEW_STATUSES = new Set(['ready', 'imported', 'failed'])
+
+type IntakeBarProps = {
+  list: FilePriceListRow
+  intake: IntakeView
+  canEdit: boolean
+  isAdmin: boolean
+  importers: ImporterOption[] | null
+  uploading: boolean
+  importerBusy: boolean
+  filesOpen: boolean
+  onUpload: (file: File) => void
+  onImporterChange: (key: string) => void
+  onPreview: (file: FileView) => void
+  onPins: () => void
+  onSettings: () => void
+  onToggleFiles: () => void
+}
+
+/**
+ * Pasek cennika nowym sposobem (cennik → plik → importer): stan przyjęcia, importer (administrator wybiera), ostatni
+ * plik, strony kart z mapy importera i akcje — „Dodaj plik”, „Podgląd importu”, „Karty bez strony”, „Ustawienia”, pliki.
+ */
+function IntakeBar({
+  list,
+  intake,
+  canEdit,
+  isAdmin,
+  importers,
+  uploading,
+  importerBusy,
+  filesOpen,
+  onUpload,
+  onImporterChange,
+  onPreview,
+  onPins,
+  onSettings,
+  onToggleFiles,
+}: IntakeBarProps) {
+  const fileInput = useRef<HTMLInputElement>(null)
+  const latest = intake.latest_file
+  const status = intake.status
+  const statusText =
+    status === 'failed' ? `Błąd: ${latest?.error?.trim() || 'import się nie udał'}` : INTAKE_STATUS_LABEL[status] ?? status
+  const canPreview = INTAKE_PREVIEW_STATUSES.has(status) && latest !== null
+  const pins = intake.pins ?? { pinned: 0, unresolved: 0, total: 0 }
+  const btn =
+    'whitespace-nowrap rounded-full border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50'
+  // „Dodaj plik” wypełniony, gdy to następny krok (cennik czeka na plik)
+  const primaryBtn =
+    'whitespace-nowrap rounded-full bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
+
+  // importery pasujące do producenta cennika na górze listy
+  const importerOptions = useMemo(() => {
+    const all = importers ?? []
+    const fits = (o: ImporterOption) => o.manufacturer_keys.includes(intake.manufacturer_key)
+    return [...all.filter(fits), ...all.filter((o) => !fits(o))]
+  }, [importers, intake.manufacturer_key])
+  const currentMissing =
+    intake.importer_key !== null && intake.importer_key !== '' && importers !== null
+      ? !importers.some((o) => o.key === intake.importer_key)
+      : false
+
+  return (
+    <div className="rounded border border-slate-200 bg-white px-2.5 py-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span
+          className={`inline-block max-w-md truncate rounded px-1.5 py-0.5 font-semibold ${INTAKE_STATUS_TONE[status] ?? ''}`}
+          title={statusText}
+        >
+          {statusText}
+        </span>
+
+        <span className="text-slate-600">
+          Importer:{' '}
+          {isAdmin ? (
+            <select
+              className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-800"
+              value={intake.importer_key ?? ''}
+              disabled={importerBusy || importers === null}
+              onChange={(e) => onImporterChange(e.target.value)}
+              aria-label={`Importer cennika ${list.manufacturer}`}
+            >
+              <option value="">— brak —</option>
+              {currentMissing && intake.importer_key && (
+                <option value={intake.importer_key}>{intake.importer_key} (nie jest wdrożony)</option>
+              )}
+              {importerOptions.map((o) => (
+                <option key={o.key} value={o.key}>
+                  {o.label} (wersja {o.version})
+                  {o.manufacturer_keys.includes(intake.manufacturer_key) ? '' : ' — inny producent'}
+                </option>
+              ))}
+            </select>
+          ) : intake.importer_label || intake.importer_key ? (
+            <b className="text-slate-800">{intake.importer_label ?? intake.importer_key}</b>
+          ) : (
+            <span className="text-slate-400">jeszcze nie ma</span>
+          )}
+        </span>
+
+        <span className="text-slate-600">
+          Plik:{' '}
+          {latest ? (
+            <>
+              <b className="text-slate-800">{latest.original_name}</b>
+              {latest.created_at && <span className="text-slate-500"> · {formatDateTime(latest.created_at)}</span>}
+            </>
+          ) : (
+            <span className="text-slate-400">nie dodano</span>
+          )}
+        </span>
+
+        {pins.total > 0 && (
+          <span className="text-slate-600" title="Karty, którym importer przypisał stronę wyrobu">
+            Karty ze stroną: <b className="tabular-nums text-emerald-700">{n(pins.pinned)}</b> z {n(pins.total)}
+          </span>
+        )}
+        {pins.unresolved > 0 && (
+          <button
+            type="button"
+            className="whitespace-nowrap rounded-full border border-amber-400 px-3 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50"
+            onClick={onPins}
+            title="Karty, którym importer nie przypisał strony — nie dostaną opisu z internetu, adres wskazuje się ręcznie"
+          >
+            Karty bez strony ({n(pins.unresolved)})
+          </button>
+        )}
+        {(pins.human_url ?? 0) > 0 && (
+          <span className="text-slate-600" title="Karty z adresem wskazanym przez człowieka — wygrywa z mapą importera">
+            adres wskazany ręcznie: <b className="tabular-nums">{n(pins.human_url ?? 0)}</b>
+          </span>
+        )}
+        {pins.unresolved === 0 && pins.total > 0 && (
+          <button type="button" className="text-blue-700 underline hover:text-blue-900" onClick={onPins}>
+            Strony kart
+          </button>
+        )}
+
+        <span className="ml-auto flex flex-wrap gap-1.5">
+          {canEdit && (
+            <>
+              <input
+                ref={fileInput}
+                type="file"
+                accept={INTAKE_FILE_ACCEPT}
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (file) onUpload(file)
+                }}
+              />
+              <button
+                type="button"
+                className={status === 'awaiting_file' ? primaryBtn : btn}
+                disabled={uploading}
+                onClick={() => fileInput.current?.click()}
+                title="Plik cennika: Excel (xlsx, xls), CSV albo PDF, najwyżej 100 MB"
+              >
+                {uploading ? 'Wysyłam plik…' : 'Dodaj plik'}
+              </button>
+              <button
+                type="button"
+                className={btn}
+                disabled={!canPreview}
+                onClick={() => latest && onPreview(latest)}
+                title={
+                  canPreview
+                    ? 'Co import zmieni — bez zapisu; „Importuj” jest w oknie podglądu'
+                    : status === 'awaiting_file'
+                      ? 'Najpierw dodaj plik'
+                      : 'Podgląd będzie dostępny, gdy cennik ma wdrożony importer'
+                }
+              >
+                Podgląd importu
+              </button>
+              <button type="button" className={btn} onClick={onSettings}>
+                Ustawienia
+              </button>
+            </>
+          )}
+          <button type="button" className={btn} onClick={onToggleFiles} aria-expanded={filesOpen}>
+            Pliki {filesOpen ? '▴' : '▾'}
+          </button>
+        </span>
+      </div>
+
+      {intake.importer_notes && intake.importer_notes.trim() !== '' && (
+        <p className="mt-1 truncate text-slate-500" title={intake.importer_notes}>
+          Uwagi dla programisty: {intake.importer_notes}
+        </p>
+      )}
+
+      {filesOpen && (
+        <IntakeFiles
+          priceListId={list.id}
+          reloadKey={`${latest?.id ?? 0}:${latest?.status ?? ''}:${intake.status}`}
+        />
+      )}
+    </div>
+  )
+}
+
+/** Pliki cennika nowym sposobem (najnowszy pierwszy): nazwa, data, kto, stan, wersja importera, pobranie. */
+function IntakeFiles({ priceListId, reloadKey }: { priceListId: number; reloadKey: string }) {
+  const [files, setFiles] = useState<FileView[] | null>(null)
+  const [err, setErr] = useState('')
+  const [downloadErr, setDownloadErr] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setErr('')
+    fetchPriceListFiles(priceListId)
+      .then((res) => {
+        if (!cancelled) setFiles(Array.isArray(res.files) ? res.files : [])
+      })
+      .catch((ex) => {
+        if (!cancelled) setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać plików')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [priceListId, reloadKey])
+
+  if (err) return <p className="mt-2 text-red-700">{err}</p>
+  if (files === null) return <p className="mt-2 text-slate-500">Ładowanie plików…</p>
+  if (files.length === 0) return <p className="mt-2 text-slate-500">Cennik nie ma jeszcze plików.</p>
+
+  return (
+    <div className="mt-2">
+      <table className="w-full text-left text-xs">
+        <thead>
+          <tr className="border-b bg-slate-50 text-slate-700">
+            <th className="p-1.5 font-semibold">Plik</th>
+            <th className="p-1.5 font-semibold">Dodany</th>
+            <th className="p-1.5 text-right font-semibold">Rozmiar</th>
+            <th className="p-1.5 font-semibold">Stan</th>
+            <th className="p-1.5 font-semibold">Zaimportowany</th>
+            <th className="p-1.5" />
+          </tr>
+        </thead>
+        <tbody>
+          {files.map((f) => (
+            <tr key={f.id} className={`border-b align-top ${f.status === 'superseded' ? 'text-slate-400' : ''}`}>
+              <td className="p-1.5">{f.original_name}</td>
+              <td className="p-1.5">
+                {f.created_at ? formatDateTime(f.created_at) : '—'}
+                {f.uploaded_by_name && <span className="block text-slate-500">{f.uploaded_by_name}</span>}
+              </td>
+              <td className="p-1.5 text-right tabular-nums">{formatBytes(f.size)}</td>
+              <td className="p-1.5">
+                <span className={f.status === 'failed' ? 'text-red-700' : f.status === 'imported' ? 'text-emerald-700' : ''}>
+                  {FILE_STATUS_LABEL[f.status] ?? f.status}
+                </span>
+                {f.error && <span className="block text-red-700">{f.error}</span>}
+              </td>
+              <td className="p-1.5">
+                {f.imported_at ? formatDateTime(f.imported_at) : '—'}
+                {f.importer_key && (
+                  <span className="block text-slate-500">
+                    importer {f.importer_key}
+                    {f.importer_version !== null ? `, wersja ${f.importer_version}` : ''}
+                  </span>
+                )}
+              </td>
+              <td className="p-1.5 text-right">
+                <button
+                  type="button"
+                  className="text-blue-700 underline hover:text-blue-900"
+                  onClick={() => {
+                    setDownloadErr('')
+                    downloadPriceListFile(priceListId, f).catch((ex) =>
+                      setDownloadErr(ex instanceof Error ? ex.message : 'Nie udało się pobrać pliku'),
+                    )
+                  }}
+                >
+                  Pobierz
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {downloadErr && <p className="mt-1 text-red-700">{downloadErr}</p>}
     </div>
   )
 }
@@ -437,7 +976,7 @@ function SourcesBar({ sources }: { sources: FilePriceListSources }) {
  * Pewność opisów cennika: karty z opisem według werdyktu tożsamości strony źródłowej, karty czekające na przegląd
  * (link do zakładki „Do przeglądu” z filtrem cennika) i karty ze zdjęciem.
  */
-function QualityCell({ list, canReview }: { list: FilePriceList; canReview: boolean }) {
+function QualityCell({ list, canReview }: { list: FilePriceListRow; canReview: boolean }) {
   const identity = list.identity
   const toReview = (
     <>
@@ -500,7 +1039,7 @@ function QualityCell({ list, canReview }: { list: FilePriceList; canReview: bool
   )
 }
 
-function DownloadState({ list }: { list: FilePriceList }) {
+function DownloadState({ list }: { list: FilePriceListRow }) {
   const parts: ReactNode[] = []
   const batch = list.batch
   if (batch && isActiveStatus(batch.status)) {
@@ -539,7 +1078,7 @@ function DownloadState({ list }: { list: FilePriceList }) {
 }
 
 type SourcesPanelProps = {
-  list: FilePriceList
+  list: FilePriceListRow
   canEdit: boolean
   canManageSearchSites: boolean
   canSeeB2b: boolean
@@ -548,6 +1087,8 @@ type SourcesPanelProps = {
   onNeedSearchSites: () => void
   onSaved: (res: PriceListSourcesUpdateResponse) => void
   onReenrich: () => void
+  /** Cennik nowym sposobem: strony i tryb zmienia się w formularzu „Ustawienia” (null = brak uprawnień). */
+  onOpenSettings: (() => void) | null
 }
 
 function SourcesPanel({
@@ -560,6 +1101,7 @@ function SourcesPanel({
   onNeedSearchSites,
   onSaved,
   onReenrich,
+  onOpenSettings,
 }: SourcesPanelProps) {
   const [draft, setDraft] = useState(() => list.enrichment_sites.join('\n'))
   const [mode, setMode] = useState<EnrichmentSitesMode>(list.enrichment_sites_mode)
@@ -614,7 +1156,7 @@ function SourcesPanel({
           </p>
         )}
 
-        {canEdit ? (
+        {canEdit && !intakeOf(list) ? (
           <>
             <label className="block">
               <span className="font-medium text-slate-700">Strony cennika</span>{' '}
@@ -754,10 +1296,43 @@ function SourcesPanel({
                     </li>
                   ))}
                 </ol>
-                <p className="text-slate-600">Tryb: {MODE_LABEL[list.enrichment_sites_mode]}</p>
+                <p className="text-slate-600">
+                  Tryb: {intakeOf(list) ? MODE_SHORT[list.enrichment_sites_mode] : MODE_LABEL[list.enrichment_sites_mode]}
+                </p>
               </>
             )}
-            <p className="text-slate-400">Zmiany zapisuje osoba z uprawnieniem do importu cenników.</p>
+            {intakeOf(list) ? (
+              <>
+                <p className="text-slate-500">
+                  Ten cennik przyjmuje się nowym sposobem — strony dostawców i tryb zmieniasz w „Ustawienia” przy
+                  cenniku.
+                </p>
+                {canEdit && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {onOpenSettings && (
+                      <button
+                        type="button"
+                        className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs hover:bg-slate-50"
+                        onClick={onOpenSettings}
+                      >
+                        Ustawienia
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="rounded-full border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                      disabled={list.cards === 0 || listIsDownloading(list)}
+                      title={listIsDownloading(list) ? 'Pobieranie opisów tego cennika jeszcze trwa' : undefined}
+                      onClick={onReenrich}
+                    >
+                      Pobierz opisy ponownie…
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-slate-400">Zmiany zapisuje osoba z uprawnieniem do importu cenników.</p>
+            )}
           </div>
         )}
       </div>
@@ -845,7 +1420,7 @@ function SourcesPanel({
 type ProductOption = { id: number; sku: string; name: string }
 
 /** „Sprawdź na karcie”: które zapisane strony cennika mają w lokalnym indeksie stronę wybranej karty. */
-function SiteCheck({ list, dirty }: { list: FilePriceList; dirty: boolean }) {
+function SiteCheck({ list, dirty }: { list: FilePriceListRow; dirty: boolean }) {
   const [q, setQ] = useState('')
   const [options, setOptions] = useState<ProductOption[]>([])
   const [searching, setSearching] = useState(false)
@@ -1015,162 +1590,8 @@ function SiteCheck({ list, dirty }: { list: FilePriceList; dirty: boolean }) {
   )
 }
 
-type PickerProps = {
-  manufacturer: string
-  currentText: string
-  sites: SearchSiteOption[] | null
-  error: string
-  onRetry: () => void
-  onAdd: (hosts: string[]) => void
-  onClose: () => void
-}
-
-/** Okno wyboru stron z listy Administracja → „Strony wyszukiwarka”; strony producenta cennika na górze. */
-function SearchSitesPicker({ manufacturer, currentText, sites, error, onRetry, onAdd, onClose }: PickerProps) {
-  const [filter, setFilter] = useState('')
-  const [selected, setSelected] = useState<Record<string, boolean>>({})
-  const [anchor, setAnchor] = useState<number | null>(null)
-
-  const present = useMemo(() => new Set(parseSiteLines(currentText).map(siteKey)), [currentText])
-  const ownManufacturer = manufacturer.trim().toLowerCase()
-
-  const rows = useMemo(() => {
-    if (!sites) return []
-    const q = filter.trim().toLowerCase()
-    const matches = sites.filter(
-      (s) => q === '' || s.host.toLowerCase().includes(q) || s.manufacturers.some((m) => m.toLowerCase().includes(q)),
-    )
-    const own = (s: SearchSiteOption) => s.manufacturers.some((m) => m.trim().toLowerCase() === ownManufacturer)
-
-    return [...matches.filter(own), ...matches.filter((s) => !own(s))]
-  }, [sites, filter, ownManufacturer])
-
-  const orderedHosts = useMemo(() => rows.map((s) => s.host), [rows])
-  const chosen = useMemo(
-    () => (sites ?? []).map((s) => s.host).filter((h) => selected[h] && !present.has(siteKey(h))),
-    [sites, selected, present],
-  )
-  const room = Math.max(0, ENRICHMENT_SITES_MAX - present.size)
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="search-sites-picker-title"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-xl bg-white p-4 text-xs shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <p id="search-sites-picker-title" className="text-sm font-semibold text-slate-800">
-          Wybierz strony z listy „Strony wyszukiwarka” — {manufacturer}
-        </p>
-        <p className="mt-1 text-slate-500">
-          Zaznaczone strony dopiszą się na koniec pola (bez powtórzeń); kolejność możesz potem zmienić w polu. Shift +
-          kliknięcie zaznacza zakres. Strony przypisane do producenta {manufacturer} są na górze.
-        </p>
-        <input
-          className="mt-2 w-full rounded border border-slate-300 px-2 py-1.5"
-          placeholder="Filtruj po domenie albo producencie"
-          value={filter}
-          onChange={(e) => {
-            setFilter(e.target.value)
-            setAnchor(null)
-          }}
-          autoFocus
-        />
-        <div className="mt-2 min-h-[10rem] flex-1 overflow-auto rounded border border-slate-200">
-          {sites === null && !error && <p className="p-3 text-slate-500">Ładowanie listy stron…</p>}
-          {error && (
-            <p className="p-3 text-red-700">
-              {error}{' '}
-              <button type="button" className="underline" onClick={onRetry}>
-                Spróbuj ponownie
-              </button>
-            </p>
-          )}
-          {sites !== null && (
-            <table className="w-full text-left">
-              <thead className="sticky top-0 bg-slate-50">
-                <tr className="border-b text-slate-700">
-                  <th className="w-8 p-1.5" />
-                  <th className="p-1.5 font-semibold">Domena</th>
-                  <th className="p-1.5 text-right font-semibold">Stron w indeksie</th>
-                  <th className="p-1.5 font-semibold">Producent</th>
-                  <th className="p-1.5 text-right font-semibold">Ranga</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((s, index) => {
-                  const already = present.has(siteKey(s.host))
-                  return (
-                    <tr key={s.host} className={`border-b ${already ? 'text-slate-400' : 'hover:bg-blue-50/50'}`}>
-                      <td className="select-none p-1.5">
-                        <input
-                          type="checkbox"
-                          checked={already || Boolean(selected[s.host])}
-                          disabled={already}
-                          aria-label={`Zaznacz ${s.host}`}
-                          title={already ? 'Już w polu stron cennika' : 'Shift + kliknięcie zaznacza wszystkie od ostatnio klikniętej'}
-                          onChange={() => {
-                            /* obsługa w onClick — potrzebny shiftKey */
-                          }}
-                          onClick={(e) => {
-                            const next = applyCheckboxRange(orderedHosts, selected, anchor, index, e.shiftKey)
-                            setSelected(next.selected)
-                            setAnchor(next.anchorIndex)
-                          }}
-                        />
-                      </td>
-                      <td className="p-1.5">
-                        {s.host}
-                        {already && <span className="ml-1 text-[10px]">(już na liście)</span>}
-                      </td>
-                      <td className="p-1.5 text-right tabular-nums">{n(s.links)}</td>
-                      <td className="p-1.5">{s.manufacturers.length > 0 ? s.manufacturers.join(', ') : '—'}</td>
-                      <td className="p-1.5 text-right tabular-nums">{s.priority ?? '—'}</td>
-                    </tr>
-                  )
-                })}
-                {rows.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="p-3 text-slate-500">
-                      Brak stron pasujących do filtra.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
-        {chosen.length > room && (
-          <p className="mt-2 text-amber-800">
-            Zaznaczono {chosen.length}, a w polu zostało miejsca na {room} (najwyżej {ENRICHMENT_SITES_MAX} stron) —
-            przed zapisem trzeba będzie usunąć nadmiar.
-          </p>
-        )}
-        <div className="mt-3 flex justify-end gap-2">
-          <button type="button" className="rounded border border-slate-300 px-3 py-1.5" onClick={onClose}>
-            Anuluj
-          </button>
-          <button
-            type="button"
-            className="rounded bg-blue-600 px-3 py-1.5 text-white disabled:opacity-50"
-            disabled={chosen.length === 0}
-            onClick={() => onAdd(chosen)}
-          >
-            Dodaj zaznaczone ({chosen.length})
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 type ReenrichProps = {
-  list: FilePriceList
+  list: FilePriceListRow
   onClose: () => void
   /** models = liczba modeli w partii z odpowiedzi (null, gdy kolejka ich nie liczy). */
   onQueued: (batch: EnrichmentBatch, count: number, models: number | null) => void

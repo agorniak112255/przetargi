@@ -49,12 +49,19 @@ class Product extends Model
 
     public const REVIEW_MANUFACTURER_MISSING = 'manufacturer_missing';
 
+    /**
+     * Cennik z importerem (price_lists.source_policy = map_only, 10.10.2026): importer nie przypiął karcie strony
+     * (product_source_pins bez url) — opisu z internetu nie zgadujemy, handlowiec wskazuje adres. Istniejący opis zostaje.
+     */
+    public const REVIEW_SOURCE_UNMAPPED = 'source_unmapped';
+
     public const REVIEW_REASONS = [
         self::REVIEW_IDENTITY_SOFT,
         self::REVIEW_IDENTITY_NONE,
         self::REVIEW_WORSE_VERSION,
         self::REVIEW_REJECTED_SOURCE,
         self::REVIEW_MANUFACTURER_MISSING,
+        self::REVIEW_SOURCE_UNMAPPED,
     ];
 
     /** Ile wierszy parametrów wolno wpisać ręcznie na jednej karcie. */

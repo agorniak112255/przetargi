@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\PriceList;
 use App\Services\Ai\AiSettingsService;
 use App\Services\AssortmentGroupService;
 use App\Services\PriceListAiAnalyzer;
 use App\Services\PriceListGoodsBrand;
 use App\Services\PriceListImportService;
 use App\Services\PriceListMetaDetector;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -70,6 +72,7 @@ class PriceListImportController extends Controller
             trim((string) ($data['manufacturer'] ?? '')),
             trim((string) ($data['version'] ?? '')),
         );
+        $this->assertLegacyImportAllowed($manufacturer);
 
         if ($isPdf && $productsList === null && $useAi) {
             if (! $this->aiSettings->isReady()) {
@@ -98,6 +101,8 @@ class PriceListImportController extends Controller
                     'file' => 'Analiza AI nieudana: '.$e->getMessage(),
                 ]);
             }
+            // producent mógł przyjść z analizy
+            $this->assertLegacyImportAllowed($manufacturer);
         }
 
         if (is_array($productsList) && $productsList !== []) {
@@ -145,6 +150,8 @@ class PriceListImportController extends Controller
                     && isset($analysis['meta']['version'])) {
                     $version = (string) $analysis['meta']['version'];
                 }
+                // producent mógł przyjść z analizy
+                $this->assertLegacyImportAllowed($manufacturer);
                 if (str_starts_with((string) ($analysis['source'] ?? ''), 'pdf')) {
                     $result = $this->importer->importFromProducts(
                         $file,
@@ -167,6 +174,9 @@ class PriceListImportController extends Controller
                     );
                     $mapping = $analysis['mapping'];
                 }
+            } catch (HttpResponseException $e) {
+                // blokada starego importu (assertLegacyImportAllowed) — nie jest błędem analizy
+                throw $e;
             } catch (Throwable $e) {
                 throw ValidationException::withMessages([
                     'file' => 'Analiza AI nieudana: '.$e->getMessage(),
@@ -438,6 +448,33 @@ class PriceListImportController extends Controller
             'ungrouped_group' => $ungrouped !== '' ? $ungrouped : null,
             'product_assignments' => $assignments,
         ];
+    }
+
+    /**
+     * Cennik przyjmowany nowym sposobem (source_policy albo importer_key, 10.10.2026) nie przyjmuje starego importu:
+     * import z mapowaniem kolumn albo z AI zapisałby karty z pominięciem importera i mapy źródeł opisu.
+     *
+     * @throws HttpResponseException 422 {message, price_list_id}
+     */
+    private function assertLegacyImportAllowed(string $manufacturer): void
+    {
+        $key = PriceList::manufacturerKey($manufacturer);
+        if ($key === '') {
+            return;
+        }
+        $list = PriceList::query()
+            ->where('manufacturer_key', $key)
+            ->where(static fn ($q) => $q->whereNotNull('source_policy')->orWhereNotNull('importer_key'))
+            ->first(['id', 'manufacturer']);
+        if ($list === null) {
+            return;
+        }
+
+        throw new HttpResponseException(response()->json([
+            'message' => 'Ten cennik przyjmuje się nowym sposobem — dodaj plik w Cenniki → Z pliku (cennik '
+                .$list->manufacturer.').',
+            'price_list_id' => (int) $list->id,
+        ], 422));
     }
 
     /**

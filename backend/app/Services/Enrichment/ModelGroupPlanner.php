@@ -8,7 +8,8 @@ use App\Models\Product;
 use App\Models\ProductDescriptionVersion;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Enrichment\PartsTable\PartsTablePin;
-use App\Services\Enrichment\PartsTable\PartsTables;
+use App\Services\Enrichment\Sources\SourcePin;
+use App\Services\Enrichment\Sources\SourcePins;
 use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
 
@@ -21,7 +22,8 @@ use InvalidArgumentException;
  * bez klucza. Klucz i lider zamrażają się w pozycjach partii (model_key, model_leader_id) — stąd czytają je
  * contextFor/membersOf/nextLeader, nie z ponownego liczenia (nazwa karty mogła się zmienić w trakcie).
  * Karta przypięta do wiersza tabeli części (PartsTables, 09.10.2026) ma klucz strony `marka|page:slug` zamiast klucza
- * z nazwy — model to strona producenta, z której pochodzi opis.
+ * z nazwy — model to strona producenta, z której pochodzi opis; karta z mapy importera cennika (10.10.2026) — klucz
+ * `map:sha1(adres)` (SourcePin::groupKey). Oba tylko przy profilu z grupowaniem modeli.
  */
 final class ModelGroupPlanner
 {
@@ -59,10 +61,11 @@ final class ModelGroupPlanner
                 $key = $this->keys->for($product);
                 // Karta przypięta do wiersza tabeli części (09.10.2026, Coba): model = strona z tabeli — karty jednej
                 // strony idą razem mimo różnych rdzeni nazw z cennika, ten sam rdzeń na dwóch stronach to dwa modele.
-                // Karta nierozwiązana (bez przypięcia) — klucz z nazwy jak dotąd.
+                // Karta nierozwiązana (bez przypięcia) — klucz z nazwy jak dotąd. Mapa importera cennika: model = adres z mapy.
                 $pin = $this->pinFor($product);
                 if ($pin !== null) {
-                    $byKey[$pin->brandKey.'|page:'.$pin->pageKey][] = $this->entry($product, $hard, $key?->stem ?? (string) ($pin->pageTitle ?? $pin->pageKey));
+                    $fallbackStem = $pin instanceof PartsTablePin ? $pin->pageKey : $pin->url();
+                    $byKey[$pin->groupKey()][] = $this->entry($product, $hard, $key?->stem ?? (string) ($pin->title() ?? $fallbackStem));
 
                     continue;
                 }
@@ -270,16 +273,16 @@ final class ModelGroupPlanner
     }
 
     /**
-     * Przypięcie karty do wiersza tabeli części (PartsTables) — tylko dla marki z grupowaniem modeli; null = marka bez
-     * grupowania albo bez tabeli, adres ręczny, karta nierozwiązana. Przez kontener — konstruktor bez zmian.
+     * Przypięcie karty (SourcePins: tabela części albo mapa importera cennika) — tylko dla marki z grupowaniem modeli;
+     * null = marka bez grupowania, adres ręczny, karta nierozwiązana. Przez kontener — konstruktor bez zmian.
      */
-    private function pinFor(Product $product): ?PartsTablePin
+    private function pinFor(Product $product): ?SourcePin
     {
         if ($this->profiles->for($product)?->modelGroup === null) {
             return null;
         }
 
-        return app(PartsTables::class)->pinFor($product)?->pin;
+        return app(SourcePins::class)->pinFor($product);
     }
 
     /**

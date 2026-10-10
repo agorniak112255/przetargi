@@ -21,6 +21,13 @@ class ManufacturerSite extends Model
     ];
 
     /**
+     * Ranga źródła wpisu: człowiek (manual) > config > wykryte automatem (discovered). Zapis źródłem o niższej randze
+     * nie nadpisuje wiersza o wyższej — wykrywanie przy imporcie marki (RegisterManufacturerCatalogJob) zamieniało
+     * dotąd ręczne przypisanie w „discovered” i domena wypadała z assignedDomainsFor (10.10.2026).
+     */
+    public const RANK = ['discovered' => 1, 'config' => 2, 'manual' => 3];
+
+    /**
      * @param  list<string>  $hosts
      */
     public static function remember(string $brandKey, string $manufacturer, array $hosts, string $source): void
@@ -33,6 +40,10 @@ class ManufacturerSite extends Model
         foreach ($hosts as $host) {
             $host = self::normalizeHost($host);
             if ($host === '') {
+                continue;
+            }
+            $existing = self::query()->where('brand_key', $brandKey)->where('host', $host)->value('source');
+            if ($existing !== null && (self::RANK[(string) $existing] ?? 0) > (self::RANK[$source] ?? 0)) {
                 continue;
             }
             self::query()->updateOrCreate(

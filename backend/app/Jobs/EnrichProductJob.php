@@ -18,6 +18,7 @@ use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ModelGroupPlanner;
 use App\Services\Enrichment\ProductEnrichmentService;
+use App\Services\Enrichment\Sources\SourceUnmappedException;
 use App\Services\Enrichment\TavilyQuotaGuard;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -277,6 +278,13 @@ class EnrichProductJob implements ShouldQueue
                     : ProductEnrichmentBatchItem::STATUS_MANUAL,
                 mb_substr($e->getMessage(), 0, 500),
             );
+            $this->refreshBatchProgress($batch);
+
+            return true;
+        } catch (SourceUnmappedException $e) {
+            // Cennik map_only, karta bez strony z importera (decyzja właściciela 10.10.2026): bez ponawiania — kartę
+            // ustawił już przebieg („Do przeglądu”, opis zostaje), pozycja czeka na człowieka („Wskaż adres”).
+            $enrichment->markBatchItem($batch, true, $product, ProductEnrichmentBatchItem::STATUS_MANUAL, mb_substr($e->getMessage(), 0, 500));
             $this->refreshBatchProgress($batch);
 
             return true;

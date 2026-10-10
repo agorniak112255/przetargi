@@ -16,6 +16,7 @@ use App\Services\B2b\B2bDescriptionSource;
 use App\Services\PriceListCards;
 use App\Services\PriceListDeletionService;
 use App\Services\PriceListDiscountService;
+use App\Services\PriceLists\PriceListFileStore;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Support\EnrichmentSiteList;
@@ -41,6 +42,7 @@ class PriceListController extends Controller
         private readonly PriceListDiscountService $discounts,
         private readonly ProductEffectivePrice $effectivePrices,
         private readonly PriceListCards $cards,
+        private readonly PriceListFileStore $fileStore,
     ) {}
 
     public function index(): JsonResponse
@@ -507,12 +509,13 @@ class PriceListController extends Controller
     /**
      * Host naszego sklepu (prestashop.shop_url) i hosty z enrichment.blocked_source_hosts — także ich subdomeny — nie
      * mogą być źródłem opisu: ProductEnrichmentService i tak je odrzuca, a lista udawałaby, że coś z nich bierze.
+     * Publiczna statyczna — tę samą regułę stosuje formularz cennika z pliku (PriceListIntakeController).
      *
      * @param  list<string>  $hosts
      *
      * @throws ValidationException
      */
-    private function assertEnrichmentHostsAllowed(array $hosts): void
+    public static function assertEnrichmentHostsAllowed(array $hosts): void
     {
         $shopHost = parse_url(trim((string) config('prestashop.shop_url', '')), PHP_URL_HOST);
         $blocked = [];
@@ -621,6 +624,8 @@ class PriceListController extends Controller
             return response()->json(['message' => $reason], 422);
         }
 
+        // pliki cennika (price_list_files) znikają kaskadą — ścieżki zbierane przed usunięciem, pliki z dysku po nim
+        $files = $this->fileStore->pathsOf($priceList);
         try {
             $result = $this->deletion->delete($priceList, $request->user());
         } catch (Throwable $e) {
@@ -628,6 +633,7 @@ class PriceListController extends Controller
                 'message' => 'Nie udało się usunąć cennika: '.$e->getMessage(),
             ], 422);
         }
+        $this->fileStore->deleteUnreferenced($files);
 
         return response()->json([
             'message' => sprintf(

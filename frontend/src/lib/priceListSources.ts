@@ -91,7 +91,10 @@ export type FilePriceListsResponse = {
 export type SearchSiteOption = {
   host: string
   links: number
+  /** Marki przypisane do hosta — także wykryte automatem. */
   manufacturers: string[]
+  /** Marki przypisane ręcznie albo z konfiguracji (bez wykrytych automatem); brak pola = starszy serwer. */
+  assigned_manufacturers?: string[]
   priority: number | null
   sources: string[]
 }

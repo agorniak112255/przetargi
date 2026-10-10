@@ -1350,6 +1350,49 @@ function PriceListsHelp() {
           ),
         },
         {
+          action: 'Dodawanie cennika z pliku: cennik → plik → importer',
+          does: 'Nowy cennik z pliku zakładasz w trzech krokach. 1) Cennik: „+ Dodaj cennik z pliku” — producent, wersja, strona producenta wybrana z listy „Strony wyszukiwarka” (przy domenie widać liczbę zaindeksowanych stron; gdy jest ich mało albo domeny nie ma na liście, program ostrzega, że importer może nie znaleźć kart), strony dostawców z długimi opisami (wyżej = ważniejsza), upust na cały cennik (zmiana działa od następnego importu pliku), ceny sugerowane i uwagi dla programisty (np. „arkusz 2 to akcesoria, ceny w EUR”). 2) Plik: „Dodaj plik” przy cenniku (Excel, CSV albo PDF). 3) Importer: programista przygotowuje dla tego cennika importer, który czyta plik i przypisuje każdej karcie stronę wyrobu — producenta, a gdy producent nie ma wyrobu, dostawcy albo sklepu ze zdjęciem i opisem. Stan cennika widać na plakietce: „Czeka na plik”, „Czeka na importer — przygotuje programista”, „Gotowy do importu”, „Zaimportowany” albo „Błąd”. „Podgląd importu” niczego nie zapisuje: pokazuje nowe i aktualizowane karty, zmiany cen, pominięte wiersze i skąd karty wezmą opis; „Importuj” zapisuje karty i — gdy zostawisz zaznaczone „Pobierz opisy po imporcie” — pobiera opisy, każda karta tylko ze swojej strony. Karta, której importer nie przypisał strony, nie dostaje opisu z internetu (obecny opis zostaje): widać ją w „Karty bez strony (N)” i w „Do przeglądu” z powodem „Brak strony z importera — wskaż adres”, gdzie adres podajesz przyciskiem „Wskaż właściwą stronę”. Stary import w zakładce „Cenniki” takiego cennika nie przyjmie — odeśle do „Z pliku”.',
+          click: 'Menu „Cenniki” → zakładka „Z pliku” → „+ Dodaj cennik z pliku” → „Zapisz cennik” → przy cenniku „Dodaj plik”. Gdy plakietka pokaże „Gotowy do importu”: „Podgląd importu” → „Importuj”.',
+          tone: 'blue',
+          screen: (
+            <AppFrame nav="Cenniki">
+              <h1 className="mb-3 text-xl font-semibold">Cenniki z plików — źródła opisów</h1>
+              <Card className="text-xs">
+                <p className="text-sm font-semibold">Dodaj cennik z pliku</p>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Field label="Producent *" value="MAPA" />
+                    <Field label="Wersja *" value="2026-10" />
+                    <Field label="Strona producenta — marka MAPA" value="mapa-pro.com" mark />
+                    <p className="text-slate-600">mapa-pro.com: 1 240 stron w indeksie</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Field label="Strony dostawców z długimi opisami (1 z 20)" value="sklepbhp.pl" />
+                    <Field label="Upust na cały cennik (%)" value="12" />
+                    <Field label="Uwagi dla programisty" value="arkusz 2 to akcesoria, ceny w EUR" />
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded border border-slate-200 px-2.5 py-2">
+                  <span className="rounded bg-blue-100 px-1.5 py-0.5 font-semibold text-blue-800">Gotowy do importu</span>
+                  <span className="text-slate-600">
+                    Plik: <b>MAPA cennik 2026.xlsx</b>
+                  </span>
+                  <span className="rounded-full border border-amber-400 px-3 py-1 font-medium text-amber-800">
+                    Karty bez strony (3)
+                  </span>
+                  <span className="ml-auto flex gap-1.5">
+                    <Btn label="Dodaj plik" color="border" />
+                    <Mark>
+                      <Btn label="Podgląd importu" />
+                    </Mark>
+                    <Btn label="Ustawienia" color="border" />
+                  </span>
+                </div>
+              </Card>
+            </AppFrame>
+          ),
+        },
+        {
           action: 'Cenniki z plików: skąd są opisy',
           does: 'Zakładka „Z pliku” pokazuje każdy cennik z pliku: ile kart ma opis od producenta, ze stron cennika, z B2B, z innych stron, a ile jest bez opisu; ile opisów pobrano przed zmianą stron i czy pobieranie trwa. Znacznik „ma też konto B2B” — karty z opisem z B2B nie są tu ruszane. Od producenta liczy się też opis z ręcznie wskazanej strony producenta. Ponowne pobranie hurtem („Ponów zaznaczone” na liście produktów, ponowne pobranie całego cennika) pomija karty z gotowym opisem od producenta — po komunikacie można je pobrać przyciskiem „Pobierz też te karty”. Przerwana partia (Anuluj, „Zatrzymaj wszystko”) zostawia karty w stanie sprzed kolejki, bez „błędu”. Pod liczbą kart może stać „modeli: N” — model to ten sam wyrób w różnych wymiarach i kolorach; program pobiera opis raz na model i przepisuje go pozostałym kartom modelu, więc pełne pobranie kosztuje tyle pobrań, ile jest modeli. Podgląd „Policz karty” w oknie „Pobierz opisy ponownie” i komunikat po zleceniu podają też liczbę modeli, a pasek postępu — ile modeli jest już gotowych.',
           click: 'Menu „Cenniki” → zakładka „Z pliku”. Nazwa producenta otwiera karty tego cennika.',

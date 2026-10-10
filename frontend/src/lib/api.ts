@@ -2202,6 +2202,31 @@ export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob>
 }
 
 /**
+ * Nazwa pliku z nagłówka Content-Disposition: najpierw `filename*=UTF-8''…` (RFC 5987, polskie znaki), potem
+ * `filename="…"` albo `filename=…` do średnika. Sam `filename=` łapał wcześniej resztę nagłówka („; filename*=…”),
+ * gdy nazwa nie miała cudzysłowów.
+ */
+export function filenameFromContentDisposition(header: string | null | undefined): string | null {
+  if (!header) return null
+  const extended = header.match(/filename\*\s*=\s*([^']*)'[^']*'([^;]+)/i)
+  if (extended) {
+    const raw = extended[2].trim().replace(/^"(.*)"$/, '$1')
+    try {
+      const decoded = decodeURIComponent(raw)
+      if (decoded.trim() !== '') return decoded
+    } catch {
+      /* zły zapis procentowy — dalej zwykły filename */
+    }
+  }
+  const quoted = header.match(/filename\s*=\s*"([^"]*)"/i)
+  if (quoted && quoted[1].trim() !== '') return quoted[1]
+  const plain = header.match(/filename\s*=\s*([^;"]+)/i)
+  if (plain && plain[1].trim() !== '') return plain[1].trim()
+
+  return null
+}
+
+/**
  * `accept` — nagłówek Accept. Laravel oddaje błędy (422, 404, 429) jako JSON z komunikatem tylko wtedy, gdy JSON jest
  * pierwszy na liście — przy samym * / * walidacja kończy się przekierowaniem, a pobrany plik byłby stroną HTML.
  */
@@ -2217,9 +2242,7 @@ export async function downloadFile(path: string, fallbackName: string, accept = 
   }
 
   const blob = await res.blob()
-  const cd = res.headers.get('Content-Disposition')
-  const match = cd?.match(/filename="?([^"]+)"?/)
-  const name = match?.[1] ?? fallbackName
+  const name = filenameFromContentDisposition(res.headers.get('Content-Disposition')) ?? fallbackName
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

@@ -37,6 +37,7 @@ const REASON_TONE: Record<ReviewReason, string> = {
   worse_version: 'bg-violet-100 text-violet-900',
   rejected_source: 'bg-slate-200 text-slate-800',
   manufacturer_missing: 'bg-orange-100 text-orange-900',
+  source_unmapped: 'bg-amber-200 text-amber-900',
 }
 
 const STATUS_LABEL: Record<DescriptionVersion['status'], string> = {

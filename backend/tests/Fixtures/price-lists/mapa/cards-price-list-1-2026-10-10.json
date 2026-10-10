@@ -1,0 +1,737 @@
+[
+    {
+        "sku": "34115038",
+        "name": "VITAL 115",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-115"
+    },
+    {
+        "sku": "34117108",
+        "name": "VITAL 117",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-117"
+    },
+    {
+        "sku": "34124218",
+        "name": "VITAL 124",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-124"
+    },
+    {
+        "sku": "34165008",
+        "name": "VITAL 165",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-165"
+    },
+    {
+        "sku": "34175138",
+        "name": "VITAL 175",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-175"
+    },
+    {
+        "sku": "34177008",
+        "name": "VITAL 177",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-177"
+    },
+    {
+        "sku": "34180148",
+        "name": "VITAL 180",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-180"
+    },
+    {
+        "sku": "34258008",
+        "name": "ALTO 258",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/alto-258"
+    },
+    {
+        "sku": "34260038",
+        "name": "ALTO 260",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/alto-260"
+    },
+    {
+        "sku": "34285018",
+        "name": "ALTO 285",
+        "primary_source_url": "https://www.mapa-pro.com/our-gloves/chemical-protection/product-page/alto-285"
+    },
+    {
+        "sku": "34298158",
+        "name": "ALTO 298",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/alto-298"
+    },
+    {
+        "sku": "34299008",
+        "name": "ALTO 299",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/alto-299"
+    },
+    {
+        "sku": "34300058",
+        "name": "JERSETTE 300",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/jersette-300"
+    },
+    {
+        "sku": "34301008",
+        "name": "JERSETTE 301",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/jersette-301"
+    },
+    {
+        "sku": "34307018",
+        "name": "JERSETTE 307",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/jersette-307"
+    },
+    {
+        "sku": "34308008",
+        "name": "JERSETTE 308",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/jersette-308"
+    },
+    {
+        "sku": "34319018",
+        "name": "HARPON 319",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/harpon-319"
+    },
+    {
+        "sku": "34321008",
+        "name": "HARPON 321",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/harpon-321"
+    },
+    {
+        "sku": "34325008",
+        "name": "HARPON 325",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/harpon-325"
+    },
+    {
+        "sku": "34326008",
+        "name": "HARPON 326",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/harpon-326"
+    },
+    {
+        "sku": "34328028",
+        "name": "TITAN 328",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-328"
+    },
+    {
+        "sku": "34330018",
+        "name": "HARPON 330",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/harpon-330"
+    },
+    {
+        "sku": "34332028",
+        "name": "TEMP-TEC 332",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/termiczne/rekawice-chroniace-przed-cieplem/strona-produktu/temptec-332"
+    },
+    {
+        "sku": "34339019",
+        "name": "ULTRANEO 339",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-339"
+    },
+    {
+        "sku": "34340018",
+        "name": "ULTRANEO 340",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-340"
+    },
+    {
+        "sku": "34341018",
+        "name": "ULTRANEO 341",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-341"
+    },
+    {
+        "sku": "34344139",
+        "name": "FLUOTECH 344",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/fluotech-344"
+    },
+    {
+        "sku": "34351008",
+        "name": "TELSOL 351 - Polybag",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/telsol-351"
+    },
+    {
+        "sku": "34358008",
+        "name": "ULTRANITRIL 358 - POLYBAG",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-358"
+    },
+    {
+        "sku": "34369009",
+        "name": "TELSOL 369 - Polybag",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/telsol-369"
+    },
+    {
+        "sku": "34375018",
+        "name": "TITAN 375",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-375"
+    },
+    {
+        "sku": "34377018",
+        "name": "ULTRANITRIL 377",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-377"
+    },
+    {
+        "sku": "34380358",
+        "name": "KRYTECH 380",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-380"
+    },
+    {
+        "sku": "34381038",
+        "name": "ULTRANITRIL 381",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-381"
+    },
+    {
+        "sku": "34382028",
+        "name": "ULTRANEO 382",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-382"
+    },
+    {
+        "sku": "34383018",
+        "name": "TITAN 383",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-383"
+    },
+    {
+        "sku": "34388008",
+        "name": "TITAN 388 - Polybag",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-388"
+    },
+    {
+        "sku": "34395018",
+        "name": "KRYTECH 395",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-395"
+    },
+    {
+        "sku": "34397008",
+        "name": "TITAN 397",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-397"
+    },
+    {
+        "sku": "34401148",
+        "name": "ULTRANEO 401",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-401"
+    },
+    {
+        "sku": "34405208",
+        "name": "ALTO 405 ACTIVATED",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/alto-405"
+    },
+    {
+        "sku": "34407009",
+        "name": "ULTRANEO 407",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-407"
+    },
+    {
+        "sku": "34410008",
+        "name": "ULTRANITRIL 410 - Polybag",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-410"
+    },
+    {
+        "sku": "34414149",
+        "name": "ULTRANEO 414",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-414"
+    },
+    {
+        "sku": "34415048",
+        "name": "ALTO 415",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/alto-415"
+    },
+    {
+        "sku": "34420028",
+        "name": "ULTRANEO 420",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-420"
+    },
+    {
+        "sku": "34450008",
+        "name": "ULTRANEO 450",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultraneo-450"
+    },
+    {
+        "sku": "34454008",
+        "name": "ULTRANITRIL 454",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/ultranitril-454"
+    },
+    {
+        "sku": "34468008",
+        "name": "FLUOTECH 468",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/fluotech-468"
+    },
+    {
+        "sku": "34472008",
+        "name": "ULTRANITRIL 472 - Polybag",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/ultranitril-472"
+    },
+    {
+        "sku": "34475148",
+        "name": "ULTRANITRIL 475",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-475"
+    },
+    {
+        "sku": "34476009",
+        "name": "TEMP-COOK 476",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/termiczne/rekawice-chroniace-przed-cieplem/strona-produktu/tempcook-476"
+    },
+    {
+        "sku": "34480008",
+        "name": "ULTRANITRIL 480",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-480"
+    },
+    {
+        "sku": "34485008",
+        "name": "ULTRANITRIL 485 - Polybag",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-485"
+    },
+    {
+        "sku": "34491018",
+        "name": "ULTRANITRIL 491",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-491"
+    },
+    {
+        "sku": "34492208",
+        "name": "ULTRANITRIL 492 UNIT",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-492"
+    },
+    {
+        "sku": "34492858",
+        "name": "ULTRANITRIL 492 POLYBAG",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-492"
+    },
+    {
+        "sku": "34493008",
+        "name": "ULTRANITRIL 493",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-493"
+    },
+    {
+        "sku": "34495008",
+        "name": "ULTRANITRIL 495",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/ultranitril-495"
+    },
+    {
+        "sku": "34500018",
+        "name": "ULTRANE 500 VM",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-500"
+    },
+    {
+        "sku": "34500038",
+        "name": "ULTRANE 500",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-500"
+    },
+    {
+        "sku": "34510098",
+        "name": "ULTRANE 510",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-510"
+    },
+    {
+        "sku": "34517038",
+        "name": "ADVANTECH 517",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/laboratoryjne/rodowisko-kontrolowane/strona-produktu/advantech-517"
+    },
+    {
+        "sku": "34519018",
+        "name": "ADVANTECH 519",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/laboratoryjne/rodowisko-kontrolowane/strona-produktu/advantech-519"
+    },
+    {
+        "sku": "34520158",
+        "name": "VITAL 520",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-520"
+    },
+    {
+        "sku": "34522008",
+        "name": "ADVANTECH 522",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/laboratoryjne/rodowisko-kontrolowane/strona-produktu/advantech-522"
+    },
+    {
+        "sku": "34524008",
+        "name": "ULTRANE 524",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-524"
+    },
+    {
+        "sku": "34525008",
+        "name": "ULTRANE 525",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-525"
+    },
+    {
+        "sku": "34525098",
+        "name": "ULTRANE 525 Polybag",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-525"
+    },
+    {
+        "sku": "34526008",
+        "name": "ULTRANE 526",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-526"
+    },
+    {
+        "sku": "34527008",
+        "name": "ULTRANE 527",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-527"
+    },
+    {
+        "sku": "34529008",
+        "name": "ADVANTECH 529",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/laboratoryjne/rodowisko-kontrolowane/strona-produktu/advantech-529"
+    },
+    {
+        "sku": "34532102",
+        "name": "KRYTECH 532",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-532"
+    },
+    {
+        "sku": "34538092",
+        "name": "KRYTECH 538",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-538"
+    },
+    {
+        "sku": "34540358",
+        "name": "VITAL 540",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/wodoodporne/strona-produktu/vital-540"
+    },
+    {
+        "sku": "34541008",
+        "name": "ULTRANE 541",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-541"
+    },
+    {
+        "sku": "34544008",
+        "name": "ULTRANE 544",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-544"
+    },
+    {
+        "sku": "34548058",
+        "name": "ULTRANE 548 VM",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-548"
+    },
+    {
+        "sku": "34548088",
+        "name": "ULTRANE 548",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-548"
+    },
+    {
+        "sku": "34549058",
+        "name": "ULTRANE 549 VM",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-549"
+    },
+    {
+        "sku": "34549068",
+        "name": "ULTRANE 549",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-549"
+    },
+    {
+        "sku": "34550018",
+        "name": "ULTRANE 550 VM",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-550"
+    },
+    {
+        "sku": "34550548",
+        "name": "ULTRANE 550",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-550"
+    },
+    {
+        "sku": "34551038",
+        "name": "ULTRANE 551",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-551"
+    },
+    {
+        "sku": "34553088",
+        "name": "ULTRANE 553 UNIT.",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-553"
+    },
+    {
+        "sku": "34557048",
+        "name": "KRYTECH 557",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-557"
+    },
+    {
+        "sku": "34558028",
+        "name": "KRYTECH 558",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-558"
+    },
+    {
+        "sku": "34563478",
+        "name": "KRYTECH 563",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-563"
+    },
+    {
+        "sku": "34574008",
+        "name": "KRYTECH 574",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-574"
+    },
+    {
+        "sku": "34578008",
+        "name": "KRYTECH 578",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-578"
+    },
+    {
+        "sku": "34579068",
+        "name": "KRYTECH 579 VM",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-579"
+    },
+    {
+        "sku": "34579088",
+        "name": "KRYTECH 579",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-579"
+    },
+    {
+        "sku": "34580008",
+        "name": "KRYTECH 580 RF",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-580"
+    },
+    {
+        "sku": "34582038",
+        "name": "KRYTECH 582",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-582"
+    },
+    {
+        "sku": "34584008",
+        "name": "KRYTECH 584",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-584"
+    },
+    {
+        "sku": "34585008",
+        "name": "KRYTECH 585",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-585"
+    },
+    {
+        "sku": "34586038",
+        "name": "KRYTECH 586",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-586"
+    },
+    {
+        "sku": "34588068",
+        "name": "KRYTECH 588",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-588"
+    },
+    {
+        "sku": "34599008",
+        "name": "KRYTECH 599 RF",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-599"
+    },
+    {
+        "sku": "34600008",
+        "name": "KRYTECH 600 RF",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-600"
+    },
+    {
+        "sku": "34603182",
+        "name": "KRYTECH 603",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-603"
+    },
+    {
+        "sku": "34609008",
+        "name": "KRYTECH 609",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-609"
+    },
+    {
+        "sku": "34610048",
+        "name": "KRYTECH 610 RF",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-610"
+    },
+    {
+        "sku": "34615048",
+        "name": "KRYTECH 615 RF",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-615"
+    },
+    {
+        "sku": "34622008",
+        "name": "KRYTECH 622",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-622"
+    },
+    {
+        "sku": "34641028",
+        "name": "ULTRANE 641",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-641"
+    },
+    {
+        "sku": "34642018",
+        "name": "KRYTECH 642",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-642"
+    },
+    {
+        "sku": "34643018",
+        "name": "KRYTECH 643",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-643"
+    },
+    {
+        "sku": "34644018",
+        "name": "KRYTECH 644",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-644"
+    },
+    {
+        "sku": "34645018",
+        "name": "KRYTECH 645",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-645"
+    },
+    {
+        "sku": "34648008",
+        "name": "ULTRANE 648",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-648"
+    },
+    {
+        "sku": "34650008",
+        "name": "BUTOFLEX 650",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/butoflex-650"
+    },
+    {
+        "sku": "34651008",
+        "name": "BUTOFLEX 651",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/butoflex-651"
+    },
+    {
+        "sku": "34652008",
+        "name": "BUTOFLEX 652",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/butoflex-652"
+    },
+    {
+        "sku": "34664008",
+        "name": "ULTRANE 664",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-664"
+    },
+    {
+        "sku": "34681008",
+        "name": "ULTRANE 681",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-do-prac-precyzyjnych/strona-produktu/ultrane-681"
+    },
+    {
+        "sku": "34692008",
+        "name": "KRYTECH 692",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-692"
+    },
+    {
+        "sku": "34693008",
+        "name": "KRYTECH 693",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-693"
+    },
+    {
+        "sku": "34694008",
+        "name": "KRYTECH 694",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-694"
+    },
+    {
+        "sku": "34700018",
+        "name": "TEMP-ICE 700",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/termiczne/rekawice-chroniace-przed-zimnem/strona-produktu/tempice-700"
+    },
+    {
+        "sku": "34710029",
+        "name": "TEMPDEX 710",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/termiczne/rekawice-chroniace-przed-cieplem/strona-produktu/tempdex-710"
+    },
+    {
+        "sku": "34720029",
+        "name": "TEMP DEX 720",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/termiczne/rekawice-chroniace-przed-cieplem/strona-produktu/tempdex-720"
+    },
+    {
+        "sku": "34780049",
+        "name": "TEMPICE 780",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/termiczne/rekawice-chroniace-przed-zimnem/strona-produktu/tempice-780"
+    },
+    {
+        "sku": "34809008",
+        "name": "KRYTECH 809",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-809"
+    },
+    {
+        "sku": "34815008",
+        "name": "KRYTECH 815 RF",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/prace-precyzyjne/strona-produktu/krytech-815"
+    },
+    {
+        "sku": "34832018",
+        "name": "KRYTECH 832",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-832"
+    },
+    {
+        "sku": "34833048",
+        "name": "TITAN 833 - Polybag",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-833"
+    },
+    {
+        "sku": "34836008",
+        "name": "KRYTECH 836",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-836"
+    },
+    {
+        "sku": "34837018",
+        "name": "KRYTECH 837",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-837"
+    },
+    {
+        "sku": "34838068",
+        "name": "KRYTECH 838",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-838"
+    },
+    {
+        "sku": "34840028",
+        "name": "KRYTECH 840",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-840"
+    },
+    {
+        "sku": "34850058",
+        "name": "TITAN 850",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/titan-850"
+    },
+    {
+        "sku": "34851028",
+        "name": "KRYTECH 851",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/krytech-851"
+    },
+    {
+        "sku": "34852019",
+        "name": "EXONIT 852",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/precyzyjne/rekawice-dla-przemyslu-ciezkiego/strona-produktu/exonit-852"
+    },
+    {
+        "sku": "34853019",
+        "name": "EXONIT 853",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/odpornosc-na-przeciecie/ciezkie-prace-manipulacyjne/strona-produktu/exonit-853"
+    },
+    {
+        "sku": "34967008",
+        "name": "SOLO 967",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-967"
+    },
+    {
+        "sku": "34967118",
+        "name": "SOLO 967 BOX",
+        "primary_source_url": "https://www.mapa-pro.com/our-gloves/disposable/product-page/solo-967"
+    },
+    {
+        "sku": "34977008",
+        "name": "SOLO 977",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-977"
+    },
+    {
+        "sku": "34980458",
+        "name": "SOLO 980",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-980"
+    },
+    {
+        "sku": "34987038",
+        "name": "SOLO 987",
+        "primary_source_url": null
+    },
+    {
+        "sku": "34988008",
+        "name": "SOLO 988",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-988"
+    },
+    {
+        "sku": "34990458",
+        "name": "SOLO 990",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-990"
+    },
+    {
+        "sku": "34994008",
+        "name": "TRILITES 994",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/trilites-994"
+    },
+    {
+        "sku": "34995428",
+        "name": "SOLO PLUS 995",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-plus-995"
+    },
+    {
+        "sku": "34997168",
+        "name": "SOLO 997",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-997"
+    },
+    {
+        "sku": "34998008",
+        "name": "SOLO 998",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-998"
+    },
+    {
+        "sku": "34999028",
+        "name": "SOLO 999",
+        "primary_source_url": "https://www.mapa-pro.pl/produkty/jednorazowe/strona-produktu/solo-999"
+    }
+]

@@ -15,11 +15,13 @@ use App\Services\Enrichment\CatalogSearchHostService;
 use App\Services\Enrichment\PriceListDescriptionSources;
 use App\Services\Enrichment\PriceListSourceSettings;
 use App\Services\Enrichment\ProductModelKey;
+use App\Services\PriceLists\PriceListIntakeView;
 use Carbon\CarbonImmutable;
 
 /**
  * Cenniki → „Z pliku”: cenniki z kartami z ceną z pliku (sloty product_source_prices „file”), ich strony z opisami
- * i skąd karty mają dziś opis — żeby przy każdym cenniku było widać, czy wpisane strony coś dają.
+ * i skąd karty mają dziś opis — żeby przy każdym cenniku było widać, czy wpisane strony coś dają. Od 10.10.2026 także
+ * cenniki nowym sposobem (source_policy) bez kart; każdy wiersz niesie `intake` (PriceListIntakeView).
  */
 final class PriceListFileSources
 {
@@ -29,6 +31,7 @@ final class PriceListFileSources
         private readonly B2bAccountPriceList $b2bLists,
         private readonly CatalogSearchHostService $searchHosts,
         private readonly ProductModelKey $modelKeys,
+        private readonly PriceListIntakeView $intakeViews,
     ) {}
 
     /**
@@ -43,14 +46,25 @@ final class PriceListFileSources
             ->pluck('price_list_id')
             ->map(static fn ($id): int => (int) $id)
             ->all();
+        // cenniki nowym sposobem (10.10.2026) są w zakładce od założenia — także przed pierwszym plikiem i importem
+        $intakeIds = PriceList::query()
+            ->whereNotNull('source_policy')
+            ->pluck('id')
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
+        $listIds = array_values(array_unique([...$listIds, ...$intakeIds]));
         if ($listIds === []) {
             return [];
         }
         $lists = PriceList::query()
             ->whereIn('id', $listIds)
             // bez dużych JSON-ów ostatniego importu (product_ids, updated_products…) — lista odświeża się w trakcie
-            // pobierania; original_filename potrzebuje B2bAccountPriceList::owners
-            ->get(['id', 'manufacturer', 'version', 'original_filename', 'enrichment_sites', 'enrichment_sites_mode', 'enrichment_sites_updated_at'])
+            // pobierania; original_filename potrzebuje B2bAccountPriceList::owners, pola przyjęcia — PriceListIntakeView
+            ->get([
+                'id', 'manufacturer', 'manufacturer_key', 'version', 'original_filename', 'enrichment_sites',
+                'enrichment_sites_mode', 'enrichment_sites_updated_at', 'suggested_prices', 'importer_key',
+                'source_policy', 'importer_notes',
+            ])
             ->sort(static fn (PriceList $a, PriceList $b): int => [mb_strtolower((string) $a->manufacturer), (int) $a->id]
                 <=> [mb_strtolower((string) $b->manufacturer), (int) $b->id])
             ->values();
@@ -69,17 +83,22 @@ final class PriceListFileSources
         $allHosts = array_keys($allHosts);
         $listed = $allHosts === [] ? [] : $this->searchHosts->listedHosts($allHosts);
         $indexed = $this->indexedPages($allHosts);
+        $intake = $this->intakeViews->many($lists);
 
         $out = [];
         foreach ($lists as $list) {
-            $out[] = $this->row(
-                $list,
-                $cardsByList[(int) $list->id] ?? [],
-                isset($owners[(int) $list->id]),
-                $batches[(int) $list->id] ?? null,
-                $listed,
-                $indexed,
-            );
+            $out[] = [
+                ...$this->row(
+                    $list,
+                    $cardsByList[(int) $list->id] ?? [],
+                    isset($owners[(int) $list->id]),
+                    $batches[(int) $list->id] ?? null,
+                    $listed,
+                    $indexed,
+                ),
+                // IntakeView (status legacy przy cenniku dawnym sposobem)
+                'intake' => $intake[(int) $list->id] ?? null,
+            ];
         }
 
         return $out;

@@ -97,6 +97,7 @@ final class ProductReviewApiTest extends TestCase
         $response->assertJsonPath('meta', ['total' => 2, 'page' => 1, 'per_page' => 50]);
         $this->assertSame([
             'identity_soft' => 1, 'identity_none' => 0, 'worse_version' => 1, 'rejected_source' => 0, 'manufacturer_missing' => 0,
+            'source_unmapped' => 0,
         ], $response->json('counts.by_reason'));
         $this->assertSame([
             ['id' => $coba->id, 'manufacturer' => 'Coba', 'count' => 2],

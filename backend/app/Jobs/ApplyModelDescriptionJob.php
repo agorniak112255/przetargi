@@ -13,6 +13,7 @@ use App\Models\ProductEnrichmentBatchItem;
 use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\ModelGroupPlanner;
 use App\Services\Enrichment\ProductEnrichmentService;
+use App\Services\Enrichment\Sources\SourceUnmappedException;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Builder;
@@ -144,6 +145,13 @@ class ApplyModelDescriptionJob implements ShouldQueue
                 $this->delete();
 
                 return;
+            } catch (SourceUnmappedException $e) {
+                // cennik map_only, członek bez strony z importera (10.10.2026): kartę ustawił już przebieg („Do przeglądu”,
+                // opis zostaje) — pozycja czeka na człowieka, nie jest błędem
+                $enrichment->markBatchItem($batch, true, $member->fresh() ?? $member, ProductEnrichmentBatchItem::STATUS_MANUAL, mb_substr($e->getMessage(), 0, 500));
+                $this->refreshBatchProgress($batch);
+
+                continue;
             } catch (Throwable $e) {
                 Log::warning('Model description apply failed for member', [
                     'batch_id' => $this->batchId,

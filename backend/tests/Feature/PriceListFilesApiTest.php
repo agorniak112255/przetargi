@@ -103,8 +103,10 @@ final class PriceListFilesApiTest extends TestCase
         $this->assertSame([
             'id', 'manufacturer', 'version', 'enrichment_sites', 'enrichment_sites_mode', 'enrichment_sites_updated_at',
             'has_b2b_account', 'cards', 'described', 'sources', 'stale', 'queued', 'running', 'failed', 'manual',
-            'batch', 'hosts', 'identity', 'to_review', 'with_image', 'models',
+            'batch', 'hosts', 'identity', 'to_review', 'with_image', 'models', 'intake',
         ], array_keys($row));
+        // cennik dawnym sposobem: widok przyjęcia ze stanem legacy
+        $this->assertSame(PriceList::INTAKE_LEGACY, $row['intake']['status']);
         $this->assertSame($list->id, $row['id']);
         // marka bez profilu grupowania: karta = model
         $this->assertSame(11, $row['models']);
@@ -313,19 +315,35 @@ final class PriceListFilesApiTest extends TestCase
         $row = collect($sites)->firstWhere('host', 'sklep-a.pl');
 
         $this->assertNotNull($row);
-        $this->assertSame(['host', 'links', 'manufacturers', 'priority', 'sources'], array_keys($row));
+        $this->assertSame(['host', 'links', 'manufacturers', 'assigned_manufacturers', 'priority', 'sources'], array_keys($row));
         $this->assertSame(2, $row['links']);
         $this->assertSame([], $row['manufacturers']);
+        $this->assertSame([], $row['assigned_manufacturers']);
         $this->assertNull($row['priority']);
         $this->assertSame(['indeks'], $row['sources']);
         foreach ($sites as $site) {
-            $this->assertSame(['host', 'links', 'manufacturers', 'priority', 'sources'], array_keys($site));
+            $this->assertSame(['host', 'links', 'manufacturers', 'assigned_manufacturers', 'priority', 'sources'], array_keys($site));
         }
 
         // pamięć 10 min: nowa strona w indeksie nie zmienia odpowiedzi od razu
         $this->page('sklep-a.pl', 'https://sklep-a.pl/3');
         $again = collect($this->getJson('/api/price-lists/search-sites')->assertOk()->json('sites'))->firstWhere('host', 'sklep-a.pl');
         $this->assertSame(2, $again['links']);
+    }
+
+    public function test_search_sites_separates_assigned_manufacturers_from_discovered(): void
+    {
+        ManufacturerSite::query()->create(['brand_key' => 'iks', 'manufacturer' => 'IKS', 'host' => 'iks-sklep.pl', 'source' => 'discovered']);
+        ManufacturerSite::query()->create(['brand_key' => 'igrek', 'manufacturer' => 'IGREK', 'host' => 'igrek.pl', 'source' => 'manual']);
+        ManufacturerSite::query()->create(['brand_key' => 'zet', 'manufacturer' => 'ZET', 'host' => 'igrek.pl', 'source' => 'config']);
+
+        $sites = collect($this->getJson('/api/price-lists/search-sites')->assertOk()->json('sites'));
+
+        $discovered = $sites->firstWhere('host', 'iks-sklep.pl');
+        $this->assertSame(['IKS'], $discovered['manufacturers']);
+        $this->assertSame([], $discovered['assigned_manufacturers']);
+        $assigned = $sites->firstWhere('host', 'igrek.pl');
+        $this->assertEqualsCanonicalizing(['IGREK', 'ZET'], $assigned['assigned_manufacturers']);
     }
 
     public function test_site_check_returns_local_index_hits_with_position_and_code(): void
