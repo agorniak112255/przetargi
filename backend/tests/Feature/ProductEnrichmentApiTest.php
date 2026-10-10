@@ -65,6 +65,9 @@ final class ProductEnrichmentApiTest extends TestCase
     {
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
+        // Karty SECURA sięgają po cache katalogu PDF producenta (ManufacturerCatalogPdf) na dysku local —
+        // bez atrapy wynik zależał od lokalnego storage, a brak cache kończył się zapisem znacznika próby.
+        Storage::fake('local');
     }
 
     public function test_document_only_search_result_does_not_finish_product_page_search(): void

@@ -95,6 +95,9 @@ final class EnrichmentStageThreeFlowTest extends TestCase
         parent::setUp();
         Queue::fake();
         Storage::fake('public');
+        // Cache katalogów PDF producenta (ManufacturerCatalogPdf) leży na dysku local — bez atrapy test czytał
+        // prawdziwy katalog SECURA z lokalnego storage i zapisywał tam znaczniki próby (katalog MAPA).
+        Storage::fake('local');
         config()->set('enrichment.manufacturer_domains.testex', ['testex.example']);
     }
 
