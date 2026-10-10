@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Pricing;
 
 /**
- * Cena specjalna konta B2B ukryta przed użytkownikiem bez uprawnienia prices.supplier_special.view: w jej miejsce
+ * Cena specjalna konta B2B albo cennika z pliku (SECURA „40% s.dystryb.”) ukryta przed użytkownikiem bez uprawnienia
+ * prices.supplier_special.view: w jej miejsce
  * cena standardowa (cennik bazowy − rabat standardowy kategorii, App\Support\SupplierSpecialPrice::evaluate()).
  * Rozmiary tego samego slotu skalujemy tym samym stosunkiem (decyzja D2) — najtańszy rozmiar to cena karty, więc
  * droższe rozmiary w prawdziwej cenie zdradzałyby rabat.
@@ -15,7 +16,8 @@ namespace App\Services\Pricing;
 final class MaskedPrice
 {
     /**
-     * @param  string  $sourceKey  „b2b:{id}” slotu z ceną specjalną
+     * @param  string  $sourceKey  „b2b:{id}” albo „file” slotu z ceną specjalną
+     * @param  int  $accountId  konto slotu; slot pliku = 0
      * @param  string  $currency  waluta slotu, a gdy slot jej nie ma — waluta karty (wielkimi literami)
      * @param  float  $realPurchase  prawdziwa cena konta — nie serializować
      * @param  float  $standardPrice  evaluate()['standard_price']

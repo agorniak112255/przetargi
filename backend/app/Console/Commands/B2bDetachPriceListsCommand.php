@@ -105,6 +105,13 @@ final class B2bDetachPriceListsCommand extends Command
                 continue;
             }
 
+            // wpis z cenami specjalnymi dostawcy z pliku — odpięcie historii odsłoniłoby je (PriceListDeletionService)
+            if ($list->has_supplier_special) {
+                $this->warn($line.' · pominięty: cennik ma ceny specjalne dostawcy');
+
+                continue;
+            }
+
             if ($dryRun) {
                 $this->line($line.' · duplikat, bez zmian (--dry-run)');
 

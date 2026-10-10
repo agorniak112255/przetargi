@@ -241,7 +241,8 @@ class PriceListImportController extends Controller
         }
 
         try {
-            $stats = $this->importer->previewFromMapping($path, $mapping, self::PREVIEW_ROWS);
+            // producent: ostrzeżenie o cenniku z cenami specjalnymi bez kolumny ceny normalnej (import by go odrzucił)
+            $stats = $this->importer->previewFromMapping($path, $mapping, self::PREVIEW_ROWS, $manufacturer);
         } catch (Throwable $e) {
             throw ValidationException::withMessages([
                 'mapping' => 'Nie udało się odczytać pliku według tego mapowania: '.$e->getMessage(),

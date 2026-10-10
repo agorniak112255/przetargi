@@ -17,6 +17,7 @@ use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Vector\ProductEmbeddingIndexer;
+use DomainException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -24,6 +25,12 @@ final class PriceListDeletionService
 {
     /** Kawałek listy kart w jednym IN — cennik może mieć dziesiątki tysięcy kart (limit 65 535 parametrów MySQL). */
     private const CHUNK = 1000;
+
+    /**
+     * Cennik z cenami specjalnymi dostawcy (price_lists.has_supplier_special) — usunięcie skasowałoby wpis, po którym
+     * maska rozpoznaje ceny specjalne w historii cen i slotach kart zachowanych (przetargi), czyli odsłoniłoby je.
+     */
+    public const SUPPLIER_SPECIAL_BLOCK = 'Cennik ma ceny specjalne dostawcy — nie można go usunąć, bo odsłoniłoby to ceny specjalne w historii cen. Wgraj nową wersję cennika.';
 
     public function __construct(
         private readonly ProductEmbeddingIndexer $embeddings,
@@ -109,6 +116,11 @@ final class PriceListDeletionService
      */
     public function delete(PriceList $priceList, User $actor): array
     {
+        // odmowa przed podziałem kart i czymkolwiek skasowanym (kontroler sprawdza to samo i odpowiada 422)
+        if (($block = $this->deletionBlock($priceList)) !== null) {
+            throw new DomainException($block);
+        }
+
         return DB::transaction(function () use ($priceList, $actor): array {
             $split = $this->partition($priceList);
             $toDelete = $split['to_delete'];
@@ -165,6 +177,7 @@ final class PriceListDeletionService
      * + suma kept_*.
      *
      * @return array{
+     *     blocked_reason?: string,
      *     products_total: int,
      *     products_to_delete: int,
      *     kept_other_price_lists: int,
@@ -179,6 +192,23 @@ final class PriceListDeletionService
      */
     public function preview(PriceList $priceList): array
     {
+        // blokada od razu, bez przejścia po kartach — okno usuwania pokazuje powód i nie pozwala potwierdzić (klucz
+        // blocked_reason tylko przy blokadzie, liczby zerowe)
+        if (($block = $this->deletionBlock($priceList)) !== null) {
+            return [
+                'blocked_reason' => $block,
+                'products_total' => 0,
+                'products_to_delete' => 0,
+                'kept_other_price_lists' => 0,
+                'kept_b2b' => 0,
+                'kept_other_slots' => 0,
+                'kept_tenders' => 0,
+                'not_in_last_import' => 0,
+                'to_delete_with_erp_links' => 0,
+                'to_delete_with_substitutes' => 0,
+                'to_delete_with_images' => 0,
+            ];
+        }
         $split = $this->partition($priceList);
         $toDelete = $split['to_delete'];
 
@@ -217,6 +247,15 @@ final class PriceListDeletionService
                     ->all(),
             )),
         ];
+    }
+
+    /**
+     * Powód, dla którego cennika nie wolno usunąć (null = wolno). Cofnięcie jednej aktualizacji (undoImport) nie jest
+     * blokowane: karty usuwane znikają kaskadą razem z historią, zachowane trzymają price_list_id, znacznik zostaje.
+     */
+    public function deletionBlock(PriceList $priceList): ?string
+    {
+        return $priceList->has_supplier_special ? self::SUPPLIER_SPECIAL_BLOCK : null;
     }
 
     /**

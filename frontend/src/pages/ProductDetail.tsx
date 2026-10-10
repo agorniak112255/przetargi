@@ -18,7 +18,7 @@ import { SupplierSpecialPanel } from '../components/SupplierSpecialPanel'
 import { cartonPriceLabel, sizePriceMax, sizePriceTitle } from '../lib/orderQuantity'
 import { sortSourcePrices } from '../lib/sourcePrices'
 import { SourceModelsList } from '../components/SourceModelsList'
-import { SUPPLIER_SPECIAL_INFERENCE_NOTE, supplierSpecialSummary } from '../lib/supplierSpecial'
+import { supplierSpecialLabels, supplierSpecialSummary } from '../lib/supplierSpecial'
 import {
   api,
   B2B_DESCRIPTION_OVERWRITE_CONFIRM,
@@ -46,18 +46,20 @@ import {
 type Detail = Product & { substitutes: Substitute[] }
 
 /**
- * Cennik bazowy dostawcy pod ceną konta B2B: rabat standardowy, faktyczny i ocena ceny specjalnej B2B.
- * Ocena to wniosek z porównania (dostawca potwierdza ceny specjalne mailem) — stąd zawsze pochodzenie ceny bazowej.
+ * Cennik bazowy dostawcy pod ceną konta B2B (albo cena katalogowa pod ceną specjalną z cennika z pliku): rabat
+ * standardowy, faktyczny i ocena ceny specjalnej. Ocena to wniosek z porównania — stąd zawsze pochodzenie ceny bazowej.
  */
 function BasePriceNote({ slot }: { slot: ProductSourcePrice }) {
   const cur = currencyLabel(slot.currency)
   const special = slot.supplier_special ?? null
+  const fromFile = slot.source_key === 'file'
+  const labels = supplierSpecialLabels(fromFile ? 'file' : 'b2b')
   const hasStandard = slot.standard_discount_percent != null && slot.standard_discount_percent !== ''
   return (
     <div className="rounded bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span>
-          Cennik bazowy:{' '}
+          {labels.base}:{' '}
           <b className="tabular-nums text-slate-800">
             {formatPrice(slot.base_price_net)} {cur}
           </b>
@@ -84,6 +86,8 @@ function BasePriceNote({ slot }: { slot: ProductSourcePrice }) {
               </>
             )}
           </>
+        ) : fromFile ? (
+          <span className="text-amber-800">Brak ceny normalnej w cenniku z pliku — nie da się ocenić ceny specjalnej.</span>
         ) : (
           <span className="text-amber-800">
             Brak rabatu standardowego dla kategorii {slot.base_price_category ? `„${slot.base_price_category}”` : '(bez arkusza)'} —
@@ -100,13 +104,13 @@ function BasePriceNote({ slot }: { slot: ProductSourcePrice }) {
           <b className="tabular-nums text-emerald-800">
             taniej o {formatPrice(special.saving_net)} {cur} od ceny standardowej
           </b>
-          <span className="text-slate-500">{SUPPLIER_SPECIAL_INFERENCE_NOTE}</span>
+          <span className="text-slate-500">{labels.note}</span>
         </div>
       )}
       {special?.status === 'worse_than_standard' && (
         <p className="mt-1 text-amber-800">
-          Cena konta powyżej ceny standardowej o {formatPrice(Math.abs(special.saving_net))} {cur} — sprawdź arkusz
-          cennika bazowego i rabat standardowy.
+          {labels.purchase} powyżej ceny standardowej o {formatPrice(Math.abs(special.saving_net))} {cur} —{' '}
+          {fromFile ? 'sprawdź kolumny cen w cenniku z pliku.' : 'sprawdź arkusz cennika bazowego i rabat standardowy.'}
         </p>
       )}
       {slot.base_price_source && <p className="mt-1 text-[10px] text-slate-500">Źródło: {slot.base_price_source}</p>}

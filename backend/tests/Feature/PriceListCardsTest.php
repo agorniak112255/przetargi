@@ -10,8 +10,10 @@ use App\Models\Client;
 use App\Models\ErpItem;
 use App\Models\ErpItemLink;
 use App\Models\PriceList;
+use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductSubstitute;
 use App\Models\Tender;
@@ -21,6 +23,7 @@ use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\PriceListCards;
 use App\Services\PriceListDeletionService;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use DomainException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
@@ -231,6 +234,77 @@ final class PriceListCardsTest extends TestCase
         $this->assertDatabaseMissing('products', ['id' => $slotOnly->id]);
         $this->assertDatabaseHas('erp_item_links', ['erp_item_id' => $item->id, 'product_id' => null]);
         $this->assertDatabaseMissing('product_substitutes', ['substitute_product_id' => $withSubstitute->id]);
+    }
+
+    /**
+     * Cennik z cenami specjalnymi dostawcy (has_supplier_special, SECURA 10.10.2026): usunięcie skasowałoby wpis, po
+     * którym maska rozpoznaje ceny specjalne w historii i w slotach kart zachowanych (tu: karta z przetargu) — odmowa
+     * przed jakimkolwiek kasowaniem, a podgląd okna usuwania od razu zwraca blokadę.
+     */
+    public function test_price_list_with_supplier_special_prices_cannot_be_deleted(): void
+    {
+        Sanctum::actingAs($this->user);
+        $inTender = $this->card();
+        $exclusive = $this->card();
+        $list = $this->priceList('Secura', [$inTender->id, $exclusive->id]);
+        $list->forceFill(['has_supplier_special' => true])->save();
+        $this->fileSlot($inTender, $list);
+        $this->fileSlot($exclusive, $list);
+        $this->tenderItem($inTender, null);
+        ProductPriceHistory::query()->create([
+            'product_id' => $inTender->id, 'price_list_id' => $list->id, 'catalog_price_net' => 10, 'purchase_price' => 8,
+            'currency' => 'PLN', 'source' => 'price_list_import',
+        ]);
+
+        $preview = app(PriceListDeletionService::class)->preview($list);
+        $this->assertSame(PriceListDeletionService::SUPPLIER_SPECIAL_BLOCK, $preview['blocked_reason'] ?? null);
+        $this->getJson("/api/price-lists/{$list->id}?deletion_preview=1")
+            ->assertOk()
+            ->assertJsonPath('deletion_preview.blocked_reason', PriceListDeletionService::SUPPLIER_SPECIAL_BLOCK);
+
+        $this->deleteJson("/api/price-lists/{$list->id}")
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Cennik ma ceny specjalne dostawcy — nie można go usunąć, bo odsłoniłoby to ceny specjalne w historii cen. Wgraj nową wersję cennika.');
+
+        $this->assertTrue($list->fresh()->has_supplier_special);
+        $this->assertDatabaseHas('products', ['id' => $inTender->id]);
+        $this->assertDatabaseHas('products', ['id' => $exclusive->id]);
+        $this->assertDatabaseHas('product_source_prices', ['product_id' => $inTender->id, 'price_list_id' => $list->id, 'source_key' => 'file']);
+        $this->assertDatabaseHas('product_source_prices', ['product_id' => $exclusive->id, 'price_list_id' => $list->id, 'source_key' => 'file']);
+        $this->assertDatabaseHas('product_price_history', ['product_id' => $inTender->id, 'price_list_id' => $list->id]);
+
+        // serwis też odmawia (np. wołany spoza kontrolera), zanim cokolwiek skasuje
+        try {
+            app(PriceListDeletionService::class)->delete($list, $this->user);
+            $this->fail('usunięcie cennika z cenami specjalnymi powinno zostać odrzucone');
+        } catch (DomainException $e) {
+            $this->assertSame(PriceListDeletionService::SUPPLIER_SPECIAL_BLOCK, $e->getMessage());
+        }
+        $this->assertDatabaseHas('price_lists', ['id' => $list->id]);
+        $this->assertDatabaseHas('products', ['id' => $exclusive->id]);
+    }
+
+    /** Cofnięcie jednej aktualizacji cennika z cenami specjalnymi nie jest blokowane — wpis i znacznik zostają. */
+    public function test_undo_import_of_supplier_special_price_list_is_allowed(): void
+    {
+        Sanctum::actingAs($this->user);
+        $card = $this->card();
+        $list = $this->priceList('Secura', [$card->id]);
+        $list->forceFill(['has_supplier_special' => true])->save();
+        $this->fileSlot($card, $list);
+        $import = PriceListImport::query()->create([
+            'price_list_id' => $list->id, 'source' => PriceListImport::SOURCE_FILE, 'version' => 'v1',
+            'original_filename' => 'secura.xlsx', 'imported_by' => $this->user->id, 'rows_total' => 1,
+            'products_created' => 1, 'products_updated' => 0, 'prices_changed' => 0, 'rows_skipped' => 0,
+            'product_ids' => [$card->id],
+        ]);
+
+        $this->deleteJson("/api/price-lists/{$list->id}/imports/{$import->id}")
+            ->assertOk()
+            ->assertJsonPath('products_deleted', 1);
+
+        $this->assertDatabaseMissing('products', ['id' => $card->id]);
+        $this->assertTrue($list->fresh()->has_supplier_special);
     }
 
     public function test_backfill_bhp_attributes_price_list_option_includes_slot_cards(): void

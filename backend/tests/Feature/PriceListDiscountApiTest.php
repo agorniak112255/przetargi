@@ -167,6 +167,40 @@ final class PriceListDiscountApiTest extends TestCase
         $this->assertEquals(50.00, (float) $card->refresh()->purchase_price);
     }
 
+    /**
+     * Slot z oceną ceny specjalnej (kolumna ceny normalnej, SECURA 10.10.2026): zakup jest z pliku — rabat cennika go
+     * nie nadpisuje, bo ocena zostałaby przy cenie, której w pliku nie ma. Reszta kart cennika dostaje rabat.
+     */
+    public function test_rated_slot_keeps_purchase_from_file(): void
+    {
+        $rated = $this->card('S-1', 28.84, 40);
+        ProductSourcePrice::query()->where('product_id', $rated->id)->where('source_key', 'file')->update([
+            'purchase_price' => 17.30,
+            'base_price_net' => 28.84,
+            'standard_discount_percent' => 21.01,
+            'base_price_source' => 'Cennik z pliku — kolumna ceny normalnej',
+        ]);
+        $plain = $this->card('S-2', 100.00, 10);
+
+        // karta z oceną liczona osobno: „reszta” to tylko S-2 z rabatem 10% (bez niej rabaty byłyby „różne”)
+        $this->getJson("/api/price-lists/{$this->list->id}/discounts")
+            ->assertOk()
+            ->assertJsonPath('special_rated_count', 1)
+            ->assertJsonPath('ungrouped.product_count', 1)
+            ->assertJsonPath('ungrouped.discount_percent', 10)
+            ->assertJsonPath('ungrouped.mixed', false);
+
+        $this->putJson("/api/price-lists/{$this->list->id}/discounts", ['ungrouped_discount' => 25])
+            ->assertOk()
+            ->assertJsonPath('products_changed', 1)
+            ->assertJsonPath('special_rated_skipped', 1);
+
+        $slot = ProductSourcePrice::query()->where('product_id', $rated->id)->where('source_key', 'file')->sole();
+        $this->assertEquals(17.30, (float) $slot->purchase_price);
+        $this->assertEquals(21.01, (float) $slot->standard_discount_percent);
+        $this->assertEquals(75.00, (float) $plain->refresh()->purchase_price);
+    }
+
     public function test_rejects_out_of_range_and_empty_payload(): void
     {
         $this->card('S-1', 100.00, 10);

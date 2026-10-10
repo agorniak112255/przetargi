@@ -1535,10 +1535,12 @@ export type CheaperSource = {
 }
 
 /**
- * Ocena ceny konta B2B: special = niższa niż cennik bazowy × (1 − rabat standardowy).
- * Wniosek z porównania, nie potwierdzenie dostawcy. Kwoty w walucie slotu ceny.
+ * Ocena ceny konta B2B albo ceny specjalnej z cennika z pliku (SECURA „40%”): special = niższa niż cennik bazowy
+ * × (1 − rabat standardowy). Wniosek z porównania, nie potwierdzenie dostawcy. Kwoty w walucie slotu ceny.
  */
 export type SupplierSpecial = {
+  /** Skąd ocena: konto B2B albo cennik z pliku (inne podpisy); brak = konto B2B. */
+  source?: 'b2b' | 'file'
   status: 'special' | 'standard' | 'worse_than_standard'
   standard_price: number
   actual_discount_percent: number

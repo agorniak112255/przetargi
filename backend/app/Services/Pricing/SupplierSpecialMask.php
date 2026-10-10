@@ -4,19 +4,23 @@ declare(strict_types=1);
 
 namespace App\Services\Pricing;
 
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Models\User;
 use App\Services\NbpExchangeRateService;
+use App\Support\ProductPriceChangeResolver;
 use App\Support\SupplierSpecialPrice;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Widok cen dla użytkownika bez uprawnienia prices.supplier_special.view (decyzja właściciela 30.09.2026): karta
  * z ceną specjalną konta B2B pokazuje cenę standardową (cennik bazowy − rabat standardowy kategorii) i od niej
- * liczą się oferty. Inne ceny zakupu bez zmian.
+ * liczą się oferty. Tak samo slot cennika z pliku z oceną (SECURA: „40% s.dystryb.” = cena specjalna, „21%” = cena
+ * normalna, decyzja właściciela 10.10.2026) — w slotach ma konto 0. Inne ceny zakupu bez zmian.
  *
  * Maska „odsłaniająca” (uprawnieni, CLI, marże rzeczywiste) nie robi nic i nie pyta bazy. Maska „ukrywająca”
  * czyta karty i sloty z oceną hurtem (preload: 2 zapytania na 1000 kart), a brakujące karty doczytuje sama —
@@ -40,6 +44,12 @@ final class SupplierSpecialMask
 
     /** @var array<string, MaskedPrice|null> „karta:konto” */
     private array $variantMemo = [];
+
+    /** @var array<int, true>|null cenniki z plików z ceną specjalną (price_lists.has_supplier_special) — raz na maskę */
+    private ?array $flaggedLists = null;
+
+    /** @var array<int, bool> id karty => ślad cennika z ceną specjalną (wiersz historii pliku albo slot pliku) */
+    private array $fileTrace = [];
 
     private ?NbpExchangeRateService $fx = null;
 
@@ -92,8 +102,8 @@ final class SupplierSpecialMask
 
     /**
      * Cena specjalna widoczna na karcie — PHP-owy bliźniak SupplierSpecialPrice::whereCardStatus($q, 'special'):
-     * slot B2B z oceną, którego cena zakupu (do grosza) i waluta (slot bez waluty = waluta karty) są ceną karty,
-     * a ocena to „special”. Kilka takich slotów → najwyższa cena standardowa (bezpieczniej ukryć więcej).
+     * slot B2B albo pliku z oceną, którego cena zakupu (do grosza) i waluta (slot bez waluty = waluta karty) są ceną
+     * karty, a ocena to „special”. Kilka takich slotów → najwyższa cena standardowa (bezpieczniej ukryć więcej).
      */
     public function card(int $productId): ?MaskedPrice
     {
@@ -130,7 +140,7 @@ final class SupplierSpecialMask
     /** Slot z oceną „special” (SupplierSpecialPrice::forSlot) — niezależnie od tego, czy jego cena jest ceną karty. */
     public function slot(ProductSourcePrice $slot): ?MaskedPrice
     {
-        if (! $this->hides || ! $slot->isB2b()) {
+        if (! $this->hides || ! $slot->carriesSupplierSpecial()) {
             return null;
         }
         $raw = $slot->getAttributes();
@@ -168,10 +178,13 @@ final class SupplierSpecialMask
         );
     }
 
-    /** Rozmiar (wariant) konta, którego slot na tej karcie ma cenę specjalną; null = cena rozmiaru bez zmian. */
+    /**
+     * Rozmiar (wariant) konta, którego slot na tej karcie ma cenę specjalną; null = cena rozmiaru bez zmian. Rozmiary
+     * mają tylko konta B2B — konto 0 (slot pliku) nigdy nie pasuje.
+     */
     public function variant(int $productId, ?int $b2bAccountId): ?MaskedPrice
     {
-        if (! $this->hides || $b2bAccountId === null) {
+        if (! $this->hides || $b2bAccountId === null || $b2bAccountId <= 0) {
             return null;
         }
         $key = $productId.':'.$b2bAccountId;
@@ -196,21 +209,58 @@ final class SupplierSpecialMask
     /**
      * Historia cen konta ukryta (decyzja D1): karta ma slot tego konta z oceną (cena bazowa i rabat standardowy) —
      * także gdy dziś cena jest standardowa, bo dawniejsze wiersze mogły być ceną specjalną. Konto null = dowolny
-     * slot z oceną na karcie.
+     * slot konta z oceną na karcie — slot pliku nie, bo wiersz „b2b…” bez przebiegu to cena konta (plik:
+     * hidesFileHistory).
      */
     public function hidesHistory(int $productId, ?int $b2bAccountId): bool
     {
-        if (! $this->hides) {
+        if (! $this->hides || ($b2bAccountId !== null && $b2bAccountId <= 0)) {
             return false;
         }
         $this->ensureLoaded($productId);
         foreach ($this->slots[$productId] ?? [] as $slot) {
+            if ($slot['source_key'] === ProductSourcePrice::SOURCE_FILE) {
+                continue;
+            }
             if ($b2bAccountId === null || $slot['account_id'] === $b2bAccountId) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /**
+     * Historia cen z pliku ukryta (import i rabat cennika): karta ma slot pliku z oceną — ta sama reguła co
+     * hidesHistory dla konta, także gdy dziś cena jest standardowa — albo ślad cennika z ceną specjalną
+     * (price_lists.has_supplier_special): wiersz historii pliku z tego cennika lub slot pliku z jego id. Ślad zostaje,
+     * gdy slot przejął inny cennik albo ocena zniknęła — dawne wiersze dalej mogą być ceną 40%.
+     */
+    public function hidesFileHistory(int $productId): bool
+    {
+        if (! $this->hides) {
+            return false;
+        }
+        $this->ensureLoaded($productId);
+        foreach ($this->slots[$productId] ?? [] as $slot) {
+            if ($slot['source_key'] === ProductSourcePrice::SOURCE_FILE) {
+                return true;
+            }
+        }
+
+        return $this->hasFlaggedTrace($productId);
+    }
+
+    /** Cennik z pliku z ceną specjalną (price_lists.has_supplier_special) — jedno zapytanie na maskę. */
+    public function flaggedPriceList(?int $priceListId): bool
+    {
+        return $this->hides && $priceListId !== null && isset($this->flaggedLists()[$priceListId]);
+    }
+
+    /** Karta ma dowolny slot z oceną (konto albo plik) — zapisane dawniej ceny zakupu mogły być ceną specjalną. */
+    public function hidesAnyHistory(int $productId): bool
+    {
+        return $this->hidesHistory($productId, null) || $this->hidesFileHistory($productId);
     }
 
     /** Karta w widoku standardowym; bez ceny specjalnej ta sama instancja. */
@@ -287,7 +337,10 @@ final class SupplierSpecialMask
             $row['purchase_price_pln'] = $this->fx()->toPlnOrNull($fields['purchase_price'], $currency);
         }
         if (is_array($row['supplier_special'] ?? null) && ($row['supplier_special']['status'] ?? null) === SupplierSpecialPrice::SPECIAL) {
-            $row['supplier_special'] = $masked->evaluation;
+            $source = array_key_exists('source', $row['supplier_special'])
+                ? ['source' => $masked->sourceKey === ProductSourcePrice::SOURCE_FILE ? 'file' : 'b2b']
+                : [];
+            $row['supplier_special'] = [...$masked->evaluation, ...$source];
         }
 
         return $row;
@@ -385,6 +438,71 @@ final class SupplierSpecialMask
         return null;
     }
 
+    /**
+     * Ślad cennika z ceną specjalną doczytywany hurtem: za pierwszym razem dla wszystkich kart już wczytanych przez
+     * maskę (preload), jedno zapytanie na 1000 kart; bez flagowanych cenników — bez zapytania.
+     */
+    private function hasFlaggedTrace(int $productId): bool
+    {
+        if (! array_key_exists($productId, $this->fileTrace)) {
+            $pending = [$productId => $productId];
+            foreach (array_keys($this->cards) as $id) {
+                if (! array_key_exists($id, $this->fileTrace)) {
+                    $pending[$id] = $id;
+                }
+            }
+            $this->loadFileTraces(array_values($pending));
+        }
+
+        return $this->fileTrace[$productId];
+    }
+
+    /**
+     * @param  list<int>  $ids
+     */
+    private function loadFileTraces(array $ids): void
+    {
+        foreach ($ids as $id) {
+            $this->fileTrace[$id] = false;
+        }
+        $lists = array_keys($this->flaggedLists());
+        if ($lists === []) {
+            return;
+        }
+        foreach (array_chunk($ids, self::CHUNK) as $chunk) {
+            $history = DB::table('product_price_history')
+                ->select('product_id')
+                ->whereIn('product_id', $chunk)
+                ->whereIn('source', ProductPriceChangeResolver::FILE_SOURCES)
+                ->whereIn('price_list_id', $lists);
+            $found = DB::table('product_source_prices')
+                ->select('product_id')
+                ->whereIn('product_id', $chunk)
+                ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+                ->whereIn('price_list_id', $lists)
+                ->union($history)
+                ->pluck('product_id');
+            foreach ($found as $id) {
+                $this->fileTrace[(int) $id] = true;
+            }
+        }
+    }
+
+    /**
+     * @return array<int, true>
+     */
+    private function flaggedLists(): array
+    {
+        if ($this->flaggedLists === null) {
+            $this->flaggedLists = [];
+            foreach (PriceList::query()->where('has_supplier_special', true)->pluck('id') as $id) {
+                $this->flaggedLists[(int) $id] = true;
+            }
+        }
+
+        return $this->flaggedLists;
+    }
+
     private function ensureLoaded(int $productId): void
     {
         if (! array_key_exists($productId, $this->cards)) {
@@ -408,10 +526,10 @@ final class SupplierSpecialMask
                 'currency' => self::code($card->currency),
             ];
         }
-        // te same sloty co ProductController::evaluableSlotsByProduct — z ceną bazową i rabatem standardowym
+        // te same sloty co ProductController::evaluableSlotsByProduct — konta i plik z ceną bazową i rabatem
         $slots = ProductSourcePrice::query()
             ->whereIn('product_id', $ids)
-            ->where('source_key', 'like', 'b2b:%')
+            ->tap(static fn ($q) => SupplierSpecialPrice::whereEvaluableSource($q))
             ->whereNotNull('base_price_net')
             ->whereNotNull('standard_discount_percent')
             ->orderBy('id')
@@ -477,8 +595,13 @@ final class SupplierSpecialMask
         return $this->fx ??= app(NbpExchangeRateService::class);
     }
 
+    /** Konto slotu; slot pliku = 0 (nie jest kontem — variant() i hidesHistory() go nie dopasują). */
     private static function accountIdOf(mixed $accountId, string $sourceKey): int
     {
+        if ($sourceKey === ProductSourcePrice::SOURCE_FILE) {
+            return 0;
+        }
+
         return $accountId !== null ? (int) $accountId : (int) substr($sourceKey, 4);
     }
 

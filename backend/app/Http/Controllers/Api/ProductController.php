@@ -657,8 +657,8 @@ class ProductController extends Controller
 
     /**
      * Blok „Stan w ERP XL” — ceny zakupu z faktur XL i wartości księgowe partii (magazyny towaru: wartość / ilość
-     * = cena zakupu) ukryte na karcie ze slotem konta z oceną ceny specjalnej (decyzja D3): zakup po cenie
-     * specjalnej zdradzałby ją wprost. Stany, ilości i daty zostają.
+     * = cena zakupu) ukryte na karcie ze slotem konta albo pliku z oceną ceny specjalnej (decyzja D3): zakup po
+     * cenie specjalnej zdradzałby ją wprost. Stany, ilości i daty zostają.
      *
      * @param  array<string, mixed>|null  $erp  ErpCardStock::forProduct
      * @return array<string, mixed>|null
@@ -668,7 +668,7 @@ class ProductController extends Controller
         if ($erp === null) {
             return null;
         }
-        $hidden = $mask->hidesHistory($productId, null);
+        $hidden = $mask->hidesAnyHistory($productId);
         if ($hidden) {
             $erp = self::withoutErpValues($erp);
             foreach ($erp['items'] ?? [] as $i => $item) {
@@ -759,7 +759,7 @@ class ProductController extends Controller
                 'standard_discount_percent' => $slot->standard_discount_percent,
                 // cena specjalna dostawcy (wniosek z porównania); null = brak ceny bazowej albo reguły rabatu.
                 // Nie mylić z special_prices — to ceny kontraktowe klientów.
-                'supplier_special' => SupplierSpecialPrice::forSlot($slot),
+                'supplier_special' => self::withSpecialSource(SupplierSpecialPrice::forSlot($slot), $slot),
                 'currency' => $slot->currency,
                 'availability' => $slot->availability,
                 // warunek zamawiania dosłownie ze slotu (tylko B2B); varies = rozmiary karty mają różne warunki
@@ -794,13 +794,13 @@ class ProductController extends Controller
 
     /**
      * Ocena ceny specjalnej dla ceny widocznej na karcie: slot obowiązujący (ProductEffectivePrice::explain), o ile
-     * jest slotem B2B z oceną, a jego cena zakupu i waluta są dokładnie ceną karty. Gdy cenę karty ustala inne
-     * źródło (plik producenta, inne konto), wersje albo cena karty została z wyłączonego źródła, znacznik byłby
+     * jest slotem B2B albo pliku z oceną, a jego cena zakupu i waluta są dokładnie ceną karty. Gdy cenę karty ustala
+     * inne źródło (plik producenta, inne konto), wersje albo cena karty została z wyłączonego źródła, znacznik byłby
      * nieprawdą o cenie, której użytkownik nie widzi — wtedy null. Slot innego konta o tej samej cenie też nie:
      * jego ocena mówi o rabacie tamtego konta, a nie o cenie karty.
      *
      * @param  list<ProductSourcePrice>  $candidates  sloty z oceną w cenie karty (slotsAtCardPrice)
-     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float, base_price: float, standard_discount_percent: float, category: string|null}|null
+     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float, base_price: float, standard_discount_percent: float, category: string|null, source: 'b2b'|'file'}|null
      */
     private function cardSupplierSpecial(array $candidates, ?ProductSourcePrice $winner): ?array
     {
@@ -820,12 +820,23 @@ class ProductController extends Controller
         }
 
         // kategoria cennika bazowego (UVEX: arkusz) — „cena normalna w kategorii …” przy znaczniku
-        return [...$evaluation, 'category' => $best->base_price_category];
+        return self::withSpecialSource([...$evaluation, 'category' => $best->base_price_category], $best);
     }
 
     /**
-     * Sloty B2B z oceną (cena bazowa i rabat standardowy), których cena zakupu i waluta są dokładnie ceną karty —
-     * ta sama reguła na liście (evaluableSlotsByProduct) i w szczegółach.
+     * Źródło oceny dla widoków: „b2b” (cena konta) albo „file” (cena specjalna z cennika z pliku) — inne podpisy.
+     *
+     * @param  array<string, mixed>|null  $evaluation
+     * @return array<string, mixed>|null
+     */
+    private static function withSpecialSource(?array $evaluation, ProductSourcePrice $slot): ?array
+    {
+        return $evaluation === null ? null : [...$evaluation, 'source' => $slot->isB2b() ? 'b2b' : 'file'];
+    }
+
+    /**
+     * Sloty B2B i pliku z oceną (cena bazowa i rabat standardowy), których cena zakupu i waluta są dokładnie ceną
+     * karty — ta sama reguła na liście (evaluableSlotsByProduct) i w szczegółach.
      *
      * @param  iterable<ProductSourcePrice>  $slots  sloty karty (dowolne — filtr tutaj)
      * @return list<ProductSourcePrice>
@@ -840,7 +851,7 @@ class ProductController extends Controller
 
         $out = [];
         foreach ($slots as $slot) {
-            if (! $slot->isB2b() || $slot->purchase_price === null || $slot->base_price_net === null || $slot->standard_discount_percent === null) {
+            if (! $slot->carriesSupplierSpecial() || $slot->purchase_price === null || $slot->base_price_net === null || $slot->standard_discount_percent === null) {
                 continue;
             }
             // slot bez waluty dziedziczy walutę karty (ProductEffectivePrice::resolve)
@@ -941,7 +952,7 @@ class ProductController extends Controller
         foreach (array_chunk($productIds, 1000) as $chunk) {
             $slots = ProductSourcePrice::query()
                 ->whereIn('product_id', $chunk)
-                ->where('source_key', 'like', 'b2b:%')
+                ->tap(static fn ($q) => SupplierSpecialPrice::whereEvaluableSource($q))
                 ->whereNotNull('base_price_net')
                 ->whereNotNull('standard_discount_percent')
                 ->get(['id', 'product_id', 'source_key', 'purchase_price', 'currency', 'base_price_net', 'base_price_category', 'standard_discount_percent', 'checked_at']);

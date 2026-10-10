@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\Client;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
@@ -267,6 +268,83 @@ final class ProductSupplierSpecialApiTest extends TestCase
             ->assertOk()
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.sku', 'F-SPEC');
+    }
+
+    /**
+     * Cennik z pliku z ceną specjalną (SECURA, decyzja właściciela 10.10.2026): slot pliku niesie ocenę jak slot
+     * konta — 28,84 − 21,01% = 22,78 zł, cena 40% = 17,30 zł → special; plik bez oceny i plik poza ceną karty nie.
+     */
+    public function test_slot_pliku_z_oceną_na_karcie_liście_i_w_filtrze(): void
+    {
+        $list = PriceList::query()->create(['manufacturer' => 'SECURA', 'manufacturer_key' => 'secura', 'version' => '2026-10']);
+        $special = $this->secura('S-FILE', 17.30);
+        $this->fileSlot($special, $list, 17.30);
+        $plain = $this->secura('S-PLAIN', 17.30);
+        $this->fileSlot($plain, $list, 17.30, ['base_price_net' => null, 'standard_discount_percent' => null]);
+        $other = $this->secura('S-OTHER', 20.00);
+        $this->fileSlot($other, $list, 17.30);
+        $standard = $this->secura('S-STD', 22.78);
+        $this->fileSlot($standard, $list, 22.78);
+
+        $this->getJson('/api/products/'.$special->id)
+            ->assertOk()
+            ->assertJsonPath('source_prices.0.source_key', ProductSourcePrice::SOURCE_FILE)
+            ->assertJsonPath('source_prices.0.base_price_net', '28.84')
+            ->assertJsonPath('source_prices.0.standard_discount_percent', '21.01')
+            ->assertJsonPath('source_prices.0.supplier_special.status', 'special')
+            ->assertJsonPath('source_prices.0.supplier_special.standard_price', 22.78)
+            ->assertJsonPath('source_prices.0.supplier_special.saving_net', 5.48)
+            ->assertJsonPath('source_prices.0.supplier_special.source', 'file')
+            ->assertJsonPath('supplier_special.status', 'special')
+            ->assertJsonPath('supplier_special.source', 'file');
+        $this->getJson('/api/products/'.$plain->id)
+            ->assertOk()
+            ->assertJsonPath('source_prices.0.supplier_special', null)
+            ->assertJsonPath('supplier_special', null);
+
+        $rows = collect($this->getJson('/api/products?per_page=all')->assertOk()->json('data'))->keyBy('sku');
+        $this->assertSame('special', $rows['S-FILE']['supplier_special']['status']);
+        $this->assertSame('file', $rows['S-FILE']['supplier_special']['source']);
+        $this->assertSame(28.84, $rows['S-FILE']['supplier_special']['base_price']);
+        $this->assertNull($rows['S-PLAIN']['supplier_special']);
+        $this->assertNull($rows['S-OTHER']['supplier_special']);
+        $this->assertSame('standard', $rows['S-STD']['supplier_special']['status']);
+
+        $specialRows = collect($this->getJson('/api/products?per_page=all&supplier_special=special')->assertOk()->json('data'));
+        $this->assertSame(['S-FILE'], $specialRows->pluck('sku')->all());
+    }
+
+    private function secura(string $sku, float $purchase): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => 'Półmaska SECURA '.$sku,
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => 28.84,
+            'purchase_price' => $purchase,
+            'currency' => 'PLN',
+            'stock' => 1,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     */
+    private function fileSlot(Product $product, PriceList $list, float $purchase, array $values = []): ProductSourcePrice
+    {
+        return ProductSourcePrice::query()->create([
+            'product_id' => $product->id,
+            'source_key' => ProductSourcePrice::SOURCE_FILE,
+            'price_list_id' => $list->id,
+            'catalog_price_net' => 28.84,
+            'purchase_price' => $purchase,
+            'currency' => 'PLN',
+            'base_price_net' => 28.84,
+            'base_price_source' => 'SECURA cennik 2026.xlsx',
+            'standard_discount_percent' => 21.01,
+            'checked_at' => Carbon::parse('2026-10-10 08:00:00'),
+            ...$values,
+        ]);
     }
 
     private function product(string $sku, float $purchase, string $currency = 'PLN'): Product

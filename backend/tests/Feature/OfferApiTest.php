@@ -171,6 +171,24 @@ final class OfferApiTest extends TestCase
         $this->assertEquals((float) self::SPECIAL_PRICE, $this->getJson("/api/offers/{$offer->id}")->assertOk()->json('items.0.unit_cost'));
     }
 
+    public function test_card_with_file_special_price_respects_supplier_special_mask(): void
+    {
+        // SECURA z pliku: cena 40% (17,30) to cena specjalna, koszt handlowca = cena standardowa 22,78
+        $card = $this->securaFileCard()['product'];
+        $withoutPermission = $this->author(0);
+        $offer = Offer::query()->create(['user_id' => $withoutPermission->id]);
+        OfferItem::query()->create(['offer_id' => $offer->id, 'position' => 1, 'product_id' => $card->id]);
+
+        Sanctum::actingAs($withoutPermission);
+        $response = $this->getJson("/api/offers/{$offer->id}")->assertOk();
+        $this->assertEquals((float) self::FILE_STANDARD, $response->json('items.0.unit_cost'));
+        $this->assertNoSpecialLeak((string) $response->getContent());
+
+        $withoutPermission->givePermissionTo('prices.supplier_special.view');
+        Sanctum::actingAs($withoutPermission->fresh());
+        $this->assertEquals((float) self::FILE_SPECIAL_PRICE, $this->getJson("/api/offers/{$offer->id}")->assertOk()->json('items.0.unit_cost'));
+    }
+
     public function test_item_limit(): void
     {
         config(['offers.max_items' => 2]);

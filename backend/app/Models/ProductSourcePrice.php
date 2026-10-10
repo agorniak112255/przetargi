@@ -35,7 +35,8 @@ class ProductSourcePrice extends Model
         // „size”); null = jedna cena
         'size_price_max',
         'discount_percent',
-        // cennik bazowy dostawcy obok ceny konta (App\Support\SupplierSpecialPrice); catalog_price_net bez zmian
+        // cennik bazowy dostawcy obok ceny konta albo ceny specjalnej z pliku (App\Support\SupplierSpecialPrice);
+        // catalog_price_net bez zmian
         'base_price_net',
         'base_price_category',
         'base_price_code',
@@ -104,6 +105,16 @@ class ProductSourcePrice extends Model
     public function isB2b(): bool
     {
         return str_starts_with((string) $this->source_key, self::B2B_PREFIX);
+    }
+
+    /**
+     * Slot, który może nieść ocenę ceny specjalnej (App\Support\SupplierSpecialPrice): konto B2B albo cennik z pliku
+     * z kolumną ceny specjalnej (SECURA „40% s.dystryb.”, decyzja właściciela 10.10.2026). Sama ocena wymaga jeszcze
+     * ceny bazowej i rabatu standardowego — slot pliku bez nich zachowuje się jak dotąd.
+     */
+    public function carriesSupplierSpecial(): bool
+    {
+        return $this->isB2b() || $this->source_key === self::SOURCE_FILE;
     }
 
     public function product(): BelongsTo

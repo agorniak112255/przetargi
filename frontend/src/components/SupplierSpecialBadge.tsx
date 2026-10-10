@@ -1,9 +1,9 @@
 import type { SupplierSpecial } from '../lib/api'
 import { currencyLabel, formatPct, formatPrice } from '../lib/priceChange'
-import { supplierSpecialSummary } from '../lib/supplierSpecial'
+import { supplierSpecialLabels, supplierSpecialSummary } from '../lib/supplierSpecial'
 
 /**
- * Ocena ceny konta B2B względem cennika bazowego dostawcy. „special” — wyraźna plakietka,
+ * Ocena ceny konta B2B (albo ceny specjalnej z cennika z pliku) względem cennika bazowego. „special” — wyraźna plakietka,
  * „worse_than_standard” — dyskretna uwaga, „standard” i brak oceny — nic.
  */
 export function SupplierSpecialBadge({
@@ -26,7 +26,7 @@ export function SupplierSpecialBadge({
         className={`${block ? 'block w-fit' : 'inline-block'} whitespace-nowrap rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white ${block ? '' : className}`}
         title={title}
       >
-        Cena specjalna B2B
+        {supplierSpecialLabels(special.source).badge}
       </span>
     )
     if (!block) return badge

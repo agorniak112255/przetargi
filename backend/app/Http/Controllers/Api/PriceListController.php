@@ -174,7 +174,11 @@ class PriceListController extends Controller
     {
         $owner = $this->b2bLists->owners([$priceList])[$priceList->id] ?? null;
         $details = $priceList->load('importer:id,name')->toArray();
-        if ($owner !== null && $this->hidesAccountPrices($owner->id, SupplierSpecialMask::forUser($request->user()))) {
+        $mask = SupplierSpecialMask::forUser($request->user());
+        // wpis konta B2B bywa wspólny z importami pliku — obie reguły niezależnie
+        $hidden = ($owner !== null && $this->hidesAccountPrices($owner->id, $mask))
+            || $this->hidesFilePrices($priceList, $mask);
+        if ($hidden) {
             $details = $this->withoutPrices($details);
         }
 
@@ -217,6 +221,28 @@ class PriceListController extends Controller
     {
         return $mask->hides() && ProductSourcePrice::query()
             ->where(static fn ($q) => $q->where('b2b_account_id', $accountId)->orWhere('source_key', ProductSourcePrice::b2bKey($accountId)))
+            ->whereNotNull('base_price_net')
+            ->whereNotNull('standard_discount_percent')
+            ->exists();
+    }
+
+    /**
+     * Cennik z pliku z ceną specjalną (SECURA: kolumna 40% = cena specjalna, decyzja właściciela 10.10.2026):
+     * szczegóły ostatniego importu niosą cenę 40% (purchase_new). Ukryte trwale po fladze cennika
+     * (has_supplier_special — import nigdy jej nie zdejmuje), a zapasowo, gdy slot pliku tego cennika ma ocenę.
+     */
+    private function hidesFilePrices(PriceList $priceList, SupplierSpecialMask $mask): bool
+    {
+        if (! $mask->hides()) {
+            return false;
+        }
+        if ((bool) $priceList->getAttribute('has_supplier_special')) {
+            return true;
+        }
+
+        return ProductSourcePrice::query()
+            ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+            ->where('price_list_id', $priceList->id)
             ->whereNotNull('base_price_net')
             ->whereNotNull('standard_discount_percent')
             ->exists();
@@ -589,6 +615,10 @@ class PriceListController extends Controller
     {
         if (($blocked = $this->b2bAccountBlock($priceList, 'delete')) !== null) {
             return $blocked;
+        }
+        // cennik z cenami specjalnymi dostawcy — usunięcie odsłoniłoby je w historii cen (PriceListDeletionService)
+        if (($reason = $this->deletion->deletionBlock($priceList)) !== null) {
+            return response()->json(['message' => $reason], 422);
         }
 
         try {

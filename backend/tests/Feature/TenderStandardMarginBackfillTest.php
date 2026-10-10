@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductSourcePrice;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
@@ -201,6 +203,64 @@ final class TenderStandardMarginBackfillTest extends TestCase
         $this->assertNotNull($tender->fresh()->margin_percent_standard);
     }
 
+    public function test_price_list_option_overwrites_twins_of_items_with_cards_of_that_list(): void
+    {
+        // SECURA dostała cenę specjalną: standard 22,78 zamiast dawnej ceny, od której liczono zapisane marże
+        ['product' => $secura, 'list' => $list] = $this->securaFileCard();
+        $other = $this->securaFileCard('SEC-OTHER', [], [])['product'];
+        $otherList = PriceList::query()->create(['manufacturer' => 'Inny', 'manufacturer_key' => 'inny', 'version' => '1']);
+        ProductSourcePrice::query()->where('product_id', $other->id)->update(['price_list_id' => $otherList->id]);
+        $plain = Product::query()->create([
+            'sku' => 'ZWYKLA-2', 'name' => 'Rękawice zwykłe', 'manufacturer' => 'REJS', 'catalog_price_net' => 50, 'purchase_price' => 40,
+            'currency' => 'PLN', 'stock' => 1,
+        ]);
+
+        $affected = $this->tender('S1');
+        $main = $this->plainItem($affected, $secura, null, 30.0, 40.0, 30.0);
+        $companion = $this->plainItem($affected, $plain, $secura, 80.0, 30.0, 30.0);
+        $plainItem = $this->plainItem($affected, $plain, null, 50.0, 20.0, 20.0);
+        $affected->forceFill(['margin_percent' => 30.0, 'margin_percent_standard' => 27.0])->saveQuietly();
+        // karta innego cennika i przetarg bez kart SECURA — bez zmian
+        $untouched = $this->tender('S2');
+        $otherItem = $this->plainItem($untouched, $other, null, 30.0, 40.0, 33.0);
+        $untouched->forceFill(['margin_percent' => 40.0, 'margin_percent_standard' => 33.0])->saveQuietly();
+        $stamp = TenderItem::query()->whereKey($main->id)->value('updated_at');
+        $before = $this->snapshot();
+
+        // podgląd: liczy, nic nie zapisuje
+        $this->artisan('tenders:backfill-standard-margins', ['--price-list' => $list->id])
+            ->expectsOutputToContain('pozycje 2 przeliczone, 0 bez wyniku (NULL); przetargi 1 przeliczone')
+            ->assertSuccessful();
+        $this->assertSame($before, $this->snapshot());
+
+        $this->artisan('tenders:backfill-standard-margins', ['--price-list' => $list->id, '--apply' => true])->assertSuccessful();
+
+        $mainTwin = round((30.0 - 22.78) / 30.0 * 100, 2);
+        $companionTwin = round((80.0 - 40.0 - 22.78) / 80.0 * 100, 2);
+        $this->assertTwin(number_format($mainTwin, 2, '.', ''), $main);
+        $this->assertTwin(number_format($companionTwin, 2, '.', ''), $companion);
+        $this->assertTwin('20.00', $plainItem);
+        $weighted = round(($mainTwin * 30.0 + $companionTwin * 80.0 + 20.0 * 50.0) / 160.0, 2);
+        $this->assertTwin(number_format($weighted, 2, '.', ''), $affected);
+        $this->assertTwin('33.00', $otherItem);
+        $this->assertTwin('33.00', $untouched);
+        // margin_percent i daty zmian nietknięte
+        $this->assertSame('40.00', $main->fresh()->margin_percent);
+        $this->assertSame('30.00', $affected->fresh()->margin_percent);
+        $this->assertEquals($stamp, TenderItem::query()->whereKey($main->id)->value('updated_at'));
+
+        // karta bez ceny: stara bliźniacza mogła zdradzać cenę specjalną — NULL zamiast niej
+        $secura->forceFill(['purchase_price' => 0, 'catalog_price_net' => 0])->save();
+        ProductSourcePrice::query()->where('product_id', $secura->id)->update(['purchase_price' => 0]);
+        $this->artisan('tenders:backfill-standard-margins', ['--price-list' => $list->id, '--apply' => true])
+            ->expectsOutputToContain('pozycje 1 przeliczone, 1 bez wyniku (NULL)')
+            ->assertSuccessful();
+        $this->assertTwin(null, $main);
+        $this->assertSame('40.00', $main->fresh()->margin_percent);
+
+        $this->artisan('tenders:backfill-standard-margins', ['--price-list' => 999999])->assertFailed();
+    }
+
     public function test_recalculation_rejects_a_revealing_mask_for_the_twin(): void
     {
         $special = $this->supplierSpecialCard()['product'];
@@ -237,6 +297,27 @@ final class TenderStandardMarginBackfillTest extends TestCase
             'target_margin_percent' => 18,
             'last_activity_at' => now(),
         ]);
+    }
+
+    /** Pozycja z zapisanymi obiema marżami; drugi produkt w osobnej cenie 40,00 zł oferty. */
+    private function plainItem(Tender $tender, Product $main, ?Product $companion, float $lineOffer, float $margin, float $twin): TenderItem
+    {
+        $item = new TenderItem([
+            'tender_id' => $tender->id,
+            'line_no' => TenderItem::query()->where('tender_id', $tender->id)->count() + 1,
+            'requirement' => 'Półmaska',
+            'main_product_id' => $main->id,
+            'companion_product_id' => $companion?->id,
+            'quantity' => 1,
+            'offer_price' => $companion !== null ? $lineOffer - 40.0 : $lineOffer,
+            'companion_offer_price' => $companion !== null ? 40.0 : null,
+            'margin_percent' => $margin,
+            'status' => 'matched',
+        ]);
+        // marża bliźniacza poza fillable — wprost, jak zapisuje ją TenderPricingService
+        $item->forceFill(['margin_percent_standard' => $twin])->saveQuietly();
+
+        return $item;
     }
 
     /** Pozycja zapisana bez przeliczenia (stan sprzed marży bliźniaczej). */

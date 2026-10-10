@@ -1019,7 +1019,7 @@ Wycinanie trwa w tle ok. 20 s na zdjęcie — przy wielu kartach to nawet kilka 
           {canSupplierSpecial && (
             <label
               className="flex items-center gap-2 rounded border border-emerald-300 bg-white px-3 py-2 text-sm text-emerald-800"
-              title="Karty, których cena konta B2B jest niższa niż cennik bazowy dostawcy minus rabat standardowy (Cenniki B2B → Rabaty)"
+              title="Karty, których cena konta B2B jest niższa niż cennik bazowy dostawcy minus rabat standardowy (Cenniki B2B → Rabaty), oraz karty z ceną specjalną z cennika z pliku (np. SECURA: kolumna 40%)"
             >
               <input
                 type="checkbox"
@@ -1030,7 +1030,7 @@ Wycinanie trwa w tle ok. 20 s na zdjęcie — przy wielu kartach to nawet kilka 
                   setPage(1)
                 }}
               />
-              Tylko ceny specjalne B2B
+              Tylko ceny specjalne
             </label>
           )}
           <label

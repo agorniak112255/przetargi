@@ -10,6 +10,7 @@ use App\Models\B2bSyncRun;
 use App\Models\ErpItem;
 use App\Models\ErpItemLink;
 use App\Models\ErpItemPurchase;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
@@ -27,6 +28,9 @@ use Spatie\Permission\PermissionRegistrar;
  * cennik bazowy 248,67 zł, rabat standardowy 15% → cena standardowa 211,37 zł. Rozmiary 173,19 i 190,00 zł
  * (size_price_max 190,00); w widoku standardowym 190,00 → 231,89 (stosunek 211,37 / 173,19).
  *
+ * Karta SECURA z cennika z pliku (decyzja właściciela 10.10.2026): katalogowa 28,84 zł, cena specjalna „40%
+ * s.dystryb.” 17,30 zł, cena normalna „21%” → rabat standardowy 21,01% → cena standardowa 22,78 zł.
+ *
  * assertNoSpecialLeak() pilnuje, żeby żadna z liczb zdradzających cenę specjalną nie wyszła w odpowiedzi.
  * Użycie: $this->setUpSupplierSpecial() w setUp(), potem $this->supplierSpecialCard().
  */
@@ -43,6 +47,14 @@ trait SupplierSpecialFixture
     protected const SPECIAL_SIZE_MAX_MASKED = '231.89';
 
     protected const SPECIAL_ERP_PRICE = 173.19;
+
+    protected const FILE_SPECIAL_PRICE = '17.30';
+
+    protected const FILE_CATALOG = '28.84';
+
+    protected const FILE_STANDARD = '22.78';
+
+    protected const FILE_STANDARD_DISCOUNT = '21.01';
 
     protected ?B2bAccount $uvexAccount = null;
 
@@ -187,6 +199,81 @@ trait SupplierSpecialFixture
         ]);
     }
 
+    /**
+     * Karta SECURA z cennika z pliku: slot „file” z ceną specjalną 17,30 zł (40%), cennikiem bazowym = katalogowa
+     * 28,84 zł i rabatem standardowym 21,01% (cena 21%); wiersz historii importu, szczegóły ostatniego importu
+     * w cenniku i zakup w ERP XL po cenie specjalnej.
+     *
+     * @param  array<string, mixed>  $card  nadpisania pól karty
+     * @param  array<string, mixed>  $slot  nadpisania pól slotu
+     * @return array{product: Product, slot: ProductSourcePrice, list: PriceList}
+     */
+    protected function securaFileCard(string $sku = 'SEC-1001', array $card = [], array $slot = []): array
+    {
+        $list = PriceList::query()->create([
+            'manufacturer' => 'SECURA',
+            'manufacturer_key' => 'secura',
+            'version' => '2026-10',
+            'original_filename' => 'SECURA cennik 2026.xlsx',
+            'rows_total' => 1,
+        ]);
+        $product = Product::query()->create([
+            'sku' => $sku,
+            'name' => 'Półmaska SECURA '.$sku,
+            'manufacturer' => 'SECURA',
+            'catalog_price_net' => self::FILE_CATALOG,
+            'purchase_price' => self::FILE_SPECIAL_PRICE,
+            'discount_percent' => '40.01',
+            'currency' => 'PLN',
+            'stock' => 1,
+            ...$card,
+        ]);
+        $fileSlot = ProductSourcePrice::query()->create([
+            'product_id' => $product->id,
+            'source_key' => ProductSourcePrice::SOURCE_FILE,
+            'price_list_id' => $list->id,
+            'catalog_price_net' => self::FILE_CATALOG,
+            'purchase_price' => self::FILE_SPECIAL_PRICE,
+            'discount_percent' => '40.01',
+            'currency' => 'PLN',
+            'base_price_net' => self::FILE_CATALOG,
+            'base_price_source' => 'SECURA cennik 2026.xlsx',
+            'standard_discount_percent' => self::FILE_STANDARD_DISCOUNT,
+            'checked_at' => Carbon::now()->subDay(),
+            ...$slot,
+        ]);
+        $change = [
+            'sku' => $sku,
+            'name' => $product->name,
+            'catalog_old' => 28.84,
+            'catalog_new' => 28.84,
+            'catalog_pct' => 0.0,
+            'purchase_old' => 18.0,
+            'purchase_new' => 17.3,
+            'discount_old' => 37.59,
+            'discount_new' => 40.01,
+            'direction' => 'down',
+        ];
+        $list->forceFill([
+            'price_changes' => [$change],
+            'updated_products' => [[...$change, 'price_changed' => true, 'fields' => ['purchase_price']]],
+            'product_ids' => [$product->id],
+            // import zapisał slot pliku z oceną → cennik oznaczony na stałe (jak PriceListImportService)
+            'has_supplier_special' => $fileSlot->base_price_net !== null && $fileSlot->standard_discount_percent !== null,
+        ])->save();
+        ProductPriceHistory::query()->create([
+            'product_id' => $product->id,
+            'price_list_id' => $list->id,
+            'catalog_price_net' => self::FILE_CATALOG,
+            'purchase_price' => self::FILE_SPECIAL_PRICE,
+            'currency' => 'PLN',
+            'source' => 'price_list_import',
+        ]);
+        $this->erpPurchase($product, (float) self::FILE_SPECIAL_PRICE);
+
+        return ['product' => $product, 'slot' => $fileSlot, 'list' => $list];
+    }
+
     /** Towar ERP XL powiązany z kartą z zakupem (PZ) po podanej cenie jednostkowej. */
     protected function erpPurchase(Product $product, float $unitPricePln): ErpItem
     {
@@ -251,7 +338,8 @@ trait SupplierSpecialFixture
     /**
      * Odpowiedź dla użytkownika bez uprawnienia nie może zawierać żadnej liczby zdradzającej cenę specjalną:
      * cenę konta 173,19 (także jako float PLN), rozmiar 190,00 w prawdziwej cenie, rabat faktyczny 30,35%,
-     * oszczędność 38,18 zł ani ceny z narzutem 18% (204,36).
+     * oszczędność 38,18 zł ani ceny z narzutem 18% (204,36). Karta SECURA z pliku: cena specjalna 17,30 (także
+     * 17.3 jako float), rabat faktyczny 40,01%, oszczędność 5,48 zł, cena z narzutem 18% (20,41).
      */
     protected function assertNoSpecialLeak(string $json): void
     {
@@ -261,6 +349,10 @@ trait SupplierSpecialFixture
             '30.35' => '/(?<!\d)30[.,]35(?!\d)/',
             '38.18' => '/(?<!\d)38[.,]18(?!\d)/',
             '204.36' => '/(?<!\d)204[.,]36(?!\d)/',
+            '17.30' => '/(?<![\d.])17[.,]30?(?!\d)/',
+            '40.01' => '/(?<!\d)40[.,]01(?!\d)/',
+            '5.48' => '/(?<![\d.,])5[.,]48(?!\d)/',
+            '20.41' => '/(?<!\d)20[.,]41(?!\d)/',
         ];
         foreach ($patterns as $label => $pattern) {
             if (preg_match($pattern, $json, $match, PREG_OFFSET_CAPTURE) === 1) {

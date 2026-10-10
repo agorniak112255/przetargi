@@ -27,13 +27,13 @@ final class ProductPriceChangeResolver
     private const IDS_PER_QUERY = 1000;
 
     /** Oba źródła piszą ceny slotu pliku — rabat z okna cennika zmienia cenę tego samego źródła. */
-    private const FILE_SOURCES = ['price_list_import', 'price_list_discount'];
+    public const FILE_SOURCES = ['price_list_import', 'price_list_discount'];
 
     public function __construct(private readonly B2bConnectorRegistry $connectors) {}
 
     /**
      * Ostatnia zmiana ceny dla każdego produktu — kilka zapytań niezależnie od liczby produktów.
-     * Zmiana ukryta przed widzem bez uprawnienia do cen specjalnych (historia konta B2B z oceną, decyzja D1) nie
+     * Zmiana ukryta przed widzem bez uprawnienia do cen specjalnych (historia konta B2B albo pliku z oceną, D1) nie
      * liczy się: zostaje ostatnia zmiana wśród widocznych albo null.
      *
      * @param  list<int>  $productIds
@@ -68,7 +68,7 @@ final class ProductPriceChangeResolver
      * porównywalnego wiersza tej samej grupy źródła — oraz osobno dodania (pierwszy wiersz grupy źródła na karcie).
      * Poprzedni wiersz może leżeć przed okresem, więc karty z ruchem w okresie czytane są z całą historią.
      * Wiersz po zmianie waluty w źródle nie jest ani zmianą, ani dodaniem (nie ma z czym porównać, źródło już było).
-     * Wiersze ukryte maską (konto B2B z oceną ceny specjalnej) pomijane w całości — zmiany i dodania.
+     * Wiersze ukryte maską (konto B2B albo plik z oceną ceny specjalnej) pomijane w całości — zmiany i dodania.
      * Strumień, nie lista: przy całej historii z okresu prawie wszystko to dodania (dziesiątki tysięcy elementów),
      * więc wołający trzyma tylko to, czego potrzebuje. Zapytania ruszają przy pierwszej iteracji.
      *
@@ -157,8 +157,9 @@ final class ProductPriceChangeResolver
     }
 
     /**
-     * Historia cen produktu od najnowszej, z poprzednią wartością i zmianą procentową. Wiersz konta B2B z oceną
-     * ceny specjalnej widz bez uprawnienia dostaje bez cen (prices_hidden) — dawne wiersze mogły być ceną specjalną.
+     * Historia cen produktu od najnowszej, z poprzednią wartością i zmianą procentową. Wiersz konta B2B albo pliku
+     * z oceną ceny specjalnej widz bez uprawnienia dostaje bez cen (prices_hidden) — dawne wiersze mogły być ceną
+     * specjalną.
      *
      * @return list<array<string, mixed>>
      */
@@ -347,8 +348,9 @@ final class ProductPriceChangeResolver
     /**
      * Wiersz historii ukryty przed widzem bez uprawnienia do cen specjalnych: cena konta B2B, którego slot na karcie
      * ma ocenę (cennik bazowy i rabat standardowy). Konto z przebiegu; wiersz „b2b…” bez przebiegu (sprzed dziennika
-     * przebiegów, scalanie rozmiarów, dawne „b2b_api”) nie wskazuje konta — wtedy dowolny slot z oceną na karcie.
-     * Pliki i inne źródła to nie ceny konta.
+     * przebiegów, scalanie rozmiarów, dawne „b2b_api”) nie wskazuje konta — wtedy dowolny slot konta z oceną na karcie.
+     * Import i rabat cennika z pliku — gdy wiersz pochodzi z cennika z ceną specjalną (price_lists.has_supplier_special,
+     * SECURA: cena 40%) albo karta ma ślad takiego cennika lub slot pliku z oceną (hidesFileHistory). Inne źródła nie.
      */
     private function hidden(object $row, SupplierSpecialMask $mask): bool
     {
@@ -357,6 +359,10 @@ final class ProductPriceChangeResolver
         }
         if ($row->b2b_account_id !== null) {
             return $mask->hidesHistory((int) $row->product_id, (int) $row->b2b_account_id);
+        }
+        if (in_array(trim((string) $row->source), self::FILE_SOURCES, true)) {
+            return $mask->flaggedPriceList($row->price_list_id !== null ? (int) $row->price_list_id : null)
+                || $mask->hidesFileHistory((int) $row->product_id);
         }
 
         return str_starts_with(trim((string) $row->source), 'b2b')

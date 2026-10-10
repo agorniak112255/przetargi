@@ -115,6 +115,19 @@ final class B2bDetachPriceListsCommandTest extends TestCase
         $this->assertSame($this->accountList->id, $this->account->fresh()->last_price_list_id);
     }
 
+    /** Wpis ze znacznikiem cen specjalnych dostawcy nie jest odpinany ani usuwany — historia zostaje przy nim. */
+    public function test_duplicate_with_supplier_special_prices_is_kept(): void
+    {
+        $this->duplicate->forceFill(['has_supplier_special' => true])->save();
+
+        $this->artisan('b2b:detach-price-lists')
+            ->expectsOutputToContain('pominięty: cennik ma ceny specjalne dostawcy')
+            ->assertSuccessful();
+
+        $this->assertNotNull(PriceList::query()->find($this->duplicate->id));
+        $this->assertSame(2, ProductPriceHistory::query()->where('price_list_id', $this->duplicate->id)->count());
+    }
+
     public function test_account_without_list_adopts_newest_api_list_and_other_duplicates_are_removed(): void
     {
         $this->account->forceFill(['last_price_list_id' => null])->save();

@@ -63,6 +63,9 @@ final class RepairPriceListCodesCommand extends Command
 {
     private const BACKUP_LABEL = 'repair-price-list-codes';
 
+    private const SUPPLIER_SPECIAL_NEW_CARDS = 'Cennik ma ceny specjalne dostawcy, a mapowanie nie ma kolumny „Cena normalna (standardowa)” — '
+        .'nowe karty nie zostaną założone (poprawki kodów i nazw tak). Podaj --mapping=plik.json z rolą standard_price.';
+
     private const ACTION_LABELS = [
         PriceListFileReconciler::ACTION_UPDATE => 'zmiana',
         PriceListFileReconciler::ACTION_KEEP => 'bez zmian',
@@ -201,13 +204,20 @@ final class RepairPriceListCodesCommand extends Command
 
             return self::SUCCESS;
         }
+        // Cennik z cenami specjalnymi dostawcy (has_supplier_special): nowa karta bez kolumny ceny normalnej dostałaby
+        // cenę specjalną jako zwykły zakup (bez oceny, widoczny dla wszystkich). Poprawki kodów i nazw idą dalej — nie
+        // zmieniają cen kart.
+        $newCardsBlocked = $priceList->has_supplier_special && ! $importer->mappingHasStandardPrice($mapping);
+        if ($newCardsBlocked && $news !== []) {
+            $this->warn(self::SUPPLIER_SPECIAL_NEW_CARDS.' Nowych kart w pliku: '.count($news).'.');
+        }
         if (! $this->option('apply')) {
             $this->info('Podgląd — przejrzyj raport CSV i uruchom z --apply, żeby zapisać.');
 
             return self::SUCCESS;
         }
 
-        return $this->apply($priceList, $entries, $changes, $products, $importer, $identifierStore);
+        return $this->apply($priceList, $entries, $changes, $products, $importer, $identifierStore, $newCardsBlocked);
     }
 
     /**
@@ -532,6 +542,7 @@ final class RepairPriceListCodesCommand extends Command
         array $products,
         PriceListImportService $importer,
         ProductIdentifierStore $identifierStore,
+        bool $newCardsBlocked = false,
     ): int {
         $sourceKey = ProductIdentifierStore::fileKey((int) $priceList->id);
         $backup = trim((string) $this->option('backup'));
@@ -622,6 +633,11 @@ final class RepairPriceListCodesCommand extends Command
                 continue;
             }
             $row = $entry['row'];
+            if ($newCardsBlocked) {
+                $skipped[] = $row['sku'].' (nowa karta: cennik ma ceny specjalne dostawcy, a mapowanie nie ma kolumny ceny normalnej)';
+
+                continue;
+            }
             try {
                 $productId = DB::transaction(function () use ($row, $priceList, $importer): ?int {
                     if (self::skuTakenBy((string) $row['sku'], 0) !== null) {

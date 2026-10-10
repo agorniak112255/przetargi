@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\DB;
  * (ProductEffectivePrice::explain): cennik producenta z pliku przegrywa tylko z kontem B2B tego producenta (z włączoną
  * ceną) — karta z ceną z takiego konta zostaje przy niej, zmienia się tylko cena z pliku.
  * Przy grupach asortymentowych rabat ustawia się per grupa (jak przy imporcie), reszta kart ma rabat wspólny.
+ * Sloty z oceną ceny specjalnej (kolumna ceny normalnej w pliku) rabat cennika pomija — ich zakup jest z pliku.
  */
 final class PriceListDiscountService
 {
@@ -33,7 +34,8 @@ final class PriceListDiscountService
      *     groups: list<array{id: int, name: string, discount_percent: float, product_count: int}>,
      *     ungrouped: array{product_count: int, discount_percent: float|null, mixed: bool},
      *     product_count: int,
-     *     b2b_priced_count: int
+     *     b2b_priced_count: int,
+     *     special_rated_count: int
      * }
      */
     public function summary(PriceList $priceList): array
@@ -44,7 +46,15 @@ final class PriceListDiscountService
 
         $byGroup = [];
         $ungroupedDiscounts = [];
+        $rated = 0;
         foreach ($slots as $slot) {
+            // karty z oceną ceny specjalnej liczone osobno — rabat cennika ich nie zmienia (apply), więc ich rabat nie
+            // jest „rabatem cennika” do pokazania ani do edycji
+            if ($this->hasSpecialRating($slot)) {
+                $rated++;
+
+                continue;
+            }
             $groupId = $groupIds[(int) $slot->product_id] ?? null;
             if ($groupId !== null && isset($groups[$groupId])) {
                 $byGroup[$groupId] = ($byGroup[$groupId] ?? 0) + 1;
@@ -79,12 +89,14 @@ final class PriceListDiscountService
             ],
             'product_count' => $slots->count(),
             'b2b_priced_count' => $this->b2bPricedCount($slots, $this->ownAccountKeys($priceList)),
+            // karty z oceną ceny specjalnej — rabat cennika ich nie zmienia (apply); poza groups i ungrouped
+            'special_rated_count' => $rated,
         ];
     }
 
     /**
      * @param  array<int, float>  $groupDiscounts  assortment_group_id => rabat %
-     * @return array{products_changed: int, b2b_priced: int}
+     * @return array{products_changed: int, b2b_priced: int, special_rated_skipped: int}
      */
     public function apply(PriceList $priceList, array $groupDiscounts, ?float $ungroupedDiscount): array
     {
@@ -96,8 +108,9 @@ final class PriceListDiscountService
 
         $changed = 0;
         $b2bPriced = 0;
+        $ratedSkipped = 0;
         DB::transaction(function () use (
-            $priceList, $slots, $groupIds, $groups, $groupDiscounts, $ungroupedDiscount, $ownKeys, &$changed, &$b2bPriced
+            $priceList, $slots, $groupIds, $groups, $groupDiscounts, $ungroupedDiscount, $ownKeys, &$changed, &$b2bPriced, &$ratedSkipped
         ): void {
             foreach ($groupDiscounts as $groupId => $discount) {
                 if (isset($groups[$groupId])) {
@@ -118,6 +131,14 @@ final class PriceListDiscountService
                     ? ($groupDiscounts[$groupId] ?? null)
                     : $ungroupedDiscount;
                 if ($discount === null) {
+                    continue;
+                }
+                // Slot z oceną ceny specjalnej (kolumna ceny normalnej, SECURA 10.10.2026): zakup to cena specjalna albo
+                // normalna z pliku, a ocena porównuje go z ceną normalną. Zakup z rabatu cennika nadpisałby cenę
+                // specjalną, a ocena zostałaby przy cenie, której w pliku nie ma — taki slot zostaje bez zmian.
+                if ($this->hasSpecialRating($slot)) {
+                    $ratedSkipped++;
+
                     continue;
                 }
                 $catalog = (float) $slot->catalog_price_net;
@@ -153,7 +174,13 @@ final class PriceListDiscountService
             }
         });
 
-        return ['products_changed' => $changed, 'b2b_priced' => $b2bPriced];
+        return ['products_changed' => $changed, 'b2b_priced' => $b2bPriced, 'special_rated_skipped' => $ratedSkipped];
+    }
+
+    /** Slot „file” z oceną ceny specjalnej z importu (PriceListImportService::fileSlotRating). */
+    private function hasSpecialRating(ProductSourcePrice $slot): bool
+    {
+        return $slot->base_price_net !== null && $slot->standard_discount_percent !== null;
     }
 
     /**

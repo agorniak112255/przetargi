@@ -68,7 +68,7 @@ final class PriceMovesReport
         $mask = SupplierSpecialMask::forUser($user);
 
         // wynik zależy od użytkownika tylko przez maskę (ukrywa albo nie) — klucz bez id użytkownika
-        $key = 'reports:prices:v4:'.$days.':'.($mask->hides() ? 'masked' : 'full');
+        $key = 'reports:prices:v5:'.$days.':'.($mask->hides() ? 'masked' : 'full');
 
         return Cache::remember($key, now()->addMinutes(self::CACHE_MINUTES), fn (): array => $this->compute($days, $mask));
     }

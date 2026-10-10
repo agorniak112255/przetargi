@@ -223,6 +223,62 @@ final class RepairPriceListCodesCommandTest extends TestCase
         $this->assertSame(0, ProductIdentifier::query()->where('value', 'CRS00005')->count());
     }
 
+    /**
+     * Cennik z cenami specjalnymi dostawcy (has_supplier_special, SECURA 10.10.2026), mapowanie z upustem (albo ceną
+     * zakupu) bez kolumny ceny normalnej: kody i nazwy kart się poprawiają (cen nie zmieniają), ale nowych kart nie
+     * ma — dostałyby cenę specjalną jako zwykły zakup bez oceny.
+     */
+    public function test_supplier_special_price_list_without_standard_price_column_gets_no_new_cards(): void
+    {
+        $state = $this->stateAfterImportOf1209();
+        $this->list->forceFill(['has_supplier_special' => true])->save();
+        $cards = Product::query()->count();
+        $mapping = tempnam(sys_get_temp_dir(), 'mapping').'.json';
+        $sheets = [];
+        foreach (['Maty przemysłowe', 'Noże bezpieczne'] as $sheet) {
+            // upust z pustej kolumny — ceny jak w pliku (bezpiecznik ceny przechodzi), ale rola upustu jest w mapowaniu
+            $sheets[] = ['sheet' => $sheet, 'include' => true, 'header_excel_row' => 1, 'columns' => ['sku' => 0, 'name' => 1, 'catalog_price' => 3, 'discount' => 9]];
+        }
+        file_put_contents($mapping, json_encode(['sheets' => $sheets]));
+
+        try {
+            $this->assertSame(0, Artisan::call('products:repair-price-list-codes', [
+                'file' => $this->file,
+                '--price-list' => $this->list->id,
+                '--mapping' => $mapping,
+                '--apply' => true,
+                '--backup' => $this->backup,
+            ]));
+        } finally {
+            @unlink($mapping);
+        }
+        $output = Artisan::output();
+
+        $this->assertStringContainsString('nowe karty nie zostaną założone', $output);
+        $this->assertStringContainsString('Zapisano: 6 kart poprawionych, 0 nowych kart.', $output);
+        $this->assertStringContainsString('741242 (nowa karta: cennik ma ceny specjalne dostawcy', $output);
+        $this->assertSame($cards, Product::query()->count());
+        $this->assertSame('AF010005', $state['af']->fresh()->sku);
+    }
+
+    /** Mapowanie bez ceny zakupu i bez upustu (sama katalogowa) nie ma czego ujawnić — nowe karty powstają. */
+    public function test_supplier_special_price_list_with_catalog_only_mapping_gets_new_cards(): void
+    {
+        $this->stateAfterImportOf1209();
+        $this->list->forceFill(['has_supplier_special' => true])->save();
+
+        $this->assertSame(0, Artisan::call('products:repair-price-list-codes', [
+            'file' => $this->file,
+            '--price-list' => $this->list->id,
+            '--apply' => true,
+            '--backup' => $this->backup,
+        ]));
+        $output = Artisan::output();
+
+        $this->assertStringNotContainsString('nowe karty nie zostaną założone', $output);
+        $this->assertStringContainsString('Zapisano: 6 kart poprawionych, 7 nowych kart.', $output);
+    }
+
     public function test_after_repair_second_run_size_merge_and_reimport_change_nothing(): void
     {
         $state = $this->stateAfterImportOf1209(running: false);

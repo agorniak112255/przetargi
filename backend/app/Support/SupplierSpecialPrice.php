@@ -6,10 +6,12 @@ namespace App\Support;
 
 use App\Models\Product;
 use App\Models\ProductSourcePrice;
+use Illuminate\Contracts\Database\Query\Builder as QueryBuilder;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
- * Cena specjalna dostawcy: cena konta B2B niższa niż cennik bazowy × (1 − rabat standardowy kategorii).
+ * Cena specjalna dostawcy: cena konta B2B albo cena specjalna z cennika z pliku (SECURA „40% s.dystryb.”) niższa
+ * niż cennik bazowy × (1 − rabat standardowy kategorii).
  * To wniosek z porównania, nie potwierdzenie — potwierdzenie ceny specjalnej przychodzi od dostawcy mailem,
  * którego system nie widzi. Brak ceny bazowej albo rabatu standardowego = brak oceny (null), nigdy „standard”.
  *
@@ -62,9 +64,10 @@ final class SupplierSpecialPrice
     }
 
     /**
-     * Filtr listy kart: istnieje slot B2B z oceną $status dla ceny widocznej na karcie — ta sama reguła co
-     * evaluate() i ProductController::cardSupplierSpecial (cena zakupu i waluta slotu = karty; slot bez waluty
-     * dziedziczy walutę karty), przeniesiona do SQL, bo lista jest stronicowana w bazie. Tolerancja jak wyżej.
+     * Filtr listy kart: istnieje slot (konto B2B albo plik — whereEvaluableSource) z oceną $status dla ceny widocznej
+     * na karcie — ta sama reguła co evaluate() i ProductController::cardSupplierSpecial (cena zakupu i waluta slotu
+     * = karty; slot bez waluty dziedziczy walutę karty), przeniesiona do SQL, bo lista jest stronicowana w bazie.
+     * Tolerancja jak wyżej.
      *
      * @param  Builder<Product>  $query  zapytanie po tabeli products
      */
@@ -86,7 +89,7 @@ final class SupplierSpecialPrice
             $sub->selectRaw('1')
                 ->from('product_source_prices as s')
                 ->whereColumn('s.product_id', 'products.id')
-                ->where('s.source_key', 'like', 'b2b:%')
+                ->tap(static fn ($q) => self::whereEvaluableSource($q, 's.source_key'))
                 ->whereNotNull('s.base_price_net')
                 ->whereNotNull('s.standard_discount_percent')
                 ->where('s.purchase_price', '>', 0)
@@ -96,6 +99,16 @@ final class SupplierSpecialPrice
                 ->whereRaw('COALESCE(UPPER(TRIM(s.currency)), '.$cardCurrency.') = '.$cardCurrency)
                 ->whereRaw($condition);
         });
+    }
+
+    /**
+     * Źródła slotów, które mogą nieść ocenę (ProductSourcePrice::carriesSupplierSpecial): konta B2B i cennik z pliku.
+     * Warunek w nawiasie, żeby OR nie rozlał się na resztę zapytania.
+     */
+    public static function whereEvaluableSource(QueryBuilder $query, string $column = 'source_key'): void
+    {
+        $query->where(static fn ($q) => $q->where($column, 'like', 'b2b:%')
+            ->orWhere($column, ProductSourcePrice::SOURCE_FILE));
     }
 
     /**

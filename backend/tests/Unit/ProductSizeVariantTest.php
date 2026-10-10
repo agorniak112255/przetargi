@@ -747,6 +747,34 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertSame('BLACKTACTIL', $svc->resolveMergeStem('BLACKTACTILT07', [], 'Model'));
     }
 
+    /**
+     * SECURA T596T100 „Torba do rękawic”: import uciął kod do T596T (100 = rękawice w rozmiarze 10 wg kodu Ansella).
+     * Rzecz „do rękawic / na buty / do spodni” nie jest wyrobem z rozmiarem — końcówka zostaje częścią kodu.
+     */
+    #[Test]
+    public function code_tail_of_an_accessory_for_sized_wear_is_not_a_size(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertNull($svc->skuCore('T596T100', 'Torba do rękawic'));
+        $this->assertNull($svc->groupKey('SECURA', 'Torba do rękawic', 'T596T100'));
+        $this->assertNull($svc->skuCore('L90304', 'WKŁADKI DO BUTÓW PRZECIWPOTNE, 10 PAR, LAHTI'));
+        $this->assertNull($svc->skuCore('MC5145', 'CHEMFOR ochraniacze na obuwie z wiązaniem 100 szt. MC5145'));
+        $this->assertNull($svc->skuCore('L90206', "PASEK DO SPODNI 'METAL FREE' CZAR., ROZM. UNIWERSALNY, LAHTI"));
+        // dawna reguła odnajduje kartę uciętą wcześniejszym importem
+        $this->assertSame(['T596T', 'T596T-10'], $svc->legacyCutCodes('T596T100', 'Torba do rękawic'));
+
+        // przyimek z innym słowem nie zmienia rodziny: to dalej rękawice i obuwie
+        $this->assertSame('PROCUT', $svc->skuCore('PROCUTS', 'Odporna na przecięcie rękawica z HPPE'));
+        $this->assertSame('A5016', $svc->skuCore('A501609', 'Rękawice do pracy'));
+        $this->assertSame('34703', $svc->skuCore('34703090', 'Rękawice do pracy w zimnie 9'));
+        // trzycyfrowy kod rozmiaru bez rozmiaru w nazwie (kod z samych cyfr bez rozmiaru w nazwie nie jest cięty nigdy)
+        $this->assertSame('37695VP', $svc->skuCore('37695VP100', 'Rękawice do pracy'));
+        $this->assertNull($svc->skuCore('37695VP100', 'Torba do rękawic'));
+        // ten sam rozmiar w nazwie to dowód także dla akcesorium
+        $this->assertSame('SJ3FIT', $svc->skuCore('SJ3FITM', 'Wkładki do butów Safety Jogger M'));
+    }
+
     #[Test]
     public function merge_stem_without_name_and_tail_stem_keep_the_old_rule(): void
     {

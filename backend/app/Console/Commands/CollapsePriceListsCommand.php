@@ -37,6 +37,16 @@ final class CollapsePriceListsCommand extends Command
         $apply = (bool) $this->option('apply');
         $missingKeys = $this->rowsWithoutKey();
         $groups = $this->groups();
+        // Grupa z cennikiem z cenami specjalnymi dostawcy (has_supplier_special) zostaje nietknięta: zwinięcie kasuje
+        // wpisy i przepina ich sloty oraz historię cen na inny wpis — ceny specjalne straciłyby swój cennik.
+        $special = $groups->filter(static fn (Collection $rows): bool => $rows->contains(
+            static fn (PriceList $row): bool => (bool) $row->has_supplier_special
+        ));
+        foreach ($special as $key => $rows) {
+            $this->warn('Pominięto „'.$key.'” (wpisy #'.$rows->pluck('id')->implode(', #')
+                .'): cennik ma ceny specjalne dostawcy — zwinięcie przepięłoby ich historię cen. Scal ręcznie na decyzję właściciela.');
+        }
+        $groups = $groups->diffKeys($special);
 
         if ($missingKeys->isNotEmpty()) {
             $this->info('Wpisów bez klucza producenta: '.$missingKeys->count()

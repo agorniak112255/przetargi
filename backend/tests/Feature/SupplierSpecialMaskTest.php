@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\Pricing\MaskedPrice;
@@ -92,6 +94,102 @@ final class SupplierSpecialMaskTest extends TestCase
         $this->assertSame(248.67, $masked->evaluation['base_price']);
         $this->assertSame('Rękawice ochronne', $masked->evaluation['category']);
         $this->assertNoSpecialLeak((string) json_encode($masked->evaluation));
+    }
+
+    public function test_card_masks_special_price_from_file_slot(): void
+    {
+        ['product' => $product, 'slot' => $slot] = $this->securaFileCard();
+        $mask = SupplierSpecialMask::hiding();
+        $masked = $mask->card($product->id);
+
+        $this->assertInstanceOf(MaskedPrice::class, $masked);
+        $this->assertSame(ProductSourcePrice::SOURCE_FILE, $masked->sourceKey);
+        $this->assertSame(0, $masked->accountId);
+        $this->assertSame('PLN', $masked->currency);
+        $this->assertSame(17.30, $masked->realPurchase);
+        $this->assertSame(22.78, $masked->standardPrice);
+        $this->assertSame(SupplierSpecialPrice::STANDARD, $masked->evaluation['status']);
+        $this->assertEquals(0, $masked->evaluation['saving_net']);
+        $this->assertEquals(21.01, $masked->evaluation['actual_discount_percent']);
+        $this->assertSame(28.84, $masked->evaluation['base_price']);
+        $this->assertNoSpecialLeak((string) json_encode($masked->evaluation));
+
+        // katalogowa (cennik bazowy) zostaje, rabat liczony od niej na nowo
+        $card = $mask->maskProduct($product->fresh());
+        $this->assertSame(self::FILE_STANDARD, $card->purchase_price);
+        $this->assertSame(self::FILE_CATALOG, $card->catalog_price_net);
+        $this->assertSame(self::FILE_STANDARD_DISCOUNT, $card->discount_percent);
+        $this->assertSame(22.78, $mask->purchasePln($product));
+        $this->assertNoSpecialLeak((string) json_encode($card->toArray()));
+
+        $maskedSlot = $mask->maskSlot($slot);
+        $this->assertTrue($maskedSlot->priceMasked);
+        $this->assertSame(self::FILE_STANDARD, $maskedSlot->purchase_price);
+        $this->assertSame(self::FILE_CATALOG, $maskedSlot->catalog_price_net);
+        $this->assertSame(self::FILE_SPECIAL_PRICE, $slot->purchase_price);
+        // slot pliku nie jest kontem — rozmiary kont i konto 0 bez maski
+        $this->assertNull($mask->variant($product->id, 0));
+        $this->assertNull($mask->variant($product->id, null));
+        $this->assertNull(SupplierSpecialMask::revealing()->card($product->id));
+    }
+
+    public function test_file_slot_without_evaluation_is_not_masked(): void
+    {
+        // cennik z pliku bez kolumny ceny specjalnej (bez ceny bazowej i rabatu standardowego) — jak dotąd
+        ['product' => $product, 'slot' => $slot] = $this->securaFileCard('SEC-PLAIN', [], [
+            'base_price_net' => null,
+            'standard_discount_percent' => null,
+        ]);
+        $mask = SupplierSpecialMask::hiding();
+
+        $this->assertNull($mask->card($product->id));
+        $this->assertSame($slot, $mask->maskSlot($slot));
+        $this->assertSame($product, $mask->maskProduct($product));
+        $this->assertFalse($mask->hidesFileHistory($product->id));
+        $this->assertFalse($mask->hidesAnyHistory($product->id));
+    }
+
+    public function test_flagged_price_list_trace_hides_file_history_after_slot_was_taken_over(): void
+    {
+        ['product' => $taken, 'slot' => $slot, 'list' => $secura] = $this->securaFileCard('SEC-TAKEN');
+        // slot przejął cennik bez ceny specjalnej, ocena zniknęła — w historii zostały wiersze SECURA (cena 40%)
+        $other = PriceList::query()->create(['manufacturer' => 'Portwest', 'manufacturer_key' => 'portwest', 'version' => 'v1']);
+        $slot->forceFill(['price_list_id' => $other->id, 'purchase_price' => 20, 'base_price_net' => null, 'standard_discount_percent' => null])->save();
+        $taken->forceFill(['purchase_price' => 20])->save();
+        // slot pliku z id oznaczonego cennika bez oceny i bez historii — też ślad
+        $slotOnly = $this->card('SEC-SLOT', 20);
+        ProductSourcePrice::query()->create([
+            'product_id' => $slotOnly->id, 'source_key' => ProductSourcePrice::SOURCE_FILE, 'price_list_id' => $secura->id,
+            'catalog_price_net' => 28.84, 'purchase_price' => 20, 'currency' => 'PLN',
+        ]);
+        // historia z cennika bez flagi — bez śladu
+        $plain = $this->card('PW-PLAIN', 20);
+        ProductPriceHistory::query()->create([
+            'product_id' => $plain->id, 'price_list_id' => $other->id, 'catalog_price_net' => 25, 'purchase_price' => 20,
+            'currency' => 'PLN', 'source' => 'price_list_import',
+        ]);
+        $mask = SupplierSpecialMask::hiding();
+        $mask->preload([$taken->id, $slotOnly->id, $plain->id]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->assertNull($mask->card($taken->id));
+        $this->assertTrue($mask->hidesFileHistory($taken->id));
+        $this->assertTrue($mask->hidesAnyHistory($taken->id));
+        $this->assertTrue($mask->hidesFileHistory($slotOnly->id));
+        $this->assertFalse($mask->hidesFileHistory($plain->id));
+        $this->assertTrue($mask->flaggedPriceList((int) $secura->id));
+        $this->assertFalse($mask->flaggedPriceList((int) $other->id));
+        $this->assertFalse($mask->flaggedPriceList(null));
+        // cenniki oznaczone raz na maskę, ślad hurtem dla wczytanych kart — dwa zapytania razem
+        $this->assertCount(2, DB::getQueryLog());
+        DB::disableQueryLog();
+        // historia kont tego nie dotyczy
+        $this->assertFalse($mask->hidesHistory($taken->id, null));
+
+        $revealing = SupplierSpecialMask::revealing();
+        $this->assertFalse($revealing->hidesFileHistory($taken->id));
+        $this->assertFalse($revealing->flaggedPriceList((int) $secura->id));
     }
 
     public function test_card_without_special_price_is_not_masked(): void
@@ -185,6 +283,11 @@ final class SupplierSpecialMaskTest extends TestCase
         $rounded = $this->card('P-ROUND', 173.19);
         $this->uvexSlot($rounded, 173.19, ['purchase_price' => '173.19']);
         $this->card('P-NONE', 100);
+        // sloty cennika z pliku: z oceną (special), bez oceny, w cenie innej niż karta i w cenie standardowej
+        $file = $this->securaFileCard('P-FILE')['product'];
+        $this->securaFileCard('P-FILE-PLAIN', [], ['base_price_net' => null, 'standard_discount_percent' => null]);
+        $this->securaFileCard('P-FILE-OTHER', ['purchase_price' => '20.00']);
+        $fileStandard = $this->securaFileCard('P-FILE-STD', ['purchase_price' => '22.78'], ['purchase_price' => '22.78'])['product'];
 
         $query = Product::query();
         SupplierSpecialPrice::whereCardStatus($query, SupplierSpecialPrice::SPECIAL);
@@ -197,9 +300,10 @@ final class SupplierSpecialMaskTest extends TestCase
 
         $this->assertSame($sql, $php);
         $this->assertEqualsCanonicalizing(
-            [$special->id, $edge->id, $inherit->id, $rounded->id],
+            [$special->id, $edge->id, $inherit->id, $rounded->id, $file->id],
             $php,
         );
+        $this->assertNotContains($fileStandard->id, $php);
     }
 
     public function test_fields_uvex_and_catalog_other_than_purchase(): void
@@ -391,6 +495,20 @@ final class SupplierSpecialMaskTest extends TestCase
         $this->assertFalse($mask->hidesHistory($plain->id, null));
         $this->assertFalse($mask->hidesHistory($plain->id, (int) $other->id));
         $this->assertFalse(SupplierSpecialMask::revealing()->hidesHistory($fixture['product']->id, $uvexId));
+
+        // slot pliku z oceną: historia pliku ukryta, historia kont nie (konto null i konto 0 go nie dotyczą)
+        $file = $this->securaFileCard('HIST-FILE', ['purchase_price' => '22.78'], ['purchase_price' => '22.78'])['product'];
+        $this->assertNull($mask->card($file->id));
+        $this->assertTrue($mask->hidesFileHistory($file->id));
+        $this->assertTrue($mask->hidesAnyHistory($file->id));
+        $this->assertFalse($mask->hidesHistory($file->id, null));
+        $this->assertFalse($mask->hidesHistory($file->id, 0));
+        $this->assertFalse($mask->hidesHistory($file->id, $uvexId));
+        $this->assertFalse($mask->hidesFileHistory($fixture['product']->id));
+        $this->assertTrue($mask->hidesAnyHistory($fixture['product']->id));
+        $this->assertFalse($mask->hidesFileHistory($plain->id));
+        $this->assertFalse(SupplierSpecialMask::revealing()->hidesFileHistory($file->id));
+        $this->assertFalse(SupplierSpecialMask::revealing()->hidesAnyHistory($file->id));
     }
 
     public function test_preload_budget_two_queries_per_thousand_cards(): void
@@ -398,18 +516,23 @@ final class SupplierSpecialMaskTest extends TestCase
         $fixture = $this->supplierSpecialCard();
         $productId = (int) $fixture['product']->id;
         $accountId = (int) $fixture['account']->id;
+        $file = $this->securaFileCard();
+        $fileId = (int) $file['product']->id;
         $mask = SupplierSpecialMask::hiding();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        // 1001 kart = dwie paczki po 1000
-        $mask->preload([$fixture['product'], ...range($productId + 1, $productId + 1000)]);
+        // 1001 kart = dwie paczki po 1000 (karta z plikiem w pierwszej)
+        $mask->preload([$fixture['product'], $fileId, ...range($fileId + 1, $fileId + 999)]);
         $this->assertCount(4, DB::getQueryLog());
 
         DB::flushQueryLog();
         $this->assertNotNull($mask->card($productId));
         $this->assertNotNull($mask->variant($productId, $accountId));
         $this->assertTrue($mask->hidesHistory($productId, $accountId));
+        $this->assertNotNull($mask->card($fileId));
+        $this->assertTrue($mask->hidesFileHistory($fileId));
+        $mask->maskSlot($file['slot']);
         $mask->maskProduct($fixture['product']);
         $mask->maskSlot($fixture['slot']);
         $mask->maskVariant($fixture['variants'][1]);

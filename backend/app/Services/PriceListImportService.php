@@ -41,6 +41,22 @@ final class PriceListImportService
 
     public const SUMMARY_NUMBER_FIELDS = ['catalog_price_net', 'purchase_price', 'discount_percent', 'pack_qty'];
 
+    /**
+     * Ocena ceny specjalnej z cennika z pliku (kolumna ceny normalnej, rola standard_price): pola pozycji, które idą
+     * tylko do slotu „file” (App\Support\SupplierSpecialPrice), nigdy na kartę.
+     */
+    public const SLOT_ONLY_FIELDS = ['base_price_net', 'standard_discount_percent'];
+
+    /** base_price_source slotu „file” z oceną z kolumny ceny normalnej. */
+    public const FILE_STANDARD_PRICE_SOURCE = 'Cennik z pliku — kolumna ceny normalnej';
+
+    /** Odmowa importu cennika ze znacznikiem has_supplier_special bez kolumny ceny normalnej (supplierSpecialRefusal). */
+    public const SUPPLIER_SPECIAL_MAPPING_REQUIRED = 'Cennik ma ceny specjalne dostawcy — w oknie mapowania wskaż kolumnę „Cena normalna (standardowa)”. '
+        .'Bez niej cena specjalna weszłaby jako zwykła cena zakupu. Nic nie zostało zapisane.';
+
+    /** Cena normalna wyższa od katalogowej o więcej niż ta kwota to nie cena normalna (zaokrąglenia groszy przechodzą). */
+    private const STANDARD_PRICE_TOLERANCE = 0.01;
+
     public function __construct(
         private readonly CurrencyDetector $currencyDetector,
         private readonly AssortmentGroupService $assortmentGroups,
@@ -73,6 +89,10 @@ final class PriceListImportService
         $path = $file->getRealPath();
         if ($path === false) {
             return $this->emptyResult('Nie można odczytać pliku.');
+        }
+        // import bez mapowania nie zna kolumny ceny normalnej
+        if (($refusal = $this->supplierSpecialRefusal($manufacturer, false)) !== null) {
+            return $this->emptyResult($refusal);
         }
 
         $rows = $this->cells->toRows(IOFactory::load($path)->getActiveSheet());
@@ -138,6 +158,9 @@ final class PriceListImportService
         if (! $this->isSpreadsheetUpload($file)) {
             return $this->emptyResult('PDF: użyj „Importuj wg AI” z listy po analizie, nie mapowania arkusza.');
         }
+        if (($refusal = $this->supplierSpecialRefusal($manufacturer, $this->mappingHasStandardPrice($mapping))) !== null) {
+            return $this->emptyResult($refusal);
+        }
 
         $collected = $this->collectFromMapping($path, $mapping, $defaultCategory, $manufacturer);
         try {
@@ -163,6 +186,10 @@ final class PriceListImportService
         ?string $defaultCategory = null,
         ?array $groupOptions = null,
     ): array {
+        // pozycje z PDF/AI nie mają kolumny ceny normalnej
+        if (($refusal = $this->supplierSpecialRefusal($manufacturer, false)) !== null) {
+            return $this->emptyResult($refusal);
+        }
         $normalized = [];
         $skipped = 0;
         $errors = [];
@@ -443,9 +470,19 @@ final class PriceListImportService
      *     sheets: list<array<string, mixed>>
      * }
      */
-    public function previewFromMapping(string $path, array $mapping, int $limit = 8): array
+    public function previewFromMapping(string $path, array $mapping, int $limit = 8, ?string $manufacturer = null): array
     {
         $collected = $this->collectFromMapping($path, $mapping, null, 'PREVIEW', true);
+        // uwagi, które import dopisze (ocena zachowawcza), i odmowa importu cennika z cenami specjalnymi bez kolumny
+        // ceny normalnej — widoczne już w oknie mapowania
+        $refusal = $manufacturer !== null && $manufacturer !== ''
+            ? $this->supplierSpecialPreviewWarning($manufacturer, $mapping)
+            : null;
+        $collected['errors'] = [
+            ...($refusal !== null ? [$refusal] : []),
+            ...$collected['rating_notes'],
+            ...$collected['errors'],
+        ];
         // identyfikatory wierszy są dla zapisu importu, nie dla okna podglądu
         $collected['products'] = array_map(static function (array $product): array {
             unset($product['_identifiers']);
@@ -475,7 +512,7 @@ final class PriceListImportService
      *     rows_total: int
      * }  $collected
      * @return array{
-     *     price_list: PriceList,
+     *     price_list: PriceList|null,
      *     created: int,
      *     updated: int,
      *     skipped: int,
@@ -492,6 +529,10 @@ final class PriceListImportService
         User $user,
         array $collected,
     ): array {
+        // siatka dla każdej drogi zapisu (wołający sprawdzają to przed grupami asortymentowymi)
+        if (($refusal = $this->supplierSpecialRefusal($manufacturer, (bool) ($collected['standard_price_mapped'] ?? false))) !== null) {
+            return $this->emptyResult($refusal);
+        }
         $collected['products'] = $this->categoriesFromTree($collected['products']);
         // Cennik wielomarkowy (Canis, decyzja właściciela z 26.09.2026): wiersz z marką towaru w nazwie („Respirator 3M
         // 9914”) dostaje tę markę zamiast producenta pliku. Znacznik _goods_brand zdejmuje pętla zapisu.
@@ -674,7 +715,8 @@ final class PriceListImportService
                     // (previousSourcePrices).
                     $fileSlot = $this->fileSlot($existing, $fileSlots);
                     $before = $this->effectivePrices->previousSourcePrices($existing, $fileSlot, $slotValues);
-                    $cardPayload = $payload;
+                    // ocena ceny specjalnej idzie tylko do slotu (SLOT_ONLY_FIELDS) — ani do $updates, ani do raportów
+                    $cardPayload = array_diff_key($payload, array_flip(self::SLOT_ONLY_FIELDS));
                     // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026) —
                     // poza cennikiem producenta marki karty, gdy powiązania są tylko od dystrybutorów (producerFileOwnsCard)
                     $hasB2bLink = B2bProductLink::query()->where('product_id', $existing->id)->exists();
@@ -739,6 +781,7 @@ final class PriceListImportService
                     }
                     $existing->update($updates);
                     $saved = $this->effectivePrices->saveSlot($existing, ProductSourcePrice::SOURCE_FILE, $slotValues);
+                    $this->markSupplierSpecial($priceList, $slotValues);
                     $fileSlots[(int) $existing->id] = $saved['slot'];
                     $productIds[] = (int) $existing->id;
                     $identifierRows[(int) $existing->id] = [...($identifierRows[(int) $existing->id] ?? []), ...$rowIdentifiers];
@@ -756,7 +799,7 @@ final class PriceListImportService
 
             // karty z mapy połączeń: jedna aktualizacja na kartę, bez zmiany SKU, nazwy i producenta (decyzja człowieka)
             foreach ($redirectGroups as $cardId => $groupRows) {
-                $result = $this->applyRedirectGroup($redirects['cards'][$cardId], $groupRows, (int) $priceList->id, $manufacturer, $fileSlots);
+                $result = $this->applyRedirectGroup($redirects['cards'][$cardId], $groupRows, $priceList, $manufacturer, $fileSlots);
                 if ($result['change'] !== null) {
                     $priceChanges[] = $result['change'];
                 }
@@ -784,6 +827,7 @@ final class PriceListImportService
                 ...$this->legacyCodeNotes($legacyCards, (int) $priceList->id),
                 ...$this->suppressedNotes($suppressed, $suppressedNewCodes),
                 ...$this->goodsBrandNotes($manufacturer, $goodsBrandRows, $brandRaised, $brandKeptB2b),
+                ...($collected['rating_notes'] ?? []),
                 ...$redirectWarnings,
                 ...$collected['errors'],
             ];
@@ -939,7 +983,152 @@ final class PriceListImportService
             'currency' => $payload['currency'] ?? null,
             'pack_qty' => $payload['pack_qty'] ?? null,
             'price_list_id' => $priceList->id,
+            ...$this->fileSlotRating($payload),
         ];
+    }
+
+    /**
+     * Ocena ceny specjalnej slotu „file” (SupplierSpecialPrice): cennik bazowy = katalogowa, rabat standardowy z kolumny
+     * ceny normalnej. Zawsze wszystkie pola — pozycja bez oceny (import bez tej kolumny, import przez AI) zeruje ocenę
+     * z poprzedniego importu, żeby nie została przy nowej cenie. Kategorii i kodu cennika bazowego plik nie ma.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{base_price_net: float|null, standard_discount_percent: float|null, base_price_category: null, base_price_code: null, base_price_source: string|null}
+     */
+    private function fileSlotRating(array $payload): array
+    {
+        $base = is_numeric($payload['base_price_net'] ?? null) ? round((float) $payload['base_price_net'], 2) : null;
+        $discount = is_numeric($payload['standard_discount_percent'] ?? null) ? round((float) $payload['standard_discount_percent'], 2) : null;
+        $rated = $base !== null && $base > 0 && $discount !== null;
+
+        return [
+            'base_price_net' => $rated ? $base : null,
+            'standard_discount_percent' => $rated ? $discount : null,
+            'base_price_category' => null,
+            'base_price_code' => null,
+            'base_price_source' => $rated ? self::FILE_STANDARD_PRICE_SOURCE : null,
+        ];
+    }
+
+    /**
+     * Ocena slotu karty z kilku wierszy pliku (zwinięte rozmiary, wiersze z mapy połączeń): ta z najwyższą ceną
+     * standardową (cennik bazowy × (1 − rabat standardowy)) — przy niepewności ukryć więcej, nie mniej. Wiersze bez
+     * oceny obok ocenionych nie zdejmują oceny; żaden oceniony — bez oceny.
+     *
+     * @param  list<array<string, mixed>>  $payloads
+     * @return array{base_price_net: float|null, standard_discount_percent: float|null, base_price_category: null, base_price_code: null, base_price_source: string|null}
+     */
+    private function strictestRating(array $payloads): array
+    {
+        $best = $this->fileSlotRating([]);
+        $bestStandard = null;
+        foreach ($payloads as $payload) {
+            $rating = $this->fileSlotRating($payload);
+            if ($rating['base_price_net'] === null || $rating['standard_discount_percent'] === null) {
+                continue;
+            }
+            $standard = $rating['base_price_net'] * (1 - $rating['standard_discount_percent'] / 100);
+            if ($bestStandard === null || $standard > $bestStandard + 0.000001) {
+                $best = $rating;
+                $bestStandard = $standard;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * Mapowanie nie może ujawnić ceny specjalnej: każdy arkusz, który idzie do importu (ten sam filtr co
+     * collectFromMapping: bez ról special/skip, bez include=false, bez arkuszy classifySheet() === 'skip') i ma
+     * w mapowaniu rolę ceny zakupu albo upustu, ma też kolumnę ceny normalnej (rola standard_price). Arkusz bez zakupu
+     * i upustu daje zakup = katalogowa, więc nie ma czego ujawnić; brak takich arkuszy = true.
+     * Uwaga: sprawdzane jest mapowanie WEJŚCIOWE. Korekty w collectFromMapping (nazwa, kategoria, parametry wyrobu)
+     * nie dodają ról purchase ani discount — gdyby kiedyś zaczęły, ten warunek trzeba przenieść za korekty.
+     *
+     * @param  array<string, mixed>  $mapping
+     */
+    public function mappingHasStandardPrice(array $mapping): bool
+    {
+        foreach (is_array($mapping['sheets'] ?? null) ? $mapping['sheets'] : [] as $sheetMap) {
+            if (! is_array($sheetMap) || ! ($sheetMap['include'] ?? false)) {
+                continue;
+            }
+            $role = (string) ($sheetMap['role'] ?? 'catalog');
+            if ($role === 'special' || $role === 'skip' || $this->columnMapper->classifySheet((string) ($sheetMap['sheet'] ?? '')) === 'skip') {
+                continue;
+            }
+            $columns = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
+            $pricesFromFile = is_numeric($columns['purchase'] ?? null) || is_numeric($columns['discount'] ?? null);
+            if ($pricesFromFile && ! is_numeric($columns['standard_price'] ?? null)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Odmowa importu cennika z cenami specjalnymi dostawcy bez kolumny ceny normalnej: cena specjalna weszłaby jako
+     * zwykła cena zakupu (bez oceny — widoczna dla wszystkich). Sprawdzane przed każdym zapisem (także grup
+     * asortymentowych). null = import może iść.
+     */
+    private function supplierSpecialRefusal(string $manufacturer, bool $standardPriceMapped): ?string
+    {
+        if ($standardPriceMapped) {
+            return null;
+        }
+        $flagged = PriceList::query()
+            ->where('manufacturer_key', PriceList::manufacturerKey($manufacturer))
+            ->where('has_supplier_special', true)
+            ->exists();
+
+        return $flagged ? self::SUPPLIER_SPECIAL_MAPPING_REQUIRED : null;
+    }
+
+    /**
+     * Ostrzeżenie podglądu mapowania: ten sam warunek co odmowa importu (supplierSpecialRefusal).
+     *
+     * @param  array<string, mixed>  $mapping
+     */
+    public function supplierSpecialPreviewWarning(string $manufacturer, array $mapping): ?string
+    {
+        return $this->supplierSpecialRefusal($manufacturer, $this->mappingHasStandardPrice($mapping));
+    }
+
+    /**
+     * Znacznik cennika z cenami specjalnymi — po zapisie slotu z oceną; nigdy nie zdejmowany automatycznie.
+     *
+     * @param  array<string, mixed>  $slotValues
+     */
+    private function markSupplierSpecial(PriceList $priceList, array $slotValues): void
+    {
+        if (($slotValues['base_price_net'] ?? null) !== null && ! $priceList->has_supplier_special) {
+            $priceList->forceFill(['has_supplier_special' => true])->save();
+        }
+    }
+
+    /**
+     * Uwagi importu o ocenie zachowawczej — jedna uwaga na powód, z liczbą wierszy i przykładowymi kodami.
+     *
+     * @param  array<string, string|null>  $bySku
+     * @return list<string>
+     */
+    private function ratingNotes(array $bySku): array
+    {
+        $byReason = [];
+        foreach ($bySku as $sku => $reason) {
+            if ($reason !== null) {
+                $byReason[$reason][] = (string) $sku;
+            }
+        }
+        $notes = [];
+        foreach ($byReason as $reason => $skus) {
+            $notes[] = 'Cena specjalna bez użytecznej ceny normalnej ('.$reason.'): '.count($skus).' wierszy (kody: '
+                .implode(', ', array_slice($skus, 0, 15)).(count($skus) > 15 ? '…' : '')
+                .') — ocena zachowawcza: cena standardowa = katalogowa, cena zakupu z pliku ukryta jak cena specjalna.';
+        }
+
+        return $notes;
     }
 
     /**
@@ -952,8 +1141,11 @@ final class PriceListImportService
      */
     public function createFileCard(PriceList $priceList, string $sku, array $payload): array
     {
-        $product = Product::query()->create(['sku' => $sku, ...$payload]);
-        $saved = $this->effectivePrices->saveSlot($product, ProductSourcePrice::SOURCE_FILE, $this->fileSlotValues($payload, $priceList));
+        // ocena ceny specjalnej tylko w slocie (SLOT_ONLY_FIELDS)
+        $product = Product::query()->create(['sku' => $sku, ...array_diff_key($payload, array_flip(self::SLOT_ONLY_FIELDS))]);
+        $slotValues = $this->fileSlotValues($payload, $priceList);
+        $saved = $this->effectivePrices->saveSlot($product, ProductSourcePrice::SOURCE_FILE, $slotValues);
+        $this->markSupplierSpecial($priceList, $slotValues);
 
         return ['product' => $product, 'slot' => $saved['slot']];
     }
@@ -1365,6 +1557,8 @@ final class PriceListImportService
         $errors = [];
         $rowsTotal = 0;
         $sheetDetails = [];
+        /** @var array<string, string|null> $ratingNotes kod => powód oceny zachowawczej (ostatni wiersz kodu) */
+        $ratingNotes = [];
 
         foreach ($mapping['sheets'] as $sheetMap) {
             $role = (string) ($sheetMap['role'] ?? 'catalog');
@@ -1388,7 +1582,7 @@ final class PriceListImportService
             $cols = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
             $map = [];
             $mappable = array_merge(
-                ['sku', 'sku_alt', 'name', 'name_extra', 'catalog_price', 'discount', 'purchase', 'surcharge', 'price_unit', 'pack_price', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
+                ['sku', 'sku_alt', 'name', 'name_extra', 'catalog_price', 'discount', 'purchase', 'standard_price', 'surcharge', 'price_unit', 'pack_price', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
                 // kolumny z parametrem wyrobu przechodzą tak samo jak reszta mapowania
                 SpreadsheetColumnMapper::attributeFields(),
             );
@@ -1396,6 +1590,13 @@ final class PriceListImportService
                 if (isset($cols[$key]) && is_numeric($cols[$key])) {
                     $map[$key] = (int) $cols[$key];
                 }
+            }
+            // Upust na kolumnie ceny (SECURA: analiza zgaduje „21%” jako upust, człowiek wskazuje ją jako cenę normalną):
+            // cena czytana jako procent dałaby zmyślony zakup (56 zł × (1 − 44,24%)). Przy cenie normalnej upust na tej
+            // samej kolumnie co cena normalna, zakup albo katalogowa wypada — jak w SpreadsheetColumnMapper::refineMapping.
+            if (isset($map['standard_price'], $map['discount'])
+                && in_array($map['discount'], array_filter([$map['standard_price'], $map['purchase'] ?? null, $map['catalog_price'] ?? null], static fn ($c): bool => $c !== null), true)) {
+                unset($map['discount']);
             }
             // Role, które człowiek ustawił w oknie importu. Poniższe korekty ratują mapowanie zgadnięte przez
             // maszynę, ale na ręcznym mapowaniu robiłyby dokładnie to, przed czym to okno chroni: cofałyby wybór
@@ -1511,6 +1712,7 @@ final class PriceListImportService
 
                 $sku = (string) $parsed['product']['sku'];
                 $product = $parsed['product'];
+                $ratingNotes[$sku] = $parsed['rating_note'] ?? null;
                 if ($withSource) {
                     $product['_source'] = ['sheet' => $sheetName, 'row' => $excelRow];
                 }
@@ -1536,6 +1738,8 @@ final class PriceListImportService
             'errors' => $errors,
             'rows_total' => $rowsTotal,
             'sheets' => $sheetDetails,
+            'standard_price_mapped' => $this->mappingHasStandardPrice($mapping),
+            'rating_notes' => $this->ratingNotes($ratingNotes),
         ];
         if ($withSource) {
             $result['file_names'] = $fileNames;
@@ -1647,6 +1851,14 @@ final class PriceListImportService
                     static fn (array $item): array => $item['product'],
                     $items,
                 ));
+                // Ocena ceny specjalnej: próg ceny to katalogowa i zakup, więc rozmiary w tej samej cenie mogą mieć różne
+                // ceny normalne — karta dostaje ocenę z najwyższą ceną standardową (ukryć więcej, nie mniej).
+                $rating = $this->strictestRating(array_map(static fn (array $item): array => $item['product'], $items));
+                foreach (self::SLOT_ONLY_FIELDS as $field) {
+                    if (array_key_exists($field, $chosen) || $rating[$field] !== null) {
+                        $chosen[$field] = $rating[$field];
+                    }
+                }
                 $model = trim((string) ($chosen['_model_key'] ?? $chosen['_size_core'] ?? ''));
                 if ($model !== '' && trim((string) ($chosen['_size_core'] ?? '')) === '') {
                     $chosen['_size_core'] = $model;
@@ -2221,7 +2433,7 @@ final class PriceListImportService
      * @param  array<int, ProductSourcePrice|null>  $fileSlots
      * @return array{change: array<string, mixed>|null, summary: array<string, mixed>, history: bool, warning: string|null}
      */
-    private function applyRedirectGroup(Product $card, array $rows, int $priceListId, string $listManufacturer, array &$fileSlots): array
+    private function applyRedirectGroup(Product $card, array $rows, PriceList $priceList, string $listManufacturer, array &$fileSlots): array
     {
         // właściciel sprzed zapisu slotu (slot „file” tego importu zmienia wynik ownerSourceKeys)
         // (właściciel „file” = slot pliku marki karty; ten cennik jest właścicielem, gdy to jego slot)
@@ -2229,7 +2441,7 @@ final class PriceListImportService
         // karta innej marki niż plik (marka z nazwy wyrobu, poprawiona ręcznie; 26.09.2026) — jak w zwykłej ścieżce
         $fillEmptyOnly = ($owners !== []
             && ! (in_array(ProductSourcePrice::SOURCE_FILE, $owners, true)
-                && (int) $this->fileSlot($card, $fileSlots)?->price_list_id === $priceListId
+                && (int) $this->fileSlot($card, $fileSlots)?->price_list_id === (int) $priceList->id
                 && CanonicalBrand::same($listManufacturer, (string) $card->manufacturer)))
             || $this->foreignManufacturer($card, $listManufacturer);
         $payloads = array_column($rows, 'payload');
@@ -2243,7 +2455,8 @@ final class PriceListImportService
 
         $cardPayload = [];
         foreach ($first as $field => $value) {
-            if (in_array($field, ProductEffectivePrice::PRICE_FIELDS, true)) {
+            // ocena ceny specjalnej tylko w slocie (SLOT_ONLY_FIELDS)
+            if (in_array($field, ProductEffectivePrice::PRICE_FIELDS, true) || in_array($field, self::SLOT_ONLY_FIELDS, true)) {
                 continue;
             }
             foreach ($payloads as $other) {
@@ -2291,13 +2504,16 @@ final class PriceListImportService
             'discount_percent' => $first['discount_percent'] ?? null,
             'currency' => $first['currency'] ?? null,
             'pack_qty' => $first['pack_qty'] ?? null,
-            'price_list_id' => $priceListId,
+            'price_list_id' => $priceList->id,
         ];
+        // ocena ceny specjalnej: przy różnych ocenach wierszy karty ta z najwyższą ceną standardową (ukryć więcej)
+        $slotValues += $this->strictestRating($payloads);
         $before = $this->effectivePrices->previousSourcePrices($card, $fileSlot, $slotValues);
         $change = $this->detectPriceChange($before, $cardPayload, $sku);
         $summary = $this->summarizeUpdate($before, $cardPayload, $sku, $change !== null);
         $card->update($updates);
         $saved = $this->effectivePrices->saveSlot($card, ProductSourcePrice::SOURCE_FILE, $slotValues);
+        $this->markSupplierSpecial($priceList, $slotValues);
         $fileSlots[(int) $card->id] = $saved['slot'];
 
         return [
@@ -2525,7 +2741,7 @@ final class PriceListImportService
      * @param  array<string, int>  $map
      * @param  array{name: ?string, category: ?string, group: ?string, name_group?: ?string, row_name?: ?string, row_key?: ?string}  $carry
      * @param  array<string, true>  $locked  role kolumn wskazane przez człowieka w oknie importu
-     * @return array{status: string, product?: array<string, mixed>, message?: string}
+     * @return array{status: string, product?: array<string, mixed>, message?: string, rating_note?: string|null}
      */
     private function parseRow(
         array $row,
@@ -2673,6 +2889,9 @@ final class PriceListImportService
         // Cennik Ansell: cena faktury (P) = cena po upuście + dopłata % (kolumna M), a cena katalogowa (E) jest
         // bez dopłaty. Katalogowa z dopłatą trzyma kartę spójną: katalog − upust = zakup (np. 3,68 + 25% = 4,60;
         // − 8% = 4,24). Dopłatę wskazuje człowiek w oknie importu; pusta komórka = bez dopłaty.
+        // katalogowa dosłownie z pliku (przed dopłatą i przeliczeniem kartonu) — podstawa rabatu ceny normalnej
+        $fileCatalog = $catalog;
+        $surchargeApplied = false;
         if (isset($map['surcharge'])) {
             $surcharge = $this->toFloat($row[$map['surcharge']] ?? null) ?? 0.0;
             if ($surcharge > 0 && $surcharge < 1) {
@@ -2685,6 +2904,7 @@ final class PriceListImportService
                 ];
             }
             $catalog = round($catalog * (1 + $surcharge / 100), 2);
+            $surchargeApplied = $surcharge > 0;
         }
 
         $discount = isset($map['discount'])
@@ -2705,7 +2925,8 @@ final class PriceListImportService
         // Wiersz kartonowy bierze zakup z kolumny ceny za jedno opakowanie, a katalogową za karton przelicza tą
         // samą proporcją (cena za opakowanie = cena za karton / liczba opakowań w kartonie). Bez ceny za
         // opakowanie wiersza nie zapisujemy — cena kartonu na karcie udawałaby cenę pary albo pudełka.
-        if ($this->isCartonPriceRow($row, $map)) {
+        $cartonRow = $this->isCartonPriceRow($row, $map);
+        if ($cartonRow) {
             $packPrice = $this->toFloat($row[$map['pack_price']] ?? null);
             $label = $sku !== '' ? " ({$sku})" : '';
             if ($packPrice === null || $packPrice <= 0) {
@@ -2731,6 +2952,55 @@ final class PriceListImportService
         if ($purchase !== null && $catalog > 0 && $purchase > $catalog && ! isset($locked['purchase'])) {
             $purchase = null;
         }
+        // Cena normalna (standardowa) dostawcy obok ceny specjalnej — cennik SECURA (decyzja właściciela 10.10.2026):
+        // „40% s.dystryb.” = cena specjalna (zakup, nie każdy wiersz ją ma), „21%” = cena normalna, katalogowa netto.
+        // Rolę wskazuje tylko człowiek w oknie importu. Ważna, gdy dodatnia i nie wyższa od katalogowej z pliku.
+        // Rabat standardowy liczony z surowych wartości pliku (cena normalna i katalogowa w tej samej jednostce), więc
+        // wiersz kartonowy (CAR) też go ma, choć zakup i katalogowa są przeliczone na opakowanie — ceną zakupu cena
+        // normalna kartonu jednak nie zostaje. Dopłata % w wierszu: cena normalna nie obejmuje dopłaty, więc nie
+        // służy ani do zakupu, ani do rabatu.
+        $standardMapped = isset($map['standard_price']);
+        $purchaseFromColumn = $purchase !== null && $purchase > 0;
+        // Upust przy kolumnie ceny normalnej: zakup z niezerowego upustu to cena dostawcy z pliku, tak samo jak cena
+        // zakupu z kolumny — ma pierwszeństwo przed ceną normalną, dostaje ocenę i rabat grupy go nie nadpisuje.
+        // Zwykłe cenniki z upustem (bez roli standard_price) liczą zakup z upustu jak dotąd, na końcu.
+        $purchaseFromDiscount = $standardMapped && ! $purchaseFromColumn && $discount > 0 && $catalog > 0;
+        if ($purchaseFromDiscount) {
+            $purchase = round($catalog * (1 - ($discount / 100)), 2);
+        }
+        $specialFromFile = $purchaseFromColumn || $purchaseFromDiscount;
+        // cena specjalna bez ceny katalogowej (po przeliczeniu kartonu i dopłacie — ta idzie do slotu): nie ma od czego
+        // liczyć ceny standardowej, a bez oceny cena specjalna weszłaby jako zwykły zakup — wiersz pominięty
+        if ($standardMapped && $specialFromFile && $catalog <= 0) {
+            return [
+                'status' => 'error',
+                'message' => "{$prefix}Wiersz {$excelRow} ({$sku}): brak ceny katalogowej przy cenie specjalnej — wiersz pominięty, dotychczasowa cena karty (jeśli jest) bez zmian.",
+            ];
+        }
+        $standard = null;
+        $standardDiscount = null;
+        $ratingNote = null;
+        if ($standardMapped) {
+            $standardCell = $this->toFloat($row[$map['standard_price']] ?? null);
+            if ($surchargeApplied) {
+                $ratingNote = 'dopłata % w wierszu — cena normalna nie obejmuje dopłaty';
+            } elseif ($standardCell !== null && $standardCell > 0 && $fileCatalog > 0
+                && $standardCell <= $fileCatalog + self::STANDARD_PRICE_TOLERANCE) {
+                $standardDiscount = max(0.0, min(99.99, round((1 - $standardCell / $fileCatalog) * 100, 2)));
+                if (! $cartonRow) {
+                    $standard = $standardCell;
+                }
+            } elseif ($standardCell !== null && $standardCell > 0) {
+                $ratingNote = 'cena normalna wyższa od ceny katalogowej';
+            } else {
+                $ratingNote = 'brak ceny normalnej';
+            }
+        }
+        // ani ceny zakupu z kolumny, ani upustu: kupujemy po cenie normalnej — to też cena zakupu z pliku (rabat grupy
+        // jej nie nadpisuje, AssortmentGroupService)
+        if (! $specialFromFile && $standard !== null) {
+            $purchase = $standard;
+        }
         if ($purchase !== null && $purchase > 0) {
             $purchaseFromFile = true;
             if ($catalog > 0) {
@@ -2741,6 +3011,21 @@ final class PriceListImportService
 
         if ($purchase === null) {
             $purchase = round($catalog * (1 - ($discount / 100)), 2);
+        }
+
+        // Ocena ceny jak w slotach B2B UVEX: cennik bazowy = katalogowa, rabat standardowy z ceny normalnej
+        // (SupplierSpecialPrice::evaluate) — tylko do slotu „file”, nie na kartę (SLOT_ONLY_FIELDS). Cena specjalna
+        // z pliku (kolumna ceny zakupu albo upust) bez użytecznej ceny normalnej: ocena zachowawcza — rabat
+        // standardowy 0, czyli cena standardowa = katalogowa, a cena specjalna zostaje ukryta jak każda inna (bez oceny
+        // szłaby jako zwykły zakup, widoczny dla wszystkich). Wiersz bez ceny specjalnej nie ma czego ukrywać.
+        $basePrice = null;
+        if ($standardDiscount !== null) {
+            $basePrice = round($catalog, 2);
+        } elseif ($standardMapped && $specialFromFile) {
+            $basePrice = round($catalog, 2);
+            $standardDiscount = 0.0;
+        } else {
+            $ratingNote = null;
         }
 
         $category = $defaultCategory;
@@ -2813,6 +3098,8 @@ final class PriceListImportService
                 'catalog_price_net' => $catalog,
                 'discount_percent' => $discount,
                 'purchase_price' => $purchase,
+                'base_price_net' => $basePrice,
+                'standard_discount_percent' => $standardDiscount,
                 'currency' => $currency,
                 'stock' => 0,
                 'pack_qty' => $packQty,
@@ -2820,6 +3107,8 @@ final class PriceListImportService
                 '_model_key' => $modelForProduct,
                 '_purchase_from_file' => $purchaseFromFile,
             ],
+            // ocena zachowawcza ceny specjalnej — powód do uwag importu (collectFromMapping)
+            'rating_note' => $ratingNote,
         ];
     }
 

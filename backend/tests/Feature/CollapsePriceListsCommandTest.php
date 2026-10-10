@@ -110,6 +110,30 @@ final class CollapsePriceListsCommandTest extends TestCase
         $this->assertSame('file:'.$newer->id, $identifier->source_key);
     }
 
+    /** Grupa z cennikiem z cenami specjalnymi dostawcy zostaje nietknięta — zwinięcie przepięłoby jej historię cen. */
+    public function test_group_with_supplier_special_price_list_is_skipped(): void
+    {
+        [$older, $newer] = $this->twoArtraLists();
+        $older->forceFill(['has_supplier_special' => true])->save();
+        $product = Product::query()->create([
+            'sku' => 'ARAGON 920', 'name' => 'ARAGON 920', 'manufacturer' => 'ARTRA', 'catalog_price_net' => 100, 'purchase_price' => 80,
+        ]);
+        ProductPriceHistory::query()->create([
+            'product_id' => $product->id, 'price_list_id' => $older->id, 'catalog_price_net' => 100, 'purchase_price' => 80,
+            'currency' => 'PLN', 'source' => 'price_list_import',
+        ]);
+
+        $this->artisan('price-lists:collapse --apply')
+            ->expectsOutputToContain('cennik ma ceny specjalne dostawcy')
+            ->assertSuccessful();
+
+        $this->assertSame(2, PriceList::query()->count());
+        $this->assertTrue($older->fresh()->has_supplier_special);
+        $this->assertNotNull($newer->fresh());
+        $this->assertSame((int) $older->id, (int) ProductPriceHistory::query()->sole()->price_list_id);
+        $this->assertSame(0, PriceListImport::query()->count());
+    }
+
     public function test_different_manufacturers_are_not_merged(): void
     {
         $this->twoArtraLists();

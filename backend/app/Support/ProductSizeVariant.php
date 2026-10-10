@@ -671,15 +671,24 @@ final class ProductSizeVariant
      * Czy rozmiar odczytany z samego kodu jest pewny. Końcówka po separatorze, znacznik T i trzycyfrowy kod
      * (Ansell VP100, Showa 34703090) — tak, jak dotąd. Końcówka doklejona do kodu (AF010005, CRIOT08, SP070001C5,
      * 620010X10, HM5500BS) — tylko z dowodem: (a) nazwa albo opakowanie podaje ten sam rozmiar, albo (b) nazwa mówi
-     * o rękawicach, obuwiu lub odzieży. Rozmiar z nazwy sprzeczny z końcówką to brak dowodu.
+     * o rękawicach, obuwiu lub odzieży. Rozmiar z nazwy sprzeczny z końcówką to brak dowodu. Nazwa rzeczy „do
+     * rękawic / na buty” (namesAccessoryOfSizedFamily) odbiera zaufanie także trzycyfrowemu kodowi.
      */
     private function trustsSkuOnlySize(?string $name, ?string $packaging, string $kind, ?string $size): bool
     {
-        if ($kind !== self::TAIL_GLUED_NUMERIC && $kind !== self::TAIL_GLUED_LETTER) {
+        $glued = $kind === self::TAIL_GLUED_NUMERIC || $kind === self::TAIL_GLUED_LETTER;
+        if (! $glued && $kind !== self::TAIL_DIGIT_CODE) {
             return true;
         }
         $named = $this->normalizeSizeToken((string) $packaging) ?? $this->sizeFromName((string) $name);
         if ($named !== null && $size !== null && $named === $size) {
+            return true;
+        }
+        // „Torba do rękawic” SECURA T596T100: końcówka 100 to nie rozmiar 10 — wyrób jest DO rękawic, nie rękawicą
+        if ($this->namesAccessoryOfSizedFamily((string) $name)) {
+            return false;
+        }
+        if (! $glued) {
             return true;
         }
         $name = trim((string) $name);
@@ -720,6 +729,27 @@ final class ProductSizeVariant
         }
 
         return ! in_array(strtoupper($letter), $letters, true);
+    }
+
+    /**
+     * Nazwa rzeczy do wyrobu z rozmiarami: rodzina rękawic, obuwia albo odzieży pada dopiero po „do / na / dla / pod /
+     * for” („Torba do rękawic”, „Ochraniacze na buty”), a nazwa bez tych zwrotów rodziny nie ma. Wtedy końcówka
+     * kodu nie jest rozmiarem — także trzycyfrowa (T596T100 ≠ rozmiar 10). „Rękawice do pracy” to rękawice.
+     */
+    private function namesAccessoryOfSizedFamily(string $name): bool
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return false;
+        }
+        $this->assortment ??= new PpeAssortment;
+        if (! in_array($this->assortment->family($name), self::SIZED_FAMILIES, true)) {
+            return false;
+        }
+        // tylko przyimek z jednym słowem: „Odporna na przecięcie rękawica” to rękawica
+        $rest = preg_replace('/(?<![\p{L}\p{N}])(?:do|na|dla|pod|for)\s+[\p{L}\p{N}\-]+/iu', ' ', $name) ?? $name;
+
+        return $rest !== $name && $this->assortment->family($rest) === null;
     }
 
     /**

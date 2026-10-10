@@ -290,7 +290,8 @@ export function ErpStockDetailsModal({ erp, title, onClose }: { erp: ErpCardStoc
           )}
           {erp.prices_hidden && (
             <p className="mt-1 text-[11px] text-slate-500">
-              Ceny zakupu z PZ ukryte — karta ma konto B2B z ceną specjalną, a Twoja rola nie ma podglądu cen specjalnych.
+              Ceny zakupu z PZ ukryte — karta ma cenę specjalną dostawcy (konto B2B albo cennik z pliku), a Twoja rola nie
+              ma podglądu cen specjalnych.
             </p>
           )}
 

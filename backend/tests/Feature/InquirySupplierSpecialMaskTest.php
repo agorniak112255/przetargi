@@ -150,6 +150,38 @@ final class InquirySupplierSpecialMaskTest extends TestCase
         $this->assertNoSpecialLeak((string) json_encode($res->json('items')));
     }
 
+    /** Karta SECURA z ceną specjalną z pliku (40%) w analizie dyrektora: kierownik dostaje ofertę od ceny standardowej. */
+    public function test_manager_viewing_directors_inquiry_with_file_special_price_gets_remasked_rows(): void
+    {
+        $secura = $this->securaFileCard()['product'];
+        $dyrektor = $this->userWithRole('dyrektor');
+        $id = (int) $this->analyzeAs($dyrektor, [[
+            'id' => $secura->id,
+            'sku' => $secura->sku,
+            'name' => $secura->name,
+            'manufacturer' => $secura->manufacturer,
+            'catalog_price_net' => self::FILE_CATALOG,
+            'purchase_price' => self::FILE_SPECIAL_PRICE,
+            'discount_percent' => '40.01',
+            'currency' => 'PLN',
+            'price_pln' => (float) self::FILE_CATALOG,
+            'purchase_price_pln' => (float) self::FILE_SPECIAL_PRICE,
+            'stock' => 1,
+            'ai_match_percent' => 92,
+        ]])->json('id');
+        $this->assertSame(
+            (float) OfferPricing::fromPurchase((float) self::FILE_SPECIAL_PRICE),
+            ClientInquiry::query()->findOrFail($id)->analysis['matches'][0]['products'][0]['offer_pln'],
+        );
+
+        Sanctum::actingAs($this->userWithRole('kierownik'));
+        $res = $this->getJson("/api/inquiries/{$id}")
+            ->assertOk()
+            ->assertJsonPath('items.0.candidates.0.id', $secura->id)
+            ->assertJsonPath('items.0.candidates.0.offer_pln', (float) OfferPricing::fromPurchase((float) self::FILE_STANDARD));
+        $this->assertNoSpecialLeak((string) json_encode($res->json('items')));
+    }
+
     /**
      * Zapytanie handlowca zapisane z ceną specjalną (sprzed ukrywania albo autor stracił uprawnienie): po otwarciu
      * przez autora list przelicza się od ceny standardowej, a widok nie pokazuje ceny specjalnej.

@@ -150,6 +150,27 @@ final class TenderSupplierSpecialMaskTest extends TestCase
         }
     }
 
+    public function test_item_update_to_card_with_file_special_price_follows_viewer_price(): void
+    {
+        // SECURA z pliku: koszt handlowca = cena standardowa 22,78 zamiast ceny 40% (17,30)
+        $secura = $this->securaFileCard()['product'];
+        foreach ([[$this->userWithRole('handlowiec'), self::FILE_STANDARD], [$this->userWithRole('admin'), self::FILE_SPECIAL_PRICE]] as [$user, $purchase]) {
+            Sanctum::actingAs($user);
+            [$tender, $item] = $this->tenderWith($user, 'Półmaska SECURA');
+
+            $response = $this->patchJson("/api/tenders/{$tender->id}/items/{$item->id}", ['main_product_id' => $secura->id])
+                ->assertOk();
+
+            $this->assertOffer($purchase, $item->fresh()->offer_price, $user->role);
+            $this->assertSame($purchase, $response->json('main_product.purchase_price'));
+            if ($user->role === 'handlowiec') {
+                $this->assertNoSpecialLeak((string) $response->getContent());
+                $this->assertNoSpecialLeak((string) $this->getJson("/api/tenders/{$tender->id}")->assertOk()->getContent());
+            }
+            $this->assertSame(self::FILE_SPECIAL_PRICE, $secura->fresh()->purchase_price);
+        }
+    }
+
     public function test_item_update_variant_change_offer_follows_viewer_price(): void
     {
         $xl = $this->card->variants()->where('label', 'XL')->sole();

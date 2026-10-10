@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Support\ProductPriceChangeResolver;
@@ -292,6 +293,116 @@ final class ProductPriceChangeApiTest extends TestCase
         $this->assertEquals(20, $response->json('data.0.last_price_change.pct'));
         $this->assertSame('B-NONE', $response->json('data.1.sku'));
         $this->assertNull($response->json('data.1.last_price_change'));
+    }
+
+    public function test_file_rows_hidden_without_special_permission_when_file_slot_is_evaluated(): void
+    {
+        // SECURA: slot pliku z oceną (40% = cena specjalna 17,30, cena 21% → rabat standardowy 21,01%)
+        $list = PriceList::query()->create(['manufacturer' => 'SECURA', 'version' => '2026-10']);
+        $product = $this->product('SEC-1', 28.84, 17.30);
+        ProductSourcePrice::query()->create([
+            'product_id' => $product->id,
+            'source_key' => ProductSourcePrice::SOURCE_FILE,
+            'price_list_id' => $list->id,
+            'catalog_price_net' => 28.84,
+            'purchase_price' => 17.30,
+            'base_price_net' => 28.84,
+            'standard_discount_percent' => 21.01,
+        ]);
+        $this->history($product, 28.84, 18.00, 'price_list_import', '2026-09-01 08:00:00', $list->id);
+        $this->history($product, 30, 25, 'b2b:anro', '2026-09-03 08:00:00');
+        $this->history($product, 30, 26, 'b2b:anro', '2026-09-05 08:00:00');
+        // rabat z okna cennika to ten sam slot pliku
+        $this->history($product, 28.84, 17.30, 'price_list_discount', '2026-09-10 08:00:00', $list->id);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->getJson('/api/products/'.$product->id)->assertOk()
+            ->assertJsonPath('last_price_change.source', 'price_list_discount')
+            ->assertJsonPath('last_price_change.purchase_old', 18)
+            ->assertJsonPath('last_price_change.purchase_new', 17.3);
+        $this->getJson('/api/products/'.$product->id.'/price-history')->assertOk()
+            ->assertJsonPath('data.0.prices_hidden', false)
+            ->assertJsonPath('data.0.purchase_price', '17.30');
+
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        // ostatnia widoczna zmiana — konto bez oceny (plik ukryty)
+        $this->getJson('/api/products/'.$product->id)->assertOk()
+            ->assertJsonPath('last_price_change.source', 'b2b:anro')
+            ->assertJsonPath('last_price_change.purchase_new', 26);
+        $this->getJson('/api/products')->assertOk()
+            ->assertJsonPath('data.0.last_price_change.source', 'b2b:anro');
+        $rows = $this->getJson('/api/products/'.$product->id.'/price-history')->assertOk()->json('data');
+        $this->assertSame([true, false, false, true], array_column($rows, 'prices_hidden'));
+        $this->assertNull($rows[0]['purchase_price']);
+        $this->assertNull($rows[0]['purchase_old']);
+        $this->assertNull($rows[3]['purchase_price']);
+        $this->assertSame('26.00', $rows[1]['purchase_price']);
+        $mask = SupplierSpecialMask::hiding();
+        $this->assertSame([], array_values(array_filter(
+            iterator_to_array(app(ProductPriceChangeResolver::class)->changesSince(Carbon::parse('2026-08-01 00:00:00'), $mask), false),
+            static fn (array $change): bool => in_array($change['source'], ['price_list_import', 'price_list_discount'], true),
+        )));
+    }
+
+    public function test_rows_of_flagged_price_list_stay_hidden_after_slot_was_taken_over(): void
+    {
+        // SECURA oznaczona (has_supplier_special) — slot przejął potem Portwest, ocena zniknęła
+        $secura = PriceList::query()->create(['manufacturer' => 'SECURA', 'version' => '2026-10']);
+        $secura->forceFill(['has_supplier_special' => true])->save();
+        $portwest = PriceList::query()->create(['manufacturer' => 'Portwest', 'version' => 'v1']);
+        $product = $this->product('SEC-2', 30, 20);
+        ProductSourcePrice::query()->create([
+            'product_id' => $product->id,
+            'source_key' => ProductSourcePrice::SOURCE_FILE,
+            'price_list_id' => $portwest->id,
+            'catalog_price_net' => 30,
+            'purchase_price' => 20,
+        ]);
+        $this->history($product, 28.84, 18.00, 'price_list_import', '2026-09-01 08:00:00', $secura->id);
+        $this->history($product, 28.84, 17.30, 'price_list_discount', '2026-09-10 08:00:00', $secura->id);
+        // wiersz Portwestu ma poprzednią cenę 17,30 z SECURY — też ukryty
+        $this->history($product, 30, 20, 'price_list_import', '2026-10-01 08:00:00', $portwest->id);
+        $this->history($product, 30, 26, 'b2b:anro', '2026-09-03 08:00:00');
+        $this->history($product, 30, 27, 'b2b:anro', '2026-09-05 08:00:00');
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->getJson('/api/products/'.$product->id)->assertOk()
+            ->assertJsonPath('last_price_change.source', 'price_list_import')
+            ->assertJsonPath('last_price_change.purchase_old', 17.3);
+
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $this->getJson('/api/products/'.$product->id)->assertOk()
+            ->assertJsonPath('last_price_change.source', 'b2b:anro');
+        $rows = $this->getJson('/api/products/'.$product->id.'/price-history')->assertOk()->json('data');
+        $this->assertSame(['price_list_import', 'price_list_discount', 'b2b:anro', 'b2b:anro', 'price_list_import'], array_column($rows, 'source'));
+        $this->assertSame([true, true, false, false, true], array_column($rows, 'prices_hidden'));
+        $this->assertNull($rows[0]['purchase_old']);
+        $content = (string) json_encode($rows);
+        $this->assertDoesNotMatchRegularExpression('/(?<![\d.])17[.,]30?(?!\d)/', $content);
+        $this->assertDoesNotMatchRegularExpression('/(?<![\d.])18[.,]00?(?!\d)/', $content);
+    }
+
+    public function test_file_rows_visible_when_file_slot_has_no_evaluation(): void
+    {
+        $list = PriceList::query()->create(['manufacturer' => 'Portwest', 'version' => 'v1']);
+        $product = $this->product('PW-1', 12, 6);
+        ProductSourcePrice::query()->create([
+            'product_id' => $product->id,
+            'source_key' => ProductSourcePrice::SOURCE_FILE,
+            'price_list_id' => $list->id,
+            'catalog_price_net' => 12,
+            'purchase_price' => 6,
+        ]);
+        $this->history($product, 10, 5, 'price_list_import', '2026-09-01 08:00:00', $list->id);
+        $this->history($product, 12, 6, 'price_list_import', '2026-09-02 08:00:00', $list->id);
+
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $this->getJson('/api/products/'.$product->id)->assertOk()
+            ->assertJsonPath('last_price_change.source', 'price_list_import')
+            ->assertJsonPath('last_price_change.purchase_new', 6);
+        $this->getJson('/api/products/'.$product->id.'/price-history')->assertOk()
+            ->assertJsonPath('data.0.prices_hidden', false)
+            ->assertJsonPath('data.0.purchase_price', '6.00');
     }
 
     public function test_price_endpoints_still_require_products_view(): void

@@ -6828,9 +6828,9 @@ final class ClientInquiryService
             return $analysis;
         }
         $mask->preload(array_keys($ids));
-        // Karty ze slotem B2B z oceną (jak historia cen, decyzja D1): zapisana cena mogła być specjalna, choć dziś
-        // karta ma inną — bierzemy bieżącą cenę karty w widoku maskowanym. Pozostałe karty bez zmian.
-        $evaluable = array_values(array_filter(array_keys($ids), static fn (int $id): bool => $mask->hidesHistory($id, null)));
+        // Karty ze slotem B2B albo pliku z oceną (jak historia cen, decyzja D1): zapisana cena mogła być specjalna,
+        // choć dziś karta ma inną — bierzemy bieżącą cenę karty w widoku maskowanym. Pozostałe karty bez zmian.
+        $evaluable = array_values(array_filter(array_keys($ids), static fn (int $id): bool => $mask->hidesAnyHistory($id)));
         if ($evaluable === []) {
             return $analysis;
         }

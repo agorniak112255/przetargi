@@ -258,6 +258,172 @@ final class ProductSupplierSpecialMaskApiTest extends TestCase
         $this->assertNoSpecialLeak((string) $response->getContent());
     }
 
+    public function test_karta_secura_z_ceną_specjalną_z_pliku_w_cenie_standardowej_dla_handlowca(): void
+    {
+        ['product' => $card] = $this->securaFileCard();
+        $this->withErpStockValue($card, 17.30);
+
+        $this->actingAsRole('admin');
+        $this->getJson('/api/products')->assertOk()
+            ->assertJsonPath('data.0.purchase_price', self::FILE_SPECIAL_PRICE)
+            ->assertJsonPath('data.0.supplier_special.status', 'special')
+            ->assertJsonPath('data.0.supplier_special.standard_price', 22.78)
+            ->assertJsonPath('data.0.supplier_special.source', 'file');
+        $this->getJson('/api/products/'.$card->id)->assertOk()
+            ->assertJsonPath('purchase_price', self::FILE_SPECIAL_PRICE)
+            ->assertJsonPath('supplier_special.status', 'special')
+            ->assertJsonPath('supplier_special.source', 'file')
+            ->assertJsonPath('source_prices.0.source_key', ProductSourcePrice::SOURCE_FILE)
+            ->assertJsonPath('source_prices.0.purchase_price', self::FILE_SPECIAL_PRICE)
+            ->assertJsonPath('source_prices.0.supplier_special.status', 'special')
+            ->assertJsonPath('source_prices.0.supplier_special.source', 'file')
+            ->assertJsonPath('erp_xl.prices_hidden', false);
+        $this->getJson('/api/products/'.$card->id.'/price-history')->assertOk()
+            ->assertJsonPath('data.0.prices_hidden', false)
+            ->assertJsonPath('data.0.purchase_price', self::FILE_SPECIAL_PRICE);
+        $this->getJson('/api/products?supplier_special=special')->assertOk()
+            ->assertJsonPath('data.0.id', $card->id);
+
+        foreach (['handlowiec', 'kierownik'] as $role) {
+            $this->actingAsRole($role);
+            $list = $this->getJson('/api/products')->assertOk()
+                ->assertJsonPath('data.0.id', $card->id)
+                ->assertJsonPath('data.0.purchase_price', self::FILE_STANDARD)
+                // katalogowa = cennik bazowy (nie tajemnica), rabat liczony od niej na nowo
+                ->assertJsonPath('data.0.catalog_price_net', self::FILE_CATALOG)
+                ->assertJsonPath('data.0.discount_percent', self::FILE_STANDARD_DISCOUNT)
+                ->assertJsonPath('data.0.purchase_price_pln', 22.78)
+                ->assertJsonPath('data.0.supplier_special.status', 'standard')
+                ->assertJsonPath('data.0.supplier_special.source', 'file')
+                ->assertJsonPath('data.0.last_price_change', null);
+            $this->assertNoSpecialLeak((string) $list->getContent());
+
+            $details = $this->getJson('/api/products/'.$card->id)->assertOk()
+                ->assertJsonPath('purchase_price', self::FILE_STANDARD)
+                ->assertJsonPath('catalog_price_net', self::FILE_CATALOG)
+                ->assertJsonPath('supplier_special.status', 'standard')
+                ->assertJsonPath('supplier_special.source', 'file')
+                ->assertJsonPath('source_prices.0.source_key', ProductSourcePrice::SOURCE_FILE)
+                ->assertJsonPath('source_prices.0.purchase_price', self::FILE_STANDARD)
+                ->assertJsonPath('source_prices.0.discount_percent', self::FILE_STANDARD_DISCOUNT)
+                ->assertJsonPath('source_prices.0.supplier_special.status', 'standard')
+                ->assertJsonPath('source_prices.0.base_price_net', self::FILE_CATALOG)
+                ->assertJsonPath('last_price_change', null)
+                ->assertJsonPath('erp_xl.prices_hidden', true)
+                ->assertJsonPath('erp_xl.last_purchase.unit_price_pln', null)
+                ->assertJsonPath('erp_xl.items.0.warehouses.0.value', null)
+                ->assertJsonPath('erp_xl.items.0.warehouses.0.quantity', 10);
+            $this->assertNoSpecialLeak((string) $details->getContent());
+
+            $history = $this->getJson('/api/products/'.$card->id.'/price-history')->assertOk()
+                ->assertJsonPath('data.0.source', 'price_list_import')
+                ->assertJsonPath('data.0.prices_hidden', true)
+                ->assertJsonPath('data.0.purchase_price', null)
+                ->assertJsonPath('data.0.catalog_price_net', null);
+            $this->assertNoSpecialLeak((string) $history->getContent());
+
+            $this->getJson('/api/products?supplier_special=special')->assertForbidden();
+            $other = Product::query()->create([
+                'sku' => 'INNE-'.$role, 'name' => 'Półmaska inna', 'manufacturer' => 'Ansell',
+                'catalog_price_net' => 30, 'purchase_price' => 20, 'currency' => 'PLN', 'stock' => 1,
+            ]);
+            foreach ([
+                $this->getJson('/api/products?q=SEC-1001'),
+                $this->getJson('/api/products/compare?ids[]='.$card->id.'&ids[]='.$other->id),
+                $this->getJson('/api/products/cross-ref?code='.$card->sku),
+                $this->getJson('/api/price-lists'),
+            ] as $response) {
+                $response->assertSuccessful();
+                $this->assertNoSpecialLeak((string) $response->getContent());
+            }
+        }
+    }
+
+    public function test_cennik_z_pliku_z_ceną_specjalną_bez_cen_zmian_dla_handlowca(): void
+    {
+        ['product' => $card, 'list' => $list] = $this->securaFileCard();
+
+        $this->actingAsRole('admin');
+        $this->getJson('/api/price-lists/'.$list->id)->assertOk()
+            ->assertJsonPath('price_changes.0.purchase_new', 17.3)
+            ->assertJsonPath('b2b_account', null);
+
+        $this->actingAsRole('handlowiec');
+        $response = $this->getJson('/api/price-lists/'.$list->id)->assertOk()
+            ->assertJsonPath('price_changes.0.sku', $card->sku)
+            ->assertJsonPath('price_changes.0.purchase_new', null)
+            ->assertJsonPath('price_changes.0.purchase_old', null)
+            ->assertJsonPath('price_changes.0.discount_new', null)
+            ->assertJsonPath('price_changes.0.direction', 'down')
+            ->assertJsonPath('updated_products.0.purchase_new', null);
+        $this->assertNoSpecialLeak((string) $response->getContent());
+    }
+
+    public function test_cennik_konta_b2b_ze_slotem_pliku_z_oceną_bez_cen_dla_handlowca(): void
+    {
+        // wpis wspólny: konto Anro (bez slotów z oceną) i import pliku SECURA z ceną specjalną
+        ['product' => $card, 'list' => $list] = $this->securaFileCard();
+        $anro = $this->otherAccount();
+        $anro->forceFill(['last_price_list_id' => $list->id])->save();
+
+        $this->actingAsRole('admin');
+        $this->getJson('/api/price-lists/'.$list->id)->assertOk()
+            ->assertJsonPath('b2b_account.id', $anro->id)
+            ->assertJsonPath('price_changes.0.purchase_new', 17.3);
+
+        $this->actingAsRole('handlowiec');
+        $response = $this->getJson('/api/price-lists/'.$list->id)->assertOk()
+            ->assertJsonPath('price_changes.0.sku', $card->sku)
+            ->assertJsonPath('price_changes.0.purchase_new', null);
+        $this->assertNoSpecialLeak((string) $response->getContent());
+
+        // flaga cennika wystarcza, nawet gdy slot pliku stracił ocenę
+        ProductSourcePrice::query()->where('product_id', $card->id)->update(['base_price_net' => null, 'standard_discount_percent' => null]);
+        $this->getJson('/api/price-lists/'.$list->id)->assertOk()
+            ->assertJsonPath('price_changes.0.purchase_new', null);
+    }
+
+    public function test_slot_przejęty_przez_inny_cennik_dalej_ukrywa_erp_i_historię_secury(): void
+    {
+        ['product' => $card, 'slot' => $slot] = $this->securaFileCard();
+        $this->withErpStockValue($card, 17.30);
+        $other = PriceList::query()->create(['manufacturer' => 'SECURA', 'manufacturer_key' => 'secura-2', 'version' => '2027']);
+        $slot->forceFill(['price_list_id' => $other->id, 'purchase_price' => 25, 'discount_percent' => 13.31, 'base_price_net' => null, 'standard_discount_percent' => null])->save();
+        $card->forceFill(['purchase_price' => 25, 'discount_percent' => 13.31])->save();
+
+        $this->actingAsRole('handlowiec');
+        $response = $this->getJson('/api/products/'.$card->id)->assertOk()
+            ->assertJsonPath('purchase_price', '25.00')
+            ->assertJsonPath('supplier_special', null)
+            ->assertJsonPath('erp_xl.prices_hidden', true)
+            ->assertJsonPath('erp_xl.last_purchase.unit_price_pln', null);
+        $this->assertNoSpecialLeak((string) $response->getContent());
+        $history = $this->getJson('/api/products/'.$card->id.'/price-history')->assertOk()
+            ->assertJsonPath('data.0.prices_hidden', true)
+            ->assertJsonPath('data.0.purchase_price', null);
+        $this->assertNoSpecialLeak((string) $history->getContent());
+    }
+
+    public function test_cennik_z_pliku_bez_oceny_bez_zmian_dla_handlowca(): void
+    {
+        // plik bez kolumny ceny specjalnej (bez ceny bazowej i rabatu standardowego) — ceny jak dotąd
+        ['product' => $card, 'list' => $list] = $this->securaFileCard('SEC-PLAIN', [], [
+            'base_price_net' => null,
+            'standard_discount_percent' => null,
+        ]);
+        $this->actingAsRole('handlowiec');
+
+        $this->getJson('/api/price-lists/'.$list->id)->assertOk()
+            ->assertJsonPath('price_changes.0.purchase_new', 17.3);
+        $this->getJson('/api/products/'.$card->id)->assertOk()
+            ->assertJsonPath('purchase_price', self::FILE_SPECIAL_PRICE)
+            ->assertJsonPath('supplier_special', null)
+            ->assertJsonPath('erp_xl.prices_hidden', false);
+        $this->getJson('/api/products/'.$card->id.'/price-history')->assertOk()
+            ->assertJsonPath('data.0.prices_hidden', false)
+            ->assertJsonPath('data.0.purchase_price', self::FILE_SPECIAL_PRICE);
+    }
+
     public function test_handlowiec_i_kierownik_nie_dostaja_ceny_specjalnej_nigdzie(): void
     {
         ['product' => $card, 'variants' => $variants] = $this->supplierSpecialCard('60148-UVEX', [
@@ -426,14 +592,15 @@ final class ProductSupplierSpecialMaskApiTest extends TestCase
         $this->assertSame($few, $many);
     }
 
-    /** Wartość księgowa partii w magazynie towaru XL: 10 szt. × 173,19 zł = 1731,90 zł. */
-    private function withErpStockValue(Product $card): void
+    /** Wartość księgowa partii w magazynie towaru XL: 10 szt. × cena jednostkowa (domyślnie 173,19 zł = 1731,90 zł). */
+    private function withErpStockValue(Product $card, float $unitPrice = 173.19): void
     {
+        $value = round($unitPrice * 10, 2);
         $item = ErpItem::query()->whereHas('links', static fn ($q) => $q->where('product_id', $card->id))->firstOrFail();
         $item->forceFill([
-            'stock_value' => 1731.90,
+            'stock_value' => $value,
             'stock_by_warehouse' => [[
-                'code' => '01H', 'name' => 'Magazyn HANDEL', 'quantity' => 10, 'value' => 1731.90, 'oldest_lot' => '2026-09-20',
+                'code' => '01H', 'name' => 'Magazyn HANDEL', 'quantity' => 10, 'value' => $value, 'oldest_lot' => '2026-09-20',
             ]],
         ])->save();
     }

@@ -29,6 +29,8 @@ class PriceList extends Model
         'manufacturer_key',
         // ceny sugerowane bez cen zakupu — plik nie ma pierwszeństwa przed kontem B2B (ProductEffectivePrice)
         'suggested_prices',
+        // cennik z cenami specjalnymi dostawcy (kolumna ceny normalnej) — ustawia import, nie zdejmuje go nic automatycznie
+        'has_supplier_special',
         'version',
         'original_filename',
         'imported_by',
@@ -51,6 +53,7 @@ class PriceList extends Model
     {
         return [
             'suggested_prices' => 'boolean',
+            'has_supplier_special' => 'boolean',
             'errors' => 'array',
             'price_changes' => 'array',
             'updated_products' => 'array',

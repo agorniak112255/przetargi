@@ -67,7 +67,7 @@ type PriceChange = {
   catalog_old: number | null
   catalog_new: number | null
   catalog_pct: number | null
-  /** null = ceny konta B2B ukryte (brak uprawnienia do cen specjalnych). */
+  /** null = ceny ukryte (konto B2B albo cennik z pliku z ceną specjalną, brak uprawnienia do cen specjalnych). */
   purchase_old: number | null
   purchase_new: number | null
   discount_old: number | null
@@ -85,7 +85,7 @@ type PriceListB2bAccount = {
 type UpdatedProduct = {
   sku: string
   name: string
-  /** Ceny null = ceny konta B2B ukryte (brak uprawnienia do cen specjalnych). */
+  /** Ceny null = ceny ukryte (konto B2B albo cennik z pliku z ceną specjalną, brak uprawnienia do cen specjalnych). */
   catalog_old: number | null
   catalog_new: number | null
   purchase_old: number | null
@@ -157,6 +157,8 @@ function b2bLockedTitle(account: PriceListB2bAccount): string {
  * Zachowane karty liczone w pierwszym pasującym powodzie, suma z products_to_delete = products_total.
  */
 type PriceListDeletionPreview = {
+  /** powód blokady usunięcia (cennik z cenami specjalnymi dostawcy) — wtedy liczby są zerowe i nie ma potwierdzenia */
+  blocked_reason?: string | null
   products_total: number
   products_to_delete: number
   kept_other_price_lists: number
@@ -175,6 +177,8 @@ type PriceListDiscounts = {
   ungrouped: { product_count: number; discount_percent: number | null; mixed: boolean }
   product_count: number
   b2b_priced_count: number
+  /** karty z ceną specjalną z pliku (kolumna ceny normalnej) — rabat cennika ich nie zmienia; poza groups i ungrouped */
+  special_rated_count?: number
 }
 
 /** Formularz rabatów w edycji wpisu: wartości jako tekst pól, porównywane z odczytem przy zapisie. */
@@ -757,11 +761,18 @@ export function PriceLists() {
       })
       let message = res.message
       if (discounts) {
-        const d = await api<{ message: string }>(`/price-lists/${row.id}/discounts`, {
-          method: 'PUT',
-          body: JSON.stringify(discounts),
-        })
+        const d = await api<{ message: string; special_rated_skipped?: number }>(
+          `/price-lists/${row.id}/discounts`,
+          {
+            method: 'PUT',
+            body: JSON.stringify(discounts),
+          },
+        )
         message = `${message} ${d.message}`
+        const ratedSkipped = d.special_rated_skipped ?? 0
+        if (ratedSkipped > 0) {
+          message += ` ${ratedSkipped.toLocaleString('pl-PL')} kart z ceną specjalną z pliku zostało bez zmian — rabat cennika ich nie zmienia.`
+        }
       }
       setMsg(message)
       cancelEditPriceList()
@@ -817,7 +828,7 @@ export function PriceLists() {
   }
 
   async function deletePriceList(row: PriceList) {
-    if (deleteConfirmText.trim() !== 'Tak') return
+    if (deleteConfirmText.trim() !== 'Tak' || deletionPreview?.blocked_reason) return
     setDeleteBusyId(row.id)
     setDeleteConfirmError('')
     setErr('')
@@ -2688,6 +2699,8 @@ export function PriceLists() {
                               ' Karty mają dziś różne rabaty — puste pole zostawia je bez zmian.'}
                             {editDiscounts.source.b2b_priced_count > 0 &&
                               ` ${editDiscounts.source.b2b_priced_count.toLocaleString('pl-PL')} kart ma cenę z konta B2B, które ma pierwszeństwo — ich cena obowiązująca zostaje z tego konta.`}
+                            {(editDiscounts.source.special_rated_count ?? 0) > 0 &&
+                              ` ${(editDiscounts.source.special_rated_count ?? 0).toLocaleString('pl-PL')} kart ma cenę specjalną z pliku — rabat cennika ich nie zmienia.`}
                           </span>
                         </div>
                       )}
@@ -2896,7 +2909,12 @@ export function PriceLists() {
                     {deletionPreviewError}
                   </p>
                 )}
-                {preview && (
+                {preview?.blocked_reason && (
+                  <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                    {preview.blocked_reason}
+                  </p>
+                )}
+                {preview && !preview.blocked_reason && (
                   <div className="mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-700">
                     {preview.products_total === 0 ? (
                       <p>Cennik nie ma żadnych kart — zostanie usunięty tylko sam cennik.</p>
@@ -2948,7 +2966,7 @@ export function PriceLists() {
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
                 value={deleteConfirmText}
                 onChange={(e) => setDeleteConfirmText(e.target.value)}
-                disabled={deleteBusyId !== null}
+                disabled={deleteBusyId !== null || Boolean(deletionPreview?.blocked_reason)}
                 autoFocus
                 autoComplete="off"
               />
@@ -2969,7 +2987,11 @@ export function PriceLists() {
               </button>
               <button
                 type="submit"
-                disabled={deleteConfirmText.trim() !== 'Tak' || deleteBusyId !== null}
+                disabled={
+                  deleteConfirmText.trim() !== 'Tak' ||
+                  deleteBusyId !== null ||
+                  Boolean(deletionPreview?.blocked_reason)
+                }
                 className="rounded bg-red-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
               >
                 {deleteBusyId === deleteConfirm.id ? 'Usuwam…' : 'Usuń cennik'}
