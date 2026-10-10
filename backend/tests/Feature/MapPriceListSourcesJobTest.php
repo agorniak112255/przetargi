@@ -19,7 +19,9 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Catalog\ProductIdentifierStore;
 use App\Services\Enrichment\DescriptionVersionStore;
 use App\Services\PriceLists\PriceListIntakeRunner;
+use App\Services\PriceLists\PriceListIntakeView;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -295,6 +297,52 @@ final class MapPriceListSourcesJobTest extends TestCase
         $this->assertSame(0, $second['described']);
         $this->assertSame(1, ProductEnrichmentBatch::query()->count());
         $this->assertSame(1, DB::table('product_enrichment_batch_items')->where('product_id', $card->id)->count());
+    }
+
+    public function test_run_split_by_time_budget_queues_descriptions_once_at_the_end(): void
+    {
+        $list = $this->list('Anro');
+        foreach (['P-1', 'P-2', 'P-3'] as $sku) {
+            $this->card($sku, $list);
+            FakePriceListImporter::$pins[$sku] = 'https://maker.test/'.mb_strtolower($sku);
+        }
+
+        // pierwsza porcja: budżet wyczerpany od razu — nic nie zlecone, karty idą dalej
+        $first = (new MapPriceListSourcesJob((int) $list->id, true, null, (int) $this->user->id))->run(true, -1.0);
+        $this->assertSame(0, $first['described']);
+        $this->assertCount(3, $first['remaining']);
+        // porcja z kartą P-1 (przekazuje ją dalej), ostatnia porcja z P-2 i P-3 i kartą z wcześniejszej porcji
+        $ids = Product::query()->orderBy('sku')->pluck('id')->map(fn ($id): int => (int) $id)->all();
+        $middle = (new MapPriceListSourcesJob((int) $list->id, true, [$ids[0]], (int) $this->user->id))->run(true);
+        $this->assertSame(1, $middle['described']);
+        ProductEnrichmentBatch::query()->delete();
+        Product::query()->update(['enrichment_status' => Product::ENRICHMENT_NONE]);
+
+        $last = (new MapPriceListSourcesJob((int) $list->id, true, [$ids[1], $ids[2]], (int) $this->user->id, [$ids[0]]))->run(true);
+
+        $this->assertSame(3, $last['described']);
+        $this->assertSame(1, ProductEnrichmentBatch::query()->count());
+        $this->assertSame(3, (int) ProductEnrichmentBatch::query()->sole()->total);
+    }
+
+    public function test_handle_passes_cards_to_describe_to_the_continuation_and_tracks_progress(): void
+    {
+        Queue::fake();
+        $list = $this->list('Anro');
+        $this->card('P-1', $list);
+        FakePriceListImporter::$pins['P-1'] = 'https://maker.test/p-1';
+
+        MapPriceListSourcesJob::start($list, true, (int) $this->user->id);
+        $this->assertSame(['done' => 0, 'total' => 1], Cache::get(MapPriceListSourcesJob::progressKey((int) $list->id)));
+        $view = app(PriceListIntakeView::class)->one($list->fresh());
+        $this->assertSame(['done' => 0, 'total' => 1], $view['mapping']);
+        Queue::assertPushed(MapPriceListSourcesJob::class, 1);
+
+        (new MapPriceListSourcesJob((int) $list->id, true, null, (int) $this->user->id))->handle();
+
+        // przebieg skończony — postęp znika, partia jedna
+        $this->assertNull(Cache::get(MapPriceListSourcesJob::progressKey((int) $list->id)));
+        $this->assertNull(app(PriceListIntakeView::class)->one($list->fresh())['mapping']);
     }
 
     public function test_handle_continues_with_remaining_cards_after_budget(): void

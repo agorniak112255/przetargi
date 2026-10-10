@@ -126,7 +126,7 @@ final class PriceListIntakeRunner
                     'price_list_import_id' => $saved->id,
                     'imported_at' => now(),
                 ])->save();
-                MapPriceListSourcesJob::dispatch((int) $list->id, $describe, null, (int) $user->id);
+                MapPriceListSourcesJob::start($list, $describe, (int) $user->id);
             } else {
                 $file->forceFill([
                     ...$meta,
@@ -147,7 +147,7 @@ final class PriceListIntakeRunner
             'imported_at' => now(),
         ])->save();
 
-        MapPriceListSourcesJob::dispatch((int) $list->id, $describe, null, (int) $user->id);
+        MapPriceListSourcesJob::start($list, $describe, (int) $user->id);
 
         return [
             'created' => (int) $result['created'],

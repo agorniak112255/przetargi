@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\PriceLists;
 
+use App\Jobs\MapPriceListSourcesJob;
 use App\Models\AssortmentGroup;
 use App\Models\ManufacturerSite;
 use App\Models\PriceList;
@@ -13,6 +14,7 @@ use App\Models\ProductSourcePin;
 use App\Services\Enrichment\ManufacturerDomainResolver;
 use App\Services\PriceLists\Importers\PriceListImporterRegistry;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * IntakeView i FileView z kontraktu „cenniki z plików jak B2B” (SUPON_AI_Plan_Cenniki_Importer_2026-10-10.md, sekcja 5).
@@ -118,6 +120,8 @@ final class PriceListIntakeView
                     'human_url' => count($humanUrl[(int) $list->id] ?? []),
                     'total' => $listPins['total'],
                 ],
+                // przypisywanie stron po imporcie (MapPriceListSourcesJob) — null, gdy nie trwa
+                'mapping' => $list->usesIntake() ? $this->mapping((int) $list->id) : null,
             ];
         }
 
@@ -197,5 +201,16 @@ final class PriceListIntakeView
         }
 
         return array_map(static fn (array $hosts): array => array_values(array_unique($hosts)), $out);
+    }
+
+    /** @return array{done: int, total: int}|null */
+    private function mapping(int $listId): ?array
+    {
+        $progress = Cache::get(MapPriceListSourcesJob::progressKey($listId));
+        if (! is_array($progress) || (int) ($progress['total'] ?? 0) <= 0) {
+            return null;
+        }
+
+        return ['done' => (int) ($progress['done'] ?? 0), 'total' => (int) $progress['total']];
     }
 }

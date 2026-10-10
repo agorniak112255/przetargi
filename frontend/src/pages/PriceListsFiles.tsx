@@ -75,6 +75,7 @@ const NOT_INDEXED_NOTE = 'strona nie jest w indeksie — szukanie pójdzie przez
 
 const ACTIVE_POLL_MS = 3000
 const LIST_POLL_MS = 15000
+const MAPPING_POLL_MS = 4000
 
 function n(value: number): string {
   return value.toLocaleString('pl-PL')
@@ -179,7 +180,9 @@ export function PriceListsFiles() {
     listIdsRef.current = listIds
   }, [listIds])
 
-  const anyActive = lists.some(listIsDownloading) || batches.length > 0
+  // przypisywanie stron po imporcie trwa kilka minut, zanim powstanie partia opisów — też „w toku”
+  const anyMapping = lists.some((l) => (intakeOf(l)?.mapping ?? null) !== null)
+  const anyActive = lists.some(listIsDownloading) || batches.length > 0 || anyMapping
 
   // Pobieranie w toku: partie co 3 s (pasek postępu), lista z licznikami co 15 s — jej przeliczenie po kartach
   // jest cięższe — i jeszcze raz po końcu ostatniej partii, po liczby końcowe.
@@ -210,13 +213,14 @@ export function PriceListsFiles() {
     }
     pullBatches()
     const batchTimer = window.setInterval(pullBatches, ACTIVE_POLL_MS)
-    const listTimer = window.setInterval(() => void load().catch(() => {}), LIST_POLL_MS)
+    // w trakcie przypisywania stron lista (z postępem) częściej — partii opisów jeszcze nie ma
+    const listTimer = window.setInterval(() => void load().catch(() => {}), anyMapping ? MAPPING_POLL_MS : LIST_POLL_MS)
     return () => {
       cancelled = true
       window.clearInterval(batchTimer)
       window.clearInterval(listTimer)
     }
-  }, [anyActive, canSeeBatches, load])
+  }, [anyActive, anyMapping, canSeeBatches, load])
 
   const loadSearchSites = useCallback(() => {
     if (searchSitesRequested.current) return
@@ -768,6 +772,15 @@ function IntakeBar({
           )}
         </span>
 
+        {intake.mapping && (
+          <span
+            className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800"
+            title="Po imporcie importer otwiera stronę producenta każdej karty i potwierdza numer; potem rusza partia opisów"
+          >
+            Przypisuję strony kartom: <b className="tabular-nums">{n(intake.mapping.done)}</b> z {n(intake.mapping.total)} —
+            potem ruszy pobieranie opisów
+          </span>
+        )}
         {pins.total > 0 && (
           <span className="text-slate-600" title="Karty, którym importer przypisał stronę wyrobu">
             Karty ze stroną: <b className="tabular-nums text-emerald-700">{n(pins.pinned)}</b> z {n(pins.total)}

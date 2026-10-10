@@ -30,6 +30,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
@@ -65,6 +66,12 @@ class MapPriceListSourcesJob implements ShouldQueue
     /** Ile zmian pinów zwraca run() do raportu polecenia. */
     private const CHANGES_LIMIT = 500;
 
+    /** Postęp przypisywania stron dla panelu (PriceListIntakeView: „mapping”) — wygasa sam, gdy zadanie padnie. */
+    private const PROGRESS_TTL = 900;
+
+    /** Co ile kart zapisać postęp (cache w bazie — nie przy każdej karcie). */
+    private const PROGRESS_EVERY = 5;
+
     public int $tries = 2;
 
     public int $timeout = 170;
@@ -72,23 +79,67 @@ class MapPriceListSourcesJob implements ShouldQueue
     /**
      * @param  list<int>|null  $productIds  null = wszystkie karty ze slotem pliku tego cennika
      * @param  int|null  $userId  na kogo idzie partia opisów (null: importujący cennik, potem pierwszy administrator)
+     * @param  list<int>  $pendingDescribe  karty do opisu z wcześniejszych porcji tego samego przebiegu — opisy zleca
+     *                                      dopiero ostatnia porcja, jedną partią
      */
     public function __construct(
         public readonly int $priceListId,
         public readonly bool $describe,
         public readonly ?array $productIds = null,
         public readonly ?int $userId = null,
+        public readonly array $pendingDescribe = [],
     ) {
         $this->onQueue(self::QUEUE);
     }
 
+    public static function progressKey(int $priceListId): string
+    {
+        return 'price-list-intake:mapping:'.$priceListId;
+    }
+
+    /**
+     * Zlecenie mapy po imporcie: postęp „0 z N” od razu (panel pokazuje go, zanim worker weźmie zadanie) + zadanie.
+     */
+    public static function start(PriceList $list, bool $describe, ?int $userId): void
+    {
+        Cache::put(self::progressKey((int) $list->id), [
+            'done' => 0,
+            'total' => count(app(PriceListCards::class)->fileSlotIds($list)),
+        ], self::PROGRESS_TTL);
+        self::dispatch((int) $list->id, $describe, null, $userId);
+    }
+
     public function handle(): void
     {
-        $result = $this->run(true, self::BUDGET_SECONDS);
+        $key = self::progressKey($this->priceListId);
+        $progress = Cache::get($key);
+        $total = is_array($progress) ? (int) ($progress['total'] ?? 0) : 0;
+        // dalszy ciąg przebiegu: karty wcześniejszych porcji są już policzone
+        $offset = $total > 0 && $this->productIds !== null ? max(0, $total - count($this->productIds)) : 0;
+        $onCard = $total > 0
+            ? static function (int $cards) use ($key, $offset, $total): void {
+                if ($cards % self::PROGRESS_EVERY === 0) {
+                    Cache::put($key, ['done' => min($total, $offset + $cards), 'total' => $total], self::PROGRESS_TTL);
+                }
+            }
+        : null;
+
+        $result = $this->run(true, self::BUDGET_SECONDS, $onCard);
         if ($result['remaining'] !== []) {
-            self::dispatch($this->priceListId, $this->describe, $result['remaining'], $this->userId);
+            if ($total > 0) {
+                Cache::put($key, ['done' => min($total, $offset + $result['cards']), 'total' => $total], self::PROGRESS_TTL);
+            }
+            self::dispatch($this->priceListId, $this->describe, $result['remaining'], $this->userId, $result['to_describe']);
+        } else {
+            Cache::forget($key);
         }
-        Log::info('Mapa kart cennika', ['price_list_id' => $this->priceListId] + array_diff_key($result, ['changes' => true, 'remaining' => true]) + ['remaining' => count($result['remaining'])]);
+        Log::info('Mapa kart cennika', ['price_list_id' => $this->priceListId] + array_diff_key($result, ['changes' => true, 'remaining' => true, 'to_describe' => true]) + ['remaining' => count($result['remaining'])]);
+    }
+
+    /** Zadanie padło na dobre — panel nie może dalej pokazywać „przypisuję strony”. */
+    public function failed(?Throwable $e = null): void
+    {
+        Cache::forget(self::progressKey($this->priceListId));
     }
 
     /**
@@ -106,12 +157,13 @@ class MapPriceListSourcesJob implements ShouldQueue
      *     review_marked: int,
      *     review_cleared: int,
      *     remaining: list<int>,
-     *     changes: list<array{product_id: int, sku: string, old_url: ?string, new_url: ?string, reason: ?string}>
+     *     changes: list<array{product_id: int, sku: string, old_url: ?string, new_url: ?string, reason: ?string}>,
+     *     to_describe: list<int>
      * }
      */
-    public function run(bool $apply, ?float $budgetSeconds = null): array
+    public function run(bool $apply, ?float $budgetSeconds = null, ?callable $onCard = null): array
     {
-        $result = ['cards' => 0, 'pinned' => 0, 'unresolved' => 0, 'changed' => 0, 'unchanged' => 0, 'written' => 0, 'described' => 0, 'review_marked' => 0, 'review_cleared' => 0, 'remaining' => [], 'changes' => []];
+        $result = ['cards' => 0, 'pinned' => 0, 'unresolved' => 0, 'changed' => 0, 'unchanged' => 0, 'written' => 0, 'described' => 0, 'review_marked' => 0, 'review_cleared' => 0, 'remaining' => [], 'changes' => [], 'to_describe' => []];
         $list = PriceList::query()->find($this->priceListId);
         if ($list === null) {
             return $result;
@@ -196,10 +248,18 @@ class MapPriceListSourcesJob implements ShouldQueue
                         $toDescribe[] = $productId;
                     }
                 }
+                if ($onCard !== null) {
+                    $onCard($result['cards']);
+                }
             }
         }
 
-        if ($apply && $this->describe && $toDescribe !== []) {
+        // porcje jednego przebiegu (budżet czasu) przekazują sobie karty do opisu — jedna partia na końcu, nie po partii
+        // na porcję
+        $toDescribe = array_values(array_unique([...array_map('intval', $this->pendingDescribe), ...$toDescribe]));
+        if ($result['remaining'] !== []) {
+            $result['to_describe'] = $toDescribe;
+        } elseif ($apply && $this->describe && $toDescribe !== []) {
             $result['described'] = $this->enqueueDescriptions($list, $toDescribe);
         }
 

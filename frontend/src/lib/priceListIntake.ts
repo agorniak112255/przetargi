@@ -50,6 +50,8 @@ export type IntakeView = {
   latest_file: FileView | null
   /** human_url = karty z adresem wskazanym przez człowieka (nie liczą się do unresolved). */
   pins: { pinned: number; unresolved: number; total: number; human_url?: number }
+  /** Przypisywanie stron po imporcie (zadanie w tle) — null, gdy nie trwa; potem rusza partia opisów. */
+  mapping?: { done: number; total: number } | null
   /** Zapisany rabat zadziała przy następnym imporcie pliku (nie przelicza obecnych kart). */
   discount_applies_on_next_import?: boolean
 }

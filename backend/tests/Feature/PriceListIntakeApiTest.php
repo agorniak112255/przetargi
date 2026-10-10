@@ -77,8 +77,10 @@ final class PriceListIntakeApiTest extends TestCase
         $this->assertSame([
             'id', 'manufacturer', 'manufacturer_key', 'version', 'source_policy', 'importer_key', 'importer_label',
             'importer_notes', 'status', 'manufacturer_hosts', 'enrichment_sites', 'enrichment_sites_mode',
-            'suggested_prices', 'discount_percent', 'discount_applies_on_next_import', 'latest_file', 'pins',
+            'suggested_prices', 'discount_percent', 'discount_applies_on_next_import', 'latest_file', 'pins', 'mapping',
         ], array_keys($view));
+        // przypisywanie stron nie trwa
+        $this->assertNull($view['mapping']);
         $this->assertTrue($view['discount_applies_on_next_import']);
         $this->assertSame($list->id, $view['id']);
         $this->assertSame(PriceList::INTAKE_AWAITING_FILE, $view['status']);
